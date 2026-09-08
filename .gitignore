@@ -2,12 +2,14 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
 supabase/.temp/
 supabase/.branches/
 # node / next (later)
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 # local db / logs
 .pgdata/
 *.log
@@ -17,3 +19,5 @@ tests/results/
 Thumbs.db
 .vscode/
 .idea/
+# claude code (kişisel yerel ayarlar)
+.claude/settings.local.json

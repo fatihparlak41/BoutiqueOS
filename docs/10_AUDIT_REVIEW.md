@@ -2,7 +2,8 @@
 
 **Sürüm:** Rev 3 · 2026-09-08
 **Kapsam:** `supabase/migrations/20260908000001..04`, `seeds/seed_things_like_crop.sql`, `tests/000_test_harness.sql`, `tests/005_verification_tests.sql`, `tests/concurrency/*`
-**Durum:** **AWAITING FRESH-DB VERIFICATION**
+**Durum:** **BACKEND GATE KAPANDI** · DEV Supabase'e uygulandı · **Frontend Faz 1 DOĞRULANDI**
+(bağımlılık + build zinciri ve manuel login/tenant smoke, 2026-09-08) · Faz 2 kodlaması başlamadı
 
 > Bu rapordaki her bulgu **statik incelemeye** dayanır (kod okuma + `tools/lint_sql.py` + audit betikleri).
 > Hiçbir SQL henüz bir PostgreSQL örneğinde çalıştırılmadı. "PASS" ifadesi bu belgede **yoktur**;
@@ -177,10 +178,98 @@ Migration'ların Supabase'e özgü bağımlılıkları: `auth.users` (profiles F
 
 ---
 
-## 9. Durum
+## 9. Doğrulama sonucu (gerçek koşu, 2026-09-08)
+
+`.\scripts\db_fresh.ps1` (Plain, PostgreSQL 18.6, port 5433):
 
 ```
-AWAITING FRESH-DB VERIFICATION
+harness -> 4 migration -> seed -> 005
+BoutiqueOS Rev 3 verification: 149 passed, 0 failed
+PASS: 149   FAIL: 0   psql errors: 0   exit: 0
 ```
 
-Gate: `.\scripts\db_fresh.ps1` (Plain) → `tests\results\last_run.log` → bulgular düzeltilir → tekrar → (Docker varsa) `-Mode Supabase` → concurrency → **ancak o zaman** "READY FOR DEV APPLY". `supabase db push` bu gate geçilmeden **yok**.
+§6'daki "yalnız çalıştırmayla görülür" sınıfı böylece kapandı. Koşu sırasında bulunup düzeltilen defektler:
+
+| # | Dosya | Defekt | Düzeltme |
+|---|---|---|---|
+| R-1 | 004 | `rpc_void_sale`: `RAISE EXCEPTION 'VOID_BLOCKED: sale %'` argümansız → derlenmiyor | `, p_sale_id` eklendi; lint'e RAISE placeholder/argüman kuralı eklendi |
+| R-2 | 005 | `t_set(k,v)`: parametre adı kolon adıyla çakışıyor (`ON CONFLICT (k)` ambiguous) | parametreler `p_k`/`p_v` |
+| R-3 | 004 + 005 | `rpc_create_variant` varyantı `''` fingerprint ile yazıp opsiyonları sonra bağlıyordu → `uix_variant_active_fingerprint` çakışması | fingerprint INSERT'ten önce hesaplanıp veriliyor (trigger formülüyle birebir); fixture opsiyonları her varyanttan hemen sonra bağlıyor (+T34k) |
+| R-4 | 001 | `fn_log_price_change`: `TG_TABLE_NAME='products' AND NEW.default_sale_price…` tek ifade olarak planlanıyor → `product_variants` UPDATE'inde "record new has no field" | tablo testi ile alan referansı ayrı `IF`'lere bölündü |
+| R-5 | 002 | `fx_rates.superseded_by` FK anında kontrol ediliyor; supersession yeni satırdan **önce** yazılmak zorunda (kısmi unique index) → FK ihlali | FK `DEFERRABLE INITIALLY DEFERRED` |
+| R-6 | 001/002/003 | **Void hiç çalışmıyordu**: guard trigger'ları `to_jsonb(NEW)`/`to_jsonb(OLD)` karşılaştırıyor; BEFORE trigger'da GENERATED kolonlar NEW'de NULL (`sales.amount_due_base`) → her void `IMMUTABLE` | `fn_row_comparable()` generated kolonları iki taraftan çıkarıyor; tüm guard'lar (sales, fx_rates, THI, transfer lines, posted GR) kullanıyor |
+| R-7 | 004 | `rpc_allocate_supplier_payment`: `CASE … 'paid' … END` text → `goods_receipt_payment_status` kolonuna atanamıyor | `::goods_receipt_payment_status` cast |
+| R-8 | 005 | T11d/T20e/T20f yanlış katmanı ölçüyordu: üye için RLS yazma policy'si yok ⇒ UPDATE/DELETE **0 satır** (sessiz), trigger yalnız RLS-baypas rolleri için | iddialar ikiye bölündü: üye tarafı 0 satır, postgres tarafı `IMMUTABLE`, artı değerin değişmediği |
+| R-9 | scripts | `db_fresh.ps1`: psql'in stderr'e yazdığı NOTICE, `$ErrorActionPreference=Stop` altında terminating hata sayılıyordu | native çağrılar `Invoke-Native` ile `Continue` altında; karar yalnız `$LASTEXITCODE` |
+
+R-1, R-3, R-4, R-5, R-6, R-7 üretim kodu defektleridir; R-2, R-8 test, R-9 tooling.
+
+## 10. Gate durumu (2026-09-08)
+
+| Gate | Durum |
+|---|---|
+| Plain fresh-DB (harness + 4 migration + seed + 005) | **PASS** 149/149 |
+| Concurrency (son birim oversell yarışı) | **PASS** |
+| Supabase-local (`-Mode Supabase`) | **DEFERRED** — Docker/Podman kurulu değil |
+| DEV Supabase migration apply (`supabase db push`) | **APPLIED** — 20260908000001–04, Local/Remote eşleşiyor |
+| Things Like Crop seed (DEV) | **APPLIED** |
+| Remote smoke kontrolleri | **PASS** |
+| İlk owner Auth kullanıcısı + üyelik | **CREATED** — Things Like Crop / Lefkoşa Mağaza / owner / aktif |
+| Frontend Faz 1 — bağımlılık + build | **VERIFIED** — `npm ls` / `audit` / `lint` / `build` / `typecheck` tümü PASS |
+| Frontend Faz 1 — auth + tenant girişi | **VERIFIED** — manuel smoke DEV Supabase'e karşı PASS |
+| Faz 2 (Ürünler, Stok, Kasa…) | **READY** — kodlama başlamadı |
+| Deploy (Vercel) | yapılmadı |
+
+Supabase-local ertelendiği için gerçek `auth.uid()` yolu DEV üzerindeki remote smoke ile doğrulandı;
+Docker kurulduğunda `.\scripts\db_fresh.ps1 -Mode Supabase` ikinci bir doğrulama katmanı olarak koşulabilir.
+
+### Frontend bağımlılık taban çizgisi (Faz 1)
+
+Next 15.5.25 · React 19.0.0 · Tailwind 3.4.17 · `@supabase/supabase-js ^2.116.0` · `@supabase/ssr 0.12.6` ·
+`postcss 8.5.23` (devDependency + `overrides`, iki spec birebir aynı; Next'in altındaki eski sürümü bastırmak için).
+`@supabase/auth-js` transitive'dir ve supabase-js ≥ 2.116 ile yamalı sürüme çözülür.
+`npm audit fix --force` ve Next 16 geçişi kapsam dışıdır.
+
+Doğrulama 2026-09-08'de yerel makinede koşuldu ve çıktılar görüldü:
+
+| Komut | Sonuç |
+|---|---|
+| `npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next postcss` | **PASS** — `invalid` yok |
+| `npm audit --omit=dev` | **PASS** — 0 vulnerabilities |
+| `npm run lint` | **PASS** |
+| `npm run build` | **PASS** |
+| `npm run typecheck` | **PASS** |
+
+Çözülen sürümler: `@supabase/ssr` 0.12.6 · `@supabase/supabase-js` 2.116.0 · `@supabase/auth-js` 2.116.0 ·
+`postcss` 8.5.23 (Next'in nested kopyası dahil deduped).
+
+### Faz 1 manuel smoke (2026-09-08, DEV Supabase)
+
+Tarayıcıdan owner hesabıyla koşuldu; her adım hem ekran gözlemi hem dev sunucu logu ile doğrulandı.
+
+| Test | Sonuç |
+|---|---|
+| Owner girişi (e-posta + parola) | **PASS** |
+| Tenant çözümlemesi — Things Like Crop / Lefkoşa Mağaza (LFT) / owner | **PASS** |
+| F5 sonrası oturum kalıcılığı | **PASS** |
+| Yeni sekmede `/app` | **PASS** |
+| Oturum açıkken `/login` → `/app` | **PASS** |
+| Oturumsuz `/app` → `/login` | **PASS** |
+| Çıkış | **PASS** |
+| Çıkış sonrası `/app` → `/login` | **PASS** |
+| Token refresh + cache-header yolu | **KOŞULMADI** — access token süresi dolmadan tetiklenmiyor; PASS işaretlenmedi |
+
+### Operasyonel not — `JWT issued at future` (2026-09-08, çözüldü)
+
+Faz 1 smoke'u sırasında `loadMemberships()` aralıklı olarak PostgREST'ten `JWT issued at future` hatası
+aldı (`lib/tenant.ts:64`) ve aynı nedenle `getClaims()` taze token'ı reddederek kullanıcıyı anonim saydı.
+Kök neden **Windows Time servisinin durmuş olması** ve yerel saatin NTP'siz kaymasıydı: token'ın `iat`
+alanı doğrulayanın saatine göre gelecekte kalıyordu. Servis başlatılıp `w32tm /resync /force` çalıştırıldıktan
+sonra hata dört ardışık smoke turunda tekrarlamadı.
+
+**Bu bir uygulama veya veritabanı defekti değildir; bu nedenle hiçbir kod, şema veya RLS değişikliği
+yapılmadı.** `w32time` başlangıç türü hâlâ `Manual`; makine yeniden başlatıldığında saat tekrar kayarsa aynı
+belirti dönebilir (kalıcı çözüm: yönetici olarak `Set-Service w32time -StartupType Automatic`).
+
+**Migration disiplini:** 001–04 remote'ta kayıtlı olduğu için artık yerinde düzenlenmez.
+Her şema/RPC değişikliği yeni timestamp'li migration ile gider (`20260908000005_*.sql`).

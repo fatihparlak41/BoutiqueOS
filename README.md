@@ -3,10 +3,11 @@
 Multi-tenant boutique retail SaaS. Pilot: **Things Like Crop** (Lefkoşa).
 Stack: Next.js / TypeScript / Tailwind / shadcn · Supabase (PostgreSQL, Auth, Storage, RLS) · Vercel.
 
-**Mevcut gate:** Architecture → Rev 3 Schema (yazıldı) → **Fresh-DB verification (şimdi burada)** → DEV Supabase apply → seed → smoke → *sonra* frontend.
-Frontend (`app/`) bu gate geçilmeden başlamaz. `supabase db push` gate geçilmeden **çalıştırılmaz**.
+**Gate geçmişi:** Architecture → Rev 3 Schema → Fresh-DB verification (149/149) → DEV Supabase apply → seed → smoke → **Frontend Faz 1 (doğrulandi)**.
 
-**Durum:** `AWAITING FRESH-DB VERIFICATION` — bkz. `docs/10_AUDIT_REVIEW.md`.
+**Durum:** Backend gate kapandı (Plain 149/149, concurrency PASS, DEV Supabase'e uygulandı).
+Frontend Faz 1 (Auth + tenant girişi) **doğrulandi** — bağımlılık + build zinciri ve manuel
+login/tenant smoke'u DEV Supabase'e karşı geçti (2026-09-08). Faz 2 kodlaması başlamadı.
 
 ## Yerleşim
 
@@ -46,3 +47,106 @@ cd E:\BoutiqueOS\Butik
 - Fiyat server-authoritative; `expected_list_price` uyuşmazsa `PRICE_CHANGED`.
 - `.env` commit edilmez; service-role key frontend'e girmez.
 - Migration'lar Studio'ya elle yapıştırılmaz.
+
+## Frontend (Faz 1 — Auth + tenant girişi)
+
+```
+app/layout.tsx                 kök layout, tipografi
+app/page.tsx                   / -> /app veya /login
+app/login/                     giriş ekranı (e-posta + parola, kayıt yok)
+app/app/                       korumalı kabuk (/app)
+app/select-business/           birden fazla üyelik varsa işletme seçimi
+app/no-access/                 aktif üyelik yoksa güvenli ekran
+app/auth/actions.ts            signIn / signOut / selectBusiness server action'ları
+lib/supabase/{client,server,middleware}.ts   tarayıcı / sunucu / oturum yenileme
+lib/tenant.ts                  üyelik + işletme + şube + rol çözümlemesi (sunucu tarafı)
+middleware.ts                  oturum yenileme + yönlendirme kuralları
+components/ui/                 shadcn tarzı temel bileşenler
+components/shell/              kenar menü, hesap menüsü
+```
+
+### Kurulum
+
+```powershell
+copy .env.local.example .env.local     # NEXT_PUBLIC_SUPABASE_URL + ANON_KEY doldur
+npm install
+npm run lint
+npm run build
+npm run typecheck
+npm run dev                            # http://localhost:3000
+```
+
+### Güvenlik bakımı (bağımlılıklar)
+
+Sabitlenmiş sürüm çizgisi (deterministik; `@latest` kullanılmaz):
+
+| Paket | Sürüm |
+|---|---|
+| `next` | 15.5.25 |
+| `eslint-config-next` | 15.5.25 |
+| `react` / `react-dom` | 19.0.0 |
+| `@supabase/supabase-js` | `^2.116.0` |
+| `@supabase/ssr` | 0.12.6 |
+| `postcss` (dev + `overrides`) | 8.5.23 |
+| `tailwindcss` | 3.4.17 |
+
+`postcss` Next'in altından geldiği için hem devDependency hem `overrides` ile **birebir 8.5.23**'e
+sabitlenir (iki spec aynı); `@supabase/auth-js` doğrudan bağımlılık değildir, `@supabase/supabase-js` ≥ 2.116 ile
+yamalı sürüme çözülür. `npm audit fix --force` **kullanılmaz** (Next major atlatır).
+Next 16 geçişi ayrı bir karardır ve Faz 1 kapsamı dışındadır.
+
+Doğrulama:
+
+```powershell
+npm install
+npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next postcss
+npm audit --omit=dev
+npm run lint
+npm run build
+npm run typecheck
+```
+
+**Faz 1 doğrulama sonuçları (2026-09-08, yerel makine — çıktılar görüldü):**
+
+| Kontrol | Sonuç |
+|---|---|
+| `npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next postcss` | **PASS** — `invalid` yok |
+| `npm audit --omit=dev` | **PASS** — 0 vulnerabilities |
+| `npm run lint` | **PASS** |
+| `npm run build` | **PASS** |
+| `npm run typecheck` | **PASS** |
+
+Çözülen sürümler: `@supabase/ssr` 0.12.6 · `@supabase/supabase-js` 2.116.0 · `@supabase/auth-js` 2.116.0 ·
+`postcss` 8.5.23 (Next'in nested kopyası dahil deduped).
+
+**Bilinen teknik borç (bloke etmiyor):** `next lint` Next 15.5'te kullanımdan kaldırıldı ve Next 16'da
+kalkacak. Geçiş ESLint 9 + flat config gerektirdiği için Faz 1 kapsamı dışında bırakıldı.
+
+`.env.local` yalnız **anon** anahtarı içerir. Service-role anahtarı frontend'e hiçbir koşulda girmez.
+
+### Faz 1 manuel smoke (2026-09-08, DEV Supabase)
+
+Tarayıcıdan owner hesabıyla koşuldu; her adım hem ekran gözlemi hem dev sunucu logu ile doğrulandı.
+
+| Test | Sonuç |
+|---|---|
+| Owner girişi (e-posta + parola) | **PASS** |
+| Tenant çözümlemesi — Things Like Crop / Lefkoşa Mağaza (LFT) / owner | **PASS** |
+| F5 sonrası oturum kalıcılığı | **PASS** |
+| Yeni sekmede `/app` | **PASS** |
+| Oturum açıkken `/login` → `/app` | **PASS** |
+| Oturumsuz `/app` → `/login` | **PASS** |
+| Çıkış | **PASS** |
+| Çıkış sonrası `/app` → `/login` | **PASS** |
+| Token refresh + cache-header yolu | **KOŞULMADI** — yalnız access token süresi dolunca tetiklenir |
+
+`@supabase/ssr` 0.12.6'nın güncel cookie sözleşmesi (`getAll()` / `setAll(cookiesToSet, headers)`)
+`lib/supabase/{server,middleware}.ts` içinde uygulandı. Middleware sırası: request'e cookie yaz →
+`NextResponse.next({ request })` ile yanıtı yeniden kur → yanıta cookie yaz → dönen cache header'larını
+kopyala; bu cookie ve header'lar redirect yanıtlarına da taşınır.
+
+### Kurallar
+
+- İşletme/şube/rol bilgisi yalnızca Supabase'ten (RLS altında) okunur; cookie yalnız *tercih* taşır ve her istekte yeniden doğrulanır.
+- Modül sayfaları (Ürünler, Stok, Kasa…) henüz yok; menüde devre dışı yer tutucular olarak duruyor.
+- Şema değişikliği artık yerinde düzenlemeyle değil, yeni timestamp'li migration ile yapılır (remote'ta 20260908000001–04 kayıtlı).

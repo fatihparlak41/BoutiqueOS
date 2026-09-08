@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint)",
+      "Bash(npm run build)",
+      "Bash(npm run typecheck)",
+      "Bash(npm ls:*)",
+      "Bash(npm audit:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(python tools/lint_sql.py:*)"
+    ],
+    "ask": [
+      "Bash(npm install:*)",
+      "Bash(git commit:*)",
+      "Bash(scripts/db_fresh.ps1:*)",
+      "Bash(psql:*)"
+    ],
+    "deny": [
+      "Bash(supabase db push:*)",
+      "Bash(supabase db reset --linked:*)",
+      "Bash(npm audit fix --force:*)",
+      "Bash(git push:*)",
+      "Read(./.env)",
+      "Read(./.env.local)"
+    ]
+  }
+}
