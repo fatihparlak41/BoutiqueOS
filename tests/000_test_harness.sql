@@ -1,75 +1,58 @@
 -- ============================================================
--- ButikOS — Test Harness (NOT a real migration)
--- Supabase compatibility shim for local PostgreSQL testing
--- Apply BEFORE 001_schema.sql in the disposable test database only
+-- BoutiqueOS  •  Test harness  •  Rev 3
+-- PLAIN PostgreSQL MODE ONLY (db_fresh.ps1 default mode).
+-- NOT applied in -Mode Supabase (Supabase provides auth schema + roles).
+-- ============================================================
+-- Emulates the Supabase pieces the migrations depend on:
+--   roles anon / authenticated / service_role (NOLOGIN)
+--   schema auth, table auth.users, function auth.uid()
+--   default privileges equivalent to Supabase (so REVOKE/GRANT logic
+--   in migrations is exercised the same way)
 -- ============================================================
 
--- Extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')          THEN CREATE ROLE anon NOLOGIN;          END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')  THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
+END $$;
 
--- ============================================================
--- MOCK: auth schema + auth.users (Supabase built-in)
--- ============================================================
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+-- Supabase-equivalent default privileges (objects created later by this role)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+
 CREATE SCHEMA IF NOT EXISTS auth;
+GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
 
 CREATE TABLE IF NOT EXISTS auth.users (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  email         TEXT,
-  created_at    TIMESTAMPTZ DEFAULT NOW()
+  id          UUID PRIMARY KEY,
+  instance_id UUID,
+  aud         TEXT,
+  role        TEXT,
+  email       TEXT UNIQUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- auth.uid() — reads GUC app.current_user_id set by test helpers
--- In Supabase this reads the JWT sub claim; here we use a GUC.
+-- Same resolution order as Supabase: request.jwt.claim.sub, then request.jwt.claims->>'sub'
 CREATE OR REPLACE FUNCTION auth.uid()
 RETURNS UUID LANGUAGE sql STABLE AS $$
   SELECT COALESCE(
-    current_setting('app.current_user_id', true)::UUID,
-    '00000000-0000-0000-0000-000000000000'::UUID
+    NULLIF(current_setting('request.jwt.claim.sub', true), ''),
+    (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::UUID;
+$$;
+
+CREATE OR REPLACE FUNCTION auth.role()
+RETURNS TEXT LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(
+    NULLIF(current_setting('request.jwt.claim.role', true), ''),
+    (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
   );
 $$;
 
--- auth.role() — returns 'authenticated' when a user is set, 'anon' otherwise
-CREATE OR REPLACE FUNCTION auth.role()
-RETURNS TEXT LANGUAGE sql STABLE AS $$
-  SELECT CASE
-    WHEN current_setting('app.current_user_id', true) IS NOT NULL
-     AND current_setting('app.current_user_id', true) <> ''
-    THEN 'authenticated'
-    ELSE 'anon'
-  END;
-$$;
-
-
--- ============================================================
--- TEST HELPER: set active user (mimics Supabase JWT context)
--- ============================================================
-CREATE OR REPLACE FUNCTION test_set_user(p_user_id UUID)
-RETURNS void LANGUAGE sql AS $$
-  SELECT set_config('app.current_user_id', p_user_id::TEXT, false);
-$$;
-
-CREATE OR REPLACE FUNCTION test_clear_user()
-RETURNS void LANGUAGE sql AS $$
-  SELECT set_config('app.current_user_id', '', false);
-$$;
-
-
--- ============================================================
--- PRE-SEED: Insert test auth users
--- (profiles will be inserted after 001 creates the table)
--- ============================================================
--- We insert these UUIDs to be referenced later in tests.
--- Pin UUIDs so tests are deterministic.
-
-INSERT INTO auth.users (id, email) VALUES
-  ('aaaaaaaa-0001-0000-0000-000000000000', 'owner@tlc.test'),
-  ('aaaaaaaa-0002-0000-0000-000000000000', 'manager@tlc.test'),
-  ('aaaaaaaa-0003-0000-0000-000000000000', 'staff@tlc.test'),
-  ('aaaaaaaa-0004-0000-0000-000000000000', 'outsider@other.test')
-ON CONFLICT (id) DO NOTHING;
-
-
--- ============================================================
--- END OF TEST HARNESS
--- ============================================================
+GRANT EXECUTE ON FUNCTION auth.uid()  TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION auth.role() TO anon, authenticated, service_role;
+GRANT SELECT ON auth.users TO service_role;
