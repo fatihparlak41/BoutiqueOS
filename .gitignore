@@ -1,0 +1,19 @@
+# secrets / env
+.env
+.env.*
+!.env.example
+supabase/.temp/
+supabase/.branches/
+# node / next (later)
+node_modules/
+.next/
+out/
+# local db / logs
+.pgdata/
+*.log
+tests/results/
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

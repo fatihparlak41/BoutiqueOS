@@ -1,0 +1,951 @@
+<title>TLC Pilot Analiz</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ── Tokens ──────────────────────────────────────────── */
+  :root {
+    --ground:       #F5F4F1;
+    --ground-2:     #ECEAE5;
+    --ground-3:     #E2DFDA;
+    --text-1:       #1A1918;
+    --text-2:       #4A4845;
+    --text-3:       #7A7875;
+    --accent:       #3D7A76;
+    --accent-faint: #EAF3F2;
+    --accent-mid:   #5A9A96;
+    --ok:           #2E7D52;
+    --ok-bg:        #EAF4EF;
+    --ok-border:    #B8DEC8;
+    --warn:         #B07720;
+    --warn-bg:      #FBF4E8;
+    --warn-border:  #E8C98A;
+    --gap:          #B5341F;
+    --gap-bg:       #FBF0EE;
+    --gap-border:   #E8B0A8;
+    --border:       #D8D5CF;
+    --border-light: #E8E5E0;
+    --shadow:       0 1px 3px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.04);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:       #141312;
+      --ground-2:     #1E1D1B;
+      --ground-3:     #272522;
+      --text-1:       #E8E6E2;
+      --text-2:       #A8A5A0;
+      --text-3:       #6A6865;
+      --accent:       #5A9A96;
+      --accent-faint: #1A2E2D;
+      --accent-mid:   #7ABAB6;
+      --ok:           #4AAD72;
+      --ok-bg:        #0F2018;
+      --ok-border:    #2A5C3A;
+      --warn:         #D49A3A;
+      --warn-bg:      #221A08;
+      --warn-border:  #6A4D18;
+      --gap:          #D45A46;
+      --gap-bg:       #1E0E0C;
+      --gap-border:   #6A2820;
+      --border:       #302E2A;
+      --border-light: #252320;
+      --shadow:       0 1px 3px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.2);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:       #141312;
+    --ground-2:     #1E1D1B;
+    --ground-3:     #272522;
+    --text-1:       #E8E6E2;
+    --text-2:       #A8A5A0;
+    --text-3:       #6A6865;
+    --accent:       #5A9A96;
+    --accent-faint: #1A2E2D;
+    --accent-mid:   #7ABAB6;
+    --ok:           #4AAD72;
+    --ok-bg:        #0F2018;
+    --ok-border:    #2A5C3A;
+    --warn:         #D49A3A;
+    --warn-bg:      #221A08;
+    --warn-border:  #6A4D18;
+    --gap:          #D45A46;
+    --gap-bg:       #1E0E0C;
+    --gap-border:   #6A2820;
+    --border:       #302E2A;
+    --border-light: #252320;
+    --shadow:       0 1px 3px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.2);
+  }
+
+  /* ── Reset ───────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ground);
+    color: var(--text-1);
+    font-family: 'Lora', Georgia, serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
+  /* ── Layout ──────────────────────────────────────────── */
+  .page-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ── Header ──────────────────────────────────────────── */
+  .doc-header {
+    border-bottom: 1px solid var(--border);
+    padding: 40px 0 32px;
+    margin-bottom: 40px;
+  }
+  .doc-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .doc-eyebrow::before {
+    content: '';
+    display: block;
+    width: 24px;
+    height: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  h1 {
+    font-family: 'Sora', sans-serif;
+    font-size: clamp(26px, 4vw, 38px);
+    font-weight: 700;
+    line-height: 1.15;
+    text-wrap: balance;
+    color: var(--text-1);
+    margin-bottom: 10px;
+  }
+  .doc-subtitle {
+    color: var(--text-2);
+    font-style: italic;
+    font-size: 15px;
+    margin-bottom: 28px;
+  }
+
+  /* ── Summary badges ──────────────────────────────────── */
+  .summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .summary-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-family: 'Sora', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid;
+  }
+  .summary-badge .count {
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .sb-ok   { background: var(--ok-bg);   border-color: var(--ok-border);   color: var(--ok);  }
+  .sb-warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn);}
+  .sb-gap  { background: var(--gap-bg);  border-color: var(--gap-border);  color: var(--gap); }
+  .sb-info { background: var(--accent-faint); border-color: var(--accent-mid); color: var(--accent); }
+
+  /* ── Section ─────────────────────────────────────────── */
+  .section {
+    margin-bottom: 48px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 32px;
+    height: 32px;
+    background: var(--accent-faint);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  h2 {
+    font-family: 'Sora', sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-1);
+    text-wrap: balance;
+  }
+  .section-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-3);
+    margin-left: auto;
+    letter-spacing: .06em;
+  }
+
+  /* ── Finding cards ───────────────────────────────────── */
+  .findings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .finding {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 14px;
+    padding: 14px 16px;
+    background: var(--ground-2);
+    border-radius: 8px;
+    border: 1px solid var(--border-light);
+    align-items: start;
+  }
+  .finding-status {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    flex-shrink: 0;
+    margin-top: 1px;
+    font-weight: 700;
+  }
+  .st-ok   { background: var(--ok-bg);   color: var(--ok);   border: 1.5px solid var(--ok-border); }
+  .st-warn { background: var(--warn-bg); color: var(--warn); border: 1.5px solid var(--warn-border); }
+  .st-gap  { background: var(--gap-bg);  color: var(--gap);  border: 1.5px solid var(--gap-border); }
+
+  .finding-body {}
+  .finding-label {
+    font-family: 'Sora', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-2);
+    letter-spacing: .02em;
+    margin-bottom: 3px;
+  }
+  .finding-value {
+    font-size: 14.5px;
+    color: var(--text-1);
+    margin-bottom: 4px;
+  }
+  .finding-note {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-3);
+    line-height: 1.5;
+  }
+
+  /* ── Answer quote ────────────────────────────────────── */
+  .answer-quote {
+    display: inline-block;
+    background: var(--ground-3);
+    border-left: 3px solid var(--accent-mid);
+    padding: 3px 10px;
+    border-radius: 0 4px 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text-1);
+    margin-bottom: 4px;
+  }
+
+  /* ── Schema impact ───────────────────────────────────── */
+  .impact-block {
+    border: 1px solid var(--gap-border);
+    background: var(--gap-bg);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 14px;
+  }
+  .impact-block.warn {
+    border-color: var(--warn-border);
+    background: var(--warn-bg);
+  }
+  .impact-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Sora', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .impact-block .impact-header { color: var(--gap); }
+  .impact-block.warn .impact-header { color: var(--warn); }
+  .impact-desc {
+    font-size: 14px;
+    color: var(--text-2);
+    margin-bottom: 14px;
+  }
+  pre {
+    background: var(--ground-3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--text-1);
+    tab-size: 2;
+  }
+  .sql-comment { color: var(--text-3); }
+  .sql-kw      { color: var(--accent-mid); font-weight: 500; }
+  .sql-type    { color: var(--warn); }
+  .sql-new     { color: var(--ok); font-weight: 600; }
+
+  /* ── Profile grid ────────────────────────────────────── */
+  .profile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .profile-cell {
+    background: var(--ground-2);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .profile-cell .label {
+    font-family: 'Sora', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text-3);
+    margin-bottom: 5px;
+  }
+  .profile-cell .val {
+    font-size: 15px;
+    font-weight: 500;
+    font-family: 'Sora', sans-serif;
+    color: var(--text-1);
+  }
+  .profile-cell .val.accent { color: var(--accent); }
+
+  /* ── Followup list ───────────────────────────────────── */
+  .followup-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .followup-list li {
+    display: flex;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    font-size: 14px;
+    color: var(--text-1);
+    align-items: flex-start;
+  }
+  .followup-list li::before {
+    content: '?';
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--warn-bg);
+    border: 1.5px solid var(--warn);
+    color: var(--warn);
+    font-family: 'Sora', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── Tag pills ───────────────────────────────────────── */
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .tag {
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-family: 'Sora', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--ground-3);
+    color: var(--text-2);
+    border: 1px solid var(--border);
+  }
+  .tag.accent { background: var(--accent-faint); color: var(--accent); border-color: var(--accent-mid); }
+
+  /* ── Divider ─────────────────────────────────────────── */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+  }
+
+  /* ── Responsive ──────────────────────────────────────── */
+  @media (max-width: 600px) {
+    .page-wrap { padding: 0 16px 60px; }
+    .summary-row { gap: 8px; }
+  }
+</style>
+
+<div class="page-wrap">
+
+  <!-- ── HEADER ──────────────────────────────────────── -->
+  <header class="doc-header">
+    <div class="doc-eyebrow">ButikOS · Pilot Ön Analiz</div>
+    <h1>Things Like Crop<br>Sistem Analiz Raporu</h1>
+    <p class="doc-subtitle">Form yanıtları şema kararlarıyla karşılaştırıldı — 5 Eylül 2026</p>
+    <div class="summary-row">
+      <div class="summary-badge sb-ok">
+        <span class="count">18</span> doğrulanan karar
+      </div>
+      <div class="summary-badge sb-gap">
+        <span class="count">4</span> kritik şema boşluğu
+      </div>
+      <div class="summary-badge sb-warn">
+        <span class="count">5</span> yeni karar eklendi
+      </div>
+      <div class="summary-badge sb-info">
+        <span class="count">3</span> takip sorusu
+      </div>
+    </div>
+  </header>
+
+  <!-- ── İŞLETME PROFİLİ ─────────────────────────────── -->
+  <section class="section" id="profil">
+    <div class="section-header">
+      <div class="section-icon">🏪</div>
+      <h2>İşletme Profili</h2>
+      <span class="section-num">S.01–02</span>
+    </div>
+
+    <div class="profile-grid">
+      <div class="profile-cell">
+        <div class="label">İşletme Adı</div>
+        <div class="val">Things Like Crop</div>
+      </div>
+      <div class="profile-cell">
+        <div class="label">Şube</div>
+        <div class="val">1 fiziksel</div>
+      </div>
+      <div class="profile-cell">
+        <div class="label">Kullanıcı Sayısı</div>
+        <div class="val accent">2 kişi</div>
+      </div>
+      <div class="profile-cell">
+        <div class="label">Mevcut Stok Takibi</div>
+        <div class="val">Manuel defter</div>
+      </div>
+    </div>
+
+    <div class="findings">
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Satış Kanalları</div>
+          <div class="tags">
+            <span class="tag accent">Fiziksel Mağaza</span>
+            <span class="tag accent">Instagram</span>
+            <span class="tag accent">WhatsApp</span>
+            <span class="tag accent">Telefon</span>
+          </div>
+          <div class="finding-note">Şemada <code>reservation.source</code> enum'u zaten bu kanalları kapsıyor.</div>
+        </div>
+      </div>
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Başlangıç Testi</div>
+          <div class="finding-value">Sadece Lefkoşa şubesiyle pilota başlanacak. İkinci şube (Girne) ilerleyen dönemde.</div>
+          <div class="finding-note">Multi-branch mimari hazır, branches tablosu mevcut.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── ÜRÜN & STOK ──────────────────────────────────── -->
+  <section class="section" id="urun">
+    <div class="section-header">
+      <div class="section-icon">👗</div>
+      <h2>Ürün & Stok</h2>
+      <span class="section-num">S.06–18</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Beden Sistemi — Dinamik Model Doğrulandı</div>
+          <div class="tags">
+            <span class="tag">34 / 36 / 38 / 40 / 42 (EU Numerik)</span>
+            <span class="tag">S / M / L</span>
+            <span class="tag">One Size</span>
+            <span class="tag">Bikini / Mayo Özel</span>
+            <span class="tag">Bedensiz / Aksesuar</span>
+          </div>
+          <div class="finding-note">product_options + option_values tasarımı tüm beden türlerini karşılıyor. Sabit enum olsaydı 3 beden sistemi aynı anda açıklanamaz.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Çok Varyantlı Ürün</div>
+          <div class="answer-quote">"Evet, çok sık"</div>
+          <div class="finding-value">Renk + Beden kombinasyonları yüksek frekansta. product_variants + variant_option_values doğru yapı.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Tedarikçi Barkodu</div>
+          <div class="answer-quote">"Bazı ürünlerde var"</div>
+          <div class="finding-value">barcodes tablosunda <code>is_supplier_barcode</code> kolonu ile yönetilecek. Var olanı tara, yoksa otomatik üret.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Kendi Etiketi Basılıyor</div>
+          <div class="answer-quote">"Evet"</div>
+          <div class="finding-value">goods_receipt onayında etiket basma ekranı çalışacak. goods_receipt_items.labels_printed takip kolonu mevcut.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Barkod Yazıcı Modeli Belirtilmedi</div>
+          <div class="finding-value">Form boş bırakıldı. Termal yazıcı marka/modeli bilinmeden label template formatı (ZPL / ESC-P / PDF) kesinleştirilemiyor.</div>
+          <div class="finding-note">Takip sorusu gönderilmeli — bu karar etiket basma modülünü etkiliyor.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Örnek Ürün Doğrulandı</div>
+          <div class="finding-value">Çiçek Desenli Korse — 650 TL alış / 2.000 TL satış (≈ x3,08 çarpan) — Siyah/Beyaz/Krem, S/M/L, ~20 adet stok. İlk gerçek test ürünü bu olacak.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── TEDARİKÇİ ────────────────────────────────────── -->
+  <section class="section" id="tedarik">
+    <div class="section-header">
+      <div class="section-icon">🏭</div>
+      <h2>Tedarikçi & Alış</h2>
+      <span class="section-num">S.19–22</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Tedarikçi Sayısı</div>
+          <div class="answer-quote">"11–20"</div>
+          <div class="finding-value">İlk versiyonda bu ölçek için suppliers tablosu yeterli. Supplier account ledger'ı önemli çünkü çok sayıda aktif tedarikçi var.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Ödeme Yöntemleri</div>
+          <div class="tags">
+            <span class="tag">Nakit</span>
+            <span class="tag">Banka Havalesi</span>
+          </div>
+          <div class="finding-note">supplier_payments tablosundaki payment_method enum'u kapsıyor.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Tedarikçi Borcu</div>
+          <div class="answer-quote">"Borç yok"</div>
+          <div class="finding-value">Şu an sıfır bakiye — ama ledger yapısı kurulmuş olmalı, çünkü 11-20 tedarikçiyle ilerleyen dönemde bakiye oluşacak. supplier_account_entries doğru karar.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Tedarikçiye İade</div>
+          <div class="answer-quote">"Hayır"</div>
+          <div class="finding-value">Şu an yapılmıyor. supplier_returns tablosu V1'de kodlanabilir ama UI öncelikli değil.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── FİYATLAMA ────────────────────────────────────── -->
+  <section class="section" id="fiyat">
+    <div class="section-header">
+      <div class="section-icon">💰</div>
+      <h2>Fiyatlama</h2>
+      <span class="section-num">S.23–26</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Fiyatlama Formülü — Yeni Karar</div>
+          <div class="answer-quote">"Alış fiyatını çarpı 3 yapıyoruz"</div>
+          <div class="finding-value">x3 sabit çarpan. Şemada bu tutulmuyor. Yeni karar: <code>products</code> tablosuna <code>markup_multiplier NUMERIC(5,2)</code> eklenecek (default 3.0). Satış fiyatı girilebilir ama önerilen otomatik hesaplanacak.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Fiyat Değişiklikleri</div>
+          <div class="answer-quote">"Bazen"</div>
+          <div class="finding-value">product_price_history tablosu ile her değişiklik kim/ne zaman/neden loglanıyor. Doğrulandı.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">İndirim Türleri</div>
+          <div class="tags">
+            <span class="tag">% İndirim (%10, %20)</span>
+            <span class="tag">Sezon Sonu</span>
+            <span class="tag">Belirli Ürün</span>
+          </div>
+          <div class="finding-note">discount_type (percentage/fixed) + discount_reason enum kapsıyor. V1 manuel indirim yeterli.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── SATIŞ & ÖDEME ────────────────────────────────── -->
+  <section class="section" id="satis">
+    <div class="section-header">
+      <div class="section-icon">💳</div>
+      <h2>Satış & Ödeme</h2>
+      <span class="section-num">S.33–35</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Ödeme Yöntemleri</div>
+          <div class="tags">
+            <span class="tag accent">Nakit</span>
+            <span class="tag accent">Kredi / Banka Kartı</span>
+            <span class="tag accent">Banka Havalesi</span>
+            <span class="tag accent">Diğer</span>
+          </div>
+          <div class="finding-note">payment_method enum kapsıyor. Karışık ödeme (mixed) da destekleniyor.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-gap">✕</div>
+        <div class="finding-body">
+          <div class="finding-label">🔴 KRİTİK: Çok Para Birimi — Şema Boşluğu</div>
+          <div class="answer-quote">"TL · GBP · EUR · USD kabul ediliyor"</div>
+          <div class="answer-quote">"O günün kuru ile"</div>
+          <div class="finding-value">sale_payments tablosunda <code>currency</code> ve <code>exchange_rate</code> kolonu yok. Müşteri 1.000 GBP ödediğinde bu bilgi kayıt altına alınamıyor. Kritik şema değişikliği gerekiyor.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-gap">✕</div>
+        <div class="finding-body">
+          <div class="finding-label">🔴 KRİTİK: Günlük Kur Tablosu Eksik</div>
+          <div class="finding-value">"O günün kuru" manuel girilecek mi, yoksa API'den mi çekilecek? Karardan bağımsız olarak <code>fx_rates</code> tablosu şemaya eklenmeli. Hem geçmiş satışlar için kuru muhafaza eder, hem de raporları tutarlı kılar.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── REZERVASYON & İADE ───────────────────────────── -->
+  <section class="section" id="iade">
+    <div class="section-header">
+      <div class="section-icon">🔄</div>
+      <h2>Rezervasyon & İade</h2>
+      <span class="section-num">S.27–32</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Rezervasyon Yapılıyor</div>
+          <div class="answer-quote">"Evet"</div>
+          <div class="finding-note">reservations + reservation_items + expires_at mekanizması doğrulandı.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Rezervasyon Kanalları</div>
+          <div class="tags">
+            <span class="tag accent">Instagram DM</span>
+            <span class="tag accent">WhatsApp</span>
+          </div>
+          <div class="finding-note">reservation.source alanı bu değerleri tutacak.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Rezervasyon Süresi — Yeni Karar</div>
+          <div class="answer-quote">"Müşteriye göre değişiyor"</div>
+          <div class="finding-value">Sabit bir kural yok, vaka bazında belirleniyor. Yeni karar: <code>businesses.settings</code> JSON'una <code>default_reservation_hours</code> eklenecek (öneri: 24 saat). Personel her rezervasyonda süreyi override edebilecek.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Değişim Politikası — Yeni Karar</div>
+          <div class="answer-quote">"3 gün değişim hakkı"</div>
+          <div class="finding-value">Şemada return policy settings yoktu. Yeni karar: <code>businesses.settings</code>'e <code>exchange_window_days: 3</code> ekleniyor. POS iade ekranı bu değerle satış tarihinden süre hesaplayacak.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Para İadesi Yapılmıyor — Yeni Karar</div>
+          <div class="answer-quote">"Hayır"</div>
+          <div class="finding-value">Şemada return_type enum'unda 'refund' var ama bu işletmede devre dışı bırakılacak. Yeni karar: <code>businesses.settings</code>'e <code>allow_cash_refund: false</code> ekleniyor. UI'da "Para İadesi" seçeneği bu flag'e göre gizlenecek.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Değişime Kapalı Kategori — Yeni Karar</div>
+          <div class="answer-quote">"Bikiniler değişime/iadeye kapalı"</div>
+          <div class="finding-value">categories tablosunda <code>is_final_sale BOOLEAN</code> kolonu eklenecek. Bikini kategorisine <code>true</code> set edildiğinde POS değişim seçeneğini engelleyecek.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── KASA ─────────────────────────────────────────── -->
+  <section class="section" id="kasa">
+    <div class="section-header">
+      <div class="section-icon">🗃️</div>
+      <h2>Kasa</h2>
+      <span class="section-num">S.36–38</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Günbaşı Nakit Açılışı</div>
+          <div class="answer-quote">"Evet"</div>
+          <div class="finding-note">register_sessions.opening_cash doğrulandı.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Günlük Fiziksel Sayım</div>
+          <div class="answer-quote">"Her gün"</div>
+          <div class="finding-note">register_sessions.counted_cash + variance kolonu doğrulandı. Gün sonu sayım akışı öncelikli feature.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">Kasa Farkı Politikası Belirtilmedi</div>
+          <div class="finding-value">Form boş bırakıldı. Negatif/pozitif fark çıktığında nasıl işlem yapılacağı tanımsız. Hangi fark eşiğinde müdahale gerekiyor?</div>
+          <div class="finding-note">Takip sorusu: "Kasa ile sayım arasındaki fark için bir kabul toleransınız var mı (örneğin ±50 TL)?"</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── KULLANICILAR ─────────────────────────────────── -->
+  <section class="section" id="kullanici">
+    <div class="section-header">
+      <div class="section-icon">👤</div>
+      <h2>Kullanıcı & Roller</h2>
+      <span class="section-num">S.39–42</span>
+    </div>
+    <div class="findings">
+
+      <div class="finding">
+        <div class="finding-status st-gap">✕</div>
+        <div class="finding-body">
+          <div class="finding-label">🔴 KRİTİK: Muhasebe Rolü Eksik</div>
+          <div class="answer-quote">"İşletme sahibi · Yönetici · Muhasebe"</div>
+          <div class="finding-value">Şemada user_role enum: <code>owner | manager | sales_staff | stock_staff</code>. Formda belirtilen <strong>muhasebe</strong> rolü yok. Muhasebe; satış geçmişini ve tedarikçi cari hesabını görmeli ama ürün fiyatı değiştirememelidir.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-ok">✓</div>
+        <div class="finding-body">
+          <div class="finding-label">Alış Fiyatı Gizliliği</div>
+          <div class="answer-quote">"Sadece işletme sahibi / yöneticiler görsün"</div>
+          <div class="finding-note">business_members.role bazlı RLS politikası bunu destekliyor. Sales staff için alış fiyatı kolonları SELECT dışında bırakılacak.</div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="finding-status st-warn">!</div>
+        <div class="finding-body">
+          <div class="finding-label">İndirim Sınırı</div>
+          <div class="answer-quote">"Daha sonra karar verelim"</div>
+          <div class="finding-note">business_members.max_discount_pct kolonu hazır. Karar verildiğinde sadece bu değer güncellenir, kod değişmez.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ── ŞEMA ETKİLERİ ────────────────────────────────── -->
+  <section class="section" id="sema">
+    <div class="section-header">
+      <div class="section-icon">🛠️</div>
+      <h2>Şema Değişiklikleri (Migration 003)</h2>
+    </div>
+
+    <!-- 1 - Multi-currency -->
+    <div class="impact-block">
+      <div class="impact-header">✕ sale_payments — Para Birimi & Kur</div>
+      <div class="impact-desc">Müşteri GBP/EUR/USD ile ödeme yapabildiği için her ödeme satırında para birimi ve o günün kuru saklanmalı. Aksi halde geçmiş satış raporları TL bazlı hesaplanamaz.</div>
+<pre><span class="sql-kw">ALTER TABLE</span> sale_payments
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-new">currency</span>       <span class="sql-type">TEXT</span>         NOT NULL DEFAULT <span class="sql-type">'TRY'</span>,
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-new">exchange_rate</span>  <span class="sql-type">NUMERIC(12,6)</span> NOT NULL DEFAULT <span class="sql-type">1</span>,
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-new">amount_base</span>    <span class="sql-type">NUMERIC(12,2)</span> <span class="sql-comment">-- amount × exchange_rate (TRY)</span>
+  GENERATED ALWAYS AS (amount * exchange_rate) STORED;</pre>
+    </div>
+
+    <!-- 2 - FX rates -->
+    <div class="impact-block">
+      <div class="impact-header">✕ fx_rates — Günlük Kur Tablosu</div>
+      <div class="impact-desc">Satış anındaki kuru satırda saklasak da, günlük kuru merkezi tutmak hem veri girişini kolaylaştırır hem de raporlarda tutarlılık sağlar.</div>
+<pre><span class="sql-kw">CREATE TABLE</span> <span class="sql-new">fx_rates</span> (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id  UUID NOT NULL REFERENCES businesses(id),
+  rate_date    DATE NOT NULL,
+  currency     TEXT NOT NULL,             <span class="sql-comment">-- 'GBP' | 'EUR' | 'USD'</span>
+  rate_to_try  <span class="sql-type">NUMERIC(12,6)</span> NOT NULL,   <span class="sql-comment">-- 1 GBP = ? TRY</span>
+  source       TEXT DEFAULT 'manual',    <span class="sql-comment">-- 'manual' | 'api'</span>
+  created_by   UUID REFERENCES profiles(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (business_id, rate_date, currency)
+);</pre>
+    </div>
+
+    <!-- 3 - Accounting role -->
+    <div class="impact-block">
+      <div class="impact-header">✕ user_role enum — Muhasebe Rolü</div>
+      <div class="impact-desc">Mevcut enum'a 'accounting' ekleniyor. Bu rol: satışları ve tedarikçi cari hesabını görebilir, ancak ürün/stok/fiyat değiştiremez.</div>
+<pre><span class="sql-kw">ALTER TYPE</span> user_role
+  <span class="sql-kw">ADD VALUE</span> <span class="sql-new">'accounting'</span>;
+
+<span class="sql-comment">-- Muhasebe için ek RLS politikaları:</span>
+<span class="sql-comment">-- supplier_account_entries → SELECT izni (şu an sadece manager+)</span>
+<span class="sql-comment">-- supplier_payments       → SELECT izni</span>
+<span class="sql-comment">-- sales / sale_items      → SELECT izni (zaten var)</span>
+<span class="sql-comment">-- products                → INSERT/UPDATE yok</span></pre>
+    </div>
+
+    <!-- 4 - Policy settings -->
+    <div class="impact-block warn">
+      <div class="impact-header">! İade & Fiyat Politikaları — businesses.settings</div>
+      <div class="impact-desc">Kod değişikliği gerekmez; JSON settings alanına yeni anahtarlar ekleniyor. Tüm politika kararları bu alanda tutulacak.</div>
+<pre><span class="sql-comment">-- businesses.settings alanına eklenen anahtarlar:</span>
+{
+  <span class="sql-new">"allow_cash_refund"</span>:           false,
+  <span class="sql-new">"exchange_window_days"</span>:        3,
+  <span class="sql-new">"default_reservation_hours"</span>:   24,
+  <span class="sql-new">"default_markup_multiplier"</span>:   3.0
+}
+
+<span class="sql-comment">-- categories tablosuna:</span>
+<span class="sql-kw">ALTER TABLE</span> categories
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-new">is_final_sale</span> <span class="sql-type">BOOLEAN</span> NOT NULL DEFAULT false;
+<span class="sql-comment">-- Bikini kategorisi: is_final_sale = true</span></pre>
+    </div>
+
+    <!-- 5 - Markup -->
+    <div class="impact-block warn">
+      <div class="impact-header">! products — Fiyatlama Çarpanı</div>
+      <div class="impact-desc">x3 formülünü sistemin bilebilmesi için ürün bazlı çarpan kolonu. Satış fiyatı öneri olarak hesaplanır, override edilebilir.</div>
+<pre><span class="sql-kw">ALTER TABLE</span> products
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-new">markup_multiplier</span> <span class="sql-type">NUMERIC(5,2)</span> DEFAULT 3.0;
+
+<span class="sql-comment">-- Önerilen satış fiyatı:
+-- last_purchase_cost × markup_multiplier
+-- UI bunu hesaplayıp input'a doldurur, kullanıcı değiştirebilir</span></pre>
+    </div>
+
+  </section>
+
+  <hr class="divider">
+
+  <!-- ── TAKIP SORULARI ───────────────────────────────── -->
+  <section class="section" id="takip">
+    <div class="section-header">
+      <div class="section-icon">❓</div>
+      <h2>Gelişmeye Başlamadan Sorulması Gereken 3 Soru</h2>
+    </div>
+    <ul class="followup-list">
+      <li>Barkod / etiket yazıcısının marka ve modeli nedir? (ZPL mi, PDF mi, ESC-P mi — label template formatı buna göre belirlenecek)</li>
+      <li>Kasa sayımında çıkan fark için kabul sınırınız var mı? (örneğin ±50 TL tolerans — bu değer register_sessions.settings'e girilecek)</li>
+      <li>Yabancı para kurunu her gün sisteme elle mi gireceksiniz, yoksa otomatik API (TCMB / fixer.io) entegrasyonu mu istiyorsunuz?</li>
+    </ul>
+  </section>
+
+  <!-- ── FOOTER ───────────────────────────────────────── -->
+  <footer style="text-align:center; padding-top: 20px; border-top: 1px solid var(--border);">
+    <p style="font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-3); letter-spacing:.06em;">
+      ButikOS · Things Like Crop Pilot · Migration 003 gerekmektedir
+    </p>
+  </footer>
+
+</div>
