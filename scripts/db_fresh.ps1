@@ -1,18 +1,18 @@
-<#
+﻿<#
 .SYNOPSIS
-  BoutiqueOS — sıfır veritabanına migration + seed + doğrulama testlerini uygular.
+  BoutiqueOS - sifir veritabanina migration + seed + dogrulama testlerini uygular.
 
 .MODES
-  -Init            : .pgdata altında yerel PostgreSQL cluster oluşturur ve başlatır (bir kez)
+  -Init            : .pgdata altinda yerel PostgreSQL cluster olusturur ve baslatir (bir kez)
   (default)        : DB'yi DROP/CREATE eder, tests\000_test_harness.sql -> supabase\migrations\*.sql
-                     -> seeds\*.sql -> tests\005_verification_tests.sql sırasıyla uygular
-  -Mode Supabase   : Docker'daki Supabase local stack'e uygular (harness ATLANIR; auth şeması gerçek)
-  -NoTests         : 005 testlerini çalıştırma
-  -Stop            : yerel cluster'ı durdur
+                     -> seeds\*.sql -> tests\005_verification_tests.sql sirasiyla uygular
+  -Mode Supabase   : Docker'daki Supabase local stack'e uygular (harness ATLANIR; auth semasi gercek)
+  -NoTests         : 005 testlerini calistirma
+  -Stop            : yerel cluster'i durdur
 
 .EXIT CODE
-  0 = tüm adımlar hatasız ve testlerde [FAIL] yok
-  1 = migration/seed hatası veya en az bir [FAIL]
+  0 = tum adimlar hatasiz ve testlerde [FAIL] yok
+  1 = migration/seed hatasi veya en az bir [FAIL]
 #>
 [CmdletBinding()]
 param(
@@ -28,7 +28,7 @@ function Step($m){ Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "    [OK] $m" -ForegroundColor Green }
 function Fail($m){ Write-Host "    [FAIL] $m" -ForegroundColor Red }
 
-# ---- .env yükle
+# ---- .env yukle
 if(Test-Path ".env"){
   Get-Content ".env" | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
     $k,$v = $_ -split '=',2; [Environment]::SetEnvironmentVariable($k.Trim(), $v.Trim(), "Process")
@@ -44,29 +44,31 @@ $pgdata = Join-Path $Root ".pgdata"
 $log    = Join-Path $Root "tests\results\last_run.log"
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 
-foreach($c in "psql","initdb","pg_ctl"){ if(-not (Get-Command $c -ErrorAction SilentlyContinue) -and $Mode -eq "Plain"){ throw "$c bulunamadı — bootstrap.ps1 çalıştır (scoop install postgresql)" } }
+foreach($c in "psql","initdb","pg_ctl"){ if(-not (Get-Command $c -ErrorAction SilentlyContinue) -and $Mode -eq "Plain"){ throw "$c bulunamadi - bootstrap.ps1 calistir (scoop install postgresql)" } }
 
-# ---- yerel cluster yönetimi
+# ---- yerel cluster yonetimi
 if($Stop){ pg_ctl -D $pgdata stop -m fast; exit 0 }
 
 if($Init){
   Step "Yerel PostgreSQL cluster: $pgdata (port $PGPORT)"
   if(-not (Test-Path $pgdata)){
-    $pw = New-TemporaryFile; Set-Content $pw $env:PGPASSWORD -NoNewline
-    initdb -D $pgdata -U $PGUSER --auth=md5 --pwfile=$pw.FullName -E UTF8 --locale=C | Out-Null
-    Remove-Item $pw
+    $pwFile = Join-Path $env:TEMP "boutiqueos_pw.txt"
+    [IO.File]::WriteAllText($pwFile, $env:PGPASSWORD)
+    & initdb -D $pgdata -U $PGUSER --auth=md5 "--pwfile=$pwFile" -E UTF8 --locale=C
+    if($LASTEXITCODE -ne 0){ throw "initdb basarisiz" }
+    Remove-Item $pwFile -Force
     Add-Content (Join-Path $pgdata "postgresql.conf") "`nport = $PGPORT`nlisten_addresses = 'localhost'`n"
     Ok "initdb tamam"
   }
   pg_ctl -D $pgdata -l (Join-Path $pgdata "server.log") start | Out-Null
   Start-Sleep 2
-  Ok "cluster çalışıyor"
+  Ok "cluster calisiyor"
   exit 0
 }
 
-# ---- bağlantı stringi
+# ---- baglanti stringi
 if($Mode -eq "Supabase"){
-  # supabase start sonrası yerel stack: 54322 / postgres / postgres
+  # supabase start sonrasi yerel stack: 54322 / postgres / postgres
   $connBase = "postgresql://postgres:postgres@localhost:54322/postgres"
   $connDb   = $connBase
 } else {
@@ -82,16 +84,16 @@ function Run-Sql([string]$conn,[string]$file){
   if($LASTEXITCODE -ne 0){ $out | Select-Object -Last 15 | ForEach-Object { Fail $_ }; throw "HATA: $file" }
 }
 
-"# BoutiqueOS fresh apply — $(Get-Date -Format s) — mode=$Mode" | Set-Content $log
+"# BoutiqueOS fresh apply - $(Get-Date -Format s) - mode=$Mode" | Set-Content $log
 
 # ---- 1. fresh DB
 Step "Fresh database ($Mode)"
 if($Mode -eq "Plain"){
   & psql $connBase -X -c "DROP DATABASE IF EXISTS $PGDB WITH (FORCE);" | Out-Null
   & psql $connBase -X -c "CREATE DATABASE $PGDB;" | Out-Null
-  Ok "$PGDB yeniden oluşturuldu"
+  Ok "$PGDB yeniden olusturuldu"
 } else {
-  & supabase db reset --local | Out-Null   # migrations klasörünü kendisi uygular
+  & supabase db reset --local | Out-Null   # migrations klasorunu kendisi uygular
   Ok "supabase db reset"
 }
 
@@ -101,7 +103,7 @@ if($Mode -eq "Plain"){
   Run-Sql $connDb "tests\000_test_harness.sql"
 }
 
-# ---- 3. migrations (Supabase modunda reset zaten uyguladı)
+# ---- 3. migrations (Supabase modunda reset zaten uyguladi)
 if($Mode -eq "Plain"){
   Step "Migrations"
   Get-ChildItem "supabase\migrations\*.sql" | Sort-Object Name | ForEach-Object { Run-Sql $connDb $_.FullName }
@@ -115,7 +117,7 @@ Get-ChildItem "seeds\*.sql" | Sort-Object Name | ForEach-Object { Run-Sql $connD
 if(-not $NoTests){
   Step "Verification tests"
   $tfile = "tests\005_verification_tests.sql"
-  # testler bir transaction içinde, sonunda ROLLBACK
+  # testler bir transaction icinde, sonunda ROLLBACK
   $out = & psql $connDb -X -v ON_ERROR_STOP=0 -c "BEGIN;" -f $tfile -c "ROLLBACK;" 2>&1
   $out | Add-Content $log
   $pass = ($out | Select-String '\[PASS\]').Count
@@ -125,5 +127,5 @@ if(-not $NoTests){
   Write-Host "    log: $log"
   if($fail -gt 0){ exit 1 }
 }
-Ok "tamamlandı"
+Ok "tamamlandi"
 exit 0
