@@ -3,8 +3,9 @@
 **Sürüm:** Rev 3 · 2026-09-08
 **Kapsam:** `supabase/migrations/20260908000001..04`, `seeds/seed_things_like_crop.sql`, `tests/000_test_harness.sql`, `tests/005_verification_tests.sql`, `tests/concurrency/*`
 **Durum:** **BACKEND GATE KAPANDI** · DEV Supabase'e uygulandı · **Frontend Faz 1 DOĞRULANDI**
-(2026-09-08) · **Frontend Faz 2 ÜRÜN KATALOĞU DOĞRULANDI** (manuel DEV smoke, 2026-09-09) ·
-Sıradaki modüller başlamadı
+(2026-09-08) · **Frontend Faz 2 ÜRÜN KATALOĞU DOĞRULANDI** (2026-09-09) ·
+**Frontend Faz 3 TEDARİKÇİLER + MAL KABUL + STOK DOĞRULANDI** (TRY manuel DEV smoke, 2026-09-09;
+non-TRY FX ve rol smoke DEFERRED) · Sıradaki modüller başlamadı
 
 > Bu rapordaki her bulgu **statik incelemeye** dayanır (kod okuma + `tools/lint_sql.py` + audit betikleri).
 > Hiçbir SQL henüz bir PostgreSQL örneğinde çalıştırılmadı. "PASS" ifadesi bu belgede **yoktur**;
@@ -219,7 +220,12 @@ R-1, R-3, R-4, R-5, R-6, R-7 üretim kodu defektleridir; R-2, R-8 test, R-9 tool
 | Frontend Faz 1 — bağımlılık + build | **VERIFIED** — `npm ls` / `audit` / `lint` / `build` / `typecheck` tümü PASS |
 | Frontend Faz 1 — auth + tenant girişi | **VERIFIED** — manuel smoke DEV Supabase'e karşı PASS |
 | Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** — manuel DEV smoke 2026-09-09'da PASS |
-| Faz 3+ (Stok, Kasa, Tedarikçi, Raporlar…) | **READY FOR PHASE 3 PLANNING** — kodlama başlamadı |
+| Frontend Faz 3 — tedarikçiler + mal kabul + stok | **VERIFIED** — TRY manuel DEV smoke 2026-09-09'da PASS |
+| Faz 3 — non-TRY FX manuel smoke | **DEFERRED** — DEV'de kullanılabilir FX kaydı yok |
+| Faz 3 — sales_staff manuel rol smoke | **DEFERRED** — ikinci hesap yok |
+| Gerçek cross-tenant manuel test | **DEFERRED** — ikinci işletme + kullanıcı gerekiyor |
+| GAP-1 `rpc_create_goods_receipt` (20260909062632) | **APPLIED** — remote'ta kayıtlı, local/remote eşleşiyor |
+| Faz 4+ (Kasa, Satış, Raporlar…) | **READY FOR PHASE 4 PLANNING** — kodlama başlamadı |
 | Deploy (Vercel) | yapılmadı |
 
 Supabase-local ertelendiği için gerçek `auth.uid()` yolu DEV üzerindeki remote smoke ile doğrulandı;
@@ -318,6 +324,84 @@ Kullanılan DEV test verisi (silinmedi, olduğu gibi duruyor): `TEST TLC Studio`
 - **Bulunamayan ürün ekranı içerik olarak doğru, ancak HTTP 200 döner.** Next akış yaptığı
   için kabuk gönderildikten sonra `notFound()` durum kodunu değiştiremiyor; bu **gerçek bir
   404 PASS değildir.**
+
+### Faz 3 manuel smoke (2026-09-09, DEV Supabase, owner oturumu)
+
+Tedarikçiler + Mal Kabul + Stok Görünümü modülü tarayıcıdan sürüldü. Her adım hem DOM'dan
+okunarak hem dev sunucu logundan doğrulandı. **TRY kapsamı için FULLY VERIFIED**; bu ifade
+non-TRY veya rol testlerini kapsamaz.
+
+| Alan | Sonuç |
+|---|---|
+| Tedarikçi listesi · oluşturma · yinelenen ad reddi · düzenleme · e-posta/not persistence | **PASS** |
+| Taslak oluşturma (`rpc_create_goods_receipt`) | **PASS** |
+| `receipt_number` sunucuda üretiliyor (`fn_next_sequence`), sıralı `GR-2026-000001` / `GR-2026-000002` | **PASS** |
+| `business_id` / `status` / `receipt_number` client input değil | **PASS** |
+| TRY belgede `exchange_rate = 1` | **PASS** |
+| Satır ekleme / güncelleme | **PASS** |
+| Yinelenen varyant yeni satır üretmiyor (`UNIQUE(goods_receipt_id, variant_id)`) | **PASS** |
+| Taslak yenileme sonrası persistence | **PASS** |
+| İşleme öncesi özet | **PASS** |
+| Onay kutusu guard'ı | **PASS** |
+| Boş taslak UI post guard'ı (kutu işaretlense de CTA kapalı) | **PASS** |
+| İşleme (`rpc_post_goods_receipt`) | **PASS** |
+| İşlenmiş belge salt-okunur | **PASS** |
+| İşlenmiş belgede ikinci POST eylemi yok | **PASS** |
+| İşlenmiş belgede geri alma / iptal CTA'sı yok | **PASS** |
+| Taslak iptali ayrı davranış olarak | **PASS** |
+| Pre-smoke baseline S=0 / M=0 doğrulandı | **PASS** |
+| Mal kabul deltası S **+5** / M **+3** | **PASS** |
+| SELLABLE · ON_HAND · RESERVED · AVAILABLE | **PASS** |
+| Stok detayı · hareket geçmişi · belgeye link | **PASS** |
+| Stok araması: ürün adı / SKU / barkod | **PASS** |
+| Filtreler: kategori · marka · şube · stok durumu | **PASS** |
+| Stok ekranında değiştirilebilir miktar alanı/eylemi yok | **PASS** |
+| Stok ekranında maliyet sızıntısı yok | **PASS** |
+
+#### Read-only SQL ile doğrulanan backend değerleri
+
+Aşağıdakiler `supabase db query --linked` ile **yalnız okuma** olarak doğrulandı; DEV'e hiçbir
+yazma yapılmadı.
+
+| Doğrulama | Değer |
+|---|---|
+| `goods_receipt_items` S | qty 5 · unit_cost 400 · fx_rate_snapshot 1 · unit_cost_base 400 · total_cost_base 2000 |
+| `goods_receipt_items` M | qty 3 · unit_cost 420 · fx_rate_snapshot 1 · unit_cost_base 420 · total_cost_base 1260 |
+| Toplam base | **3.260 TRY** |
+| `variant_cost_pools` | S: `on_hand_qty` 5 / `total_value_base` 2000 · M: 3 / 1260 |
+| `supplier_account_entries` | `GR-2026-000001` → `entry_type='liability'`, `amount_base` 3260, currency TRY |
+| `goods_receipts` durumları | `GR-2026-000001` posted · `GR-2026-000002` cancelled |
+
+#### DEV test kayıtları (silinmedi)
+
+Faz 2: `TEST TLC Studio`, `TEST Keten Crop Bluz`, `TEST Beden` / `TEST Renk` seçenekleri, iki
+varyant, dahili + harici barkod, ve ilk denemede eklenen `Sarıfatih` markası.
+Faz 3: `TEST Supplier Phase 3`, `GR-2026-000001` (TEST-FTR-001, posted),
+`GR-2026-000002` (TEST-EMPTY-GUARD, cancelled).
+
+İşlenmiş belge değişmez olduğu için bu kayıtlar **çöp değil, DEV audit fixture'ı** olarak
+bırakılmıştır. Silme SQL'i veya cleanup script'i yazılmamıştır.
+
+#### Faz 3 kapsam sınırları
+
+- **Non-TRY / FX manuel smoke DEFERRED** — DEV'de kullanılabilir FX kaydı yok; kur uydurulmadı,
+  `rpc_set_fx_rate` çağrılmadı, FX verisi seed edilmedi.
+- **`sales_staff` manuel rol smoke DEFERRED** — ikinci hesap yok. Owner oturumuyla gözlenen
+  davranış yalnız frontend gizlemesidir; cross-role security PASS olarak adlandırılmamıştır.
+- **Gerçek cross-tenant manuel test DEFERRED** — ikinci işletme ve kullanıcı gerekiyor.
+
+### Faz 3 açık teknik borçlar
+
+| # | Borç | Not |
+|---|---|---|
+| GAP-2 | `rpc_reverse_goods_receipt` NOT_IMPLEMENTED (ADR-10 / D-2) | İşlenmiş belgede geri alma UI'ı bilinçli olarak yok |
+| GAP-3 | Birleşik stok view'ı yok | Varyant + `v_stock_by_bucket` + `v_stock_available` birleştirmesi uygulamada |
+| GAP-4 | Post sırasında FX `fx_rates` ile DB seviyesinde doğrulanmıyor | UI günlük kurdan sapmayı uyarır ama engellemez |
+| T-15 | Belge toplamları uygulamada aggregate ediliyor | `RECEIPT_LIST_LIMIT` ile sınırlı |
+| T-16 | `getVariantStock()` şube başına ayrı sorgu atıyor | 1–2 şubede sorun değil |
+| T-17 | `v_stock_available` yalnız `sellable` kovası için availability tanımlar | Diğer kovalarda rezerve/uygun tanımsız |
+| T-18 | `lib/catalog/errors.ts` re-export shim | Davranış aynı, tek kaynak `lib/db-errors.ts` |
+
 
 ### Faz 2 açık teknik borçlar
 

@@ -21,7 +21,10 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Frontend Faz 1 — auth + tenant girişi | **VERIFIED** (2026-09-08) — manuel smoke DEV'e karşı PASS |
 | Token refresh + cache-header yolu | **KOŞULMADI** — token süresi dolmadan tetiklenmiyor |
 | Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** (2026-09-09) — manuel DEV smoke PASS |
-| Faz 3+ (Stok, Kasa, Tedarikçi, Raporlar…) | **Başlamadı** — READY FOR PHASE 3 PLANNING |
+| Frontend Faz 3 — tedarikçiler + mal kabul + stok | **VERIFIED** (2026-09-09) — TRY manuel DEV smoke PASS |
+| Faz 3 — non-TRY FX manuel smoke | **DEFERRED** — DEV'de kullanılabilir FX kaydı yok |
+| Faz 3 — sales_staff rol smoke | **DEFERRED** — ikinci hesap yok; frontend gizleme cross-role PASS sayılmaz |
+| Faz 4+ (Kasa, Satış, Raporlar…) | **Başlamadı** — READY FOR PHASE 4 PLANNING |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
 
