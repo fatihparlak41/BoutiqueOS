@@ -1,35 +1,76 @@
-import { requireTenant, ROLE_LABELS } from "@/lib/tenant";
+import Link from "next/link";
+import { Shirt, PackagePlus, Boxes, Truck } from "lucide-react";
+import { requireTenant } from "@/lib/tenant";
+
+/**
+ * Landing screen after sign-in.
+ *
+ * The business, branch and role already sit in the shell header, so repeating them here
+ * would be the same information twice. This screen answers "what can I do right now"
+ * instead, and it lists only the modules that are actually open.
+ */
+const MODULES = [
+  {
+    href: "/app/urunler",
+    icon: Shirt,
+    title: "Ürünler",
+    body: "Ürün ve varyantları tanımlayın, SKU ve barkod verin.",
+  },
+  {
+    href: "/app/mal-kabul",
+    icon: PackagePlus,
+    title: "Mal Kabul",
+    body: "Tedarikçiden gelen ürünleri belgeye girip stoğa alın.",
+  },
+  {
+    href: "/app/stok",
+    icon: Boxes,
+    title: "Stok",
+    body: "Hangi bedenden kaç adet kaldığını ve hareket geçmişini görün.",
+  },
+  {
+    href: "/app/tedarikciler",
+    icon: Truck,
+    title: "Tedarikçiler",
+    body: "Mal kabul belgelerinin bağlanacağı tedarikçileri yönetin.",
+  },
+];
 
 export default async function AppHomePage() {
-  const { active, branch } = await requireTenant();
+  const { profile, user } = await requireTenant();
+  const name = profile.full_name?.trim() || user.email?.split("@")[0] || "";
 
   return (
-    <div className="max-w-2xl">
-      <h2 className="text-base font-medium tracking-tightish">Kurulum tamamlandı</h2>
-      <p className="mt-2 text-sm leading-relaxed text-muted">
-        Veritabanı ve oturum yönetimi hazır. Modüller sırayla açılacak; şu an yalnızca giriş ve
-        işletme erişimi çalışıyor.
-      </p>
+    <div className="max-w-3xl space-y-8">
+      <header>
+        <h2 className="font-serif text-xl leading-tight tracking-tightish">
+          {name ? `Hoş geldiniz, ${name}` : "Hoş geldiniz"}
+        </h2>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          Stok, yalnızca işlenmiş mal kabul belgeleriyle oluşur; hiçbir ekranda elle stok girişi yoktur.
+        </p>
+      </header>
 
-      <dl className="mt-8 divide-y divide-line border-y border-line text-sm">
-        <div className="flex justify-between gap-6 py-2.5">
-          <dt className="text-muted">İşletme</dt>
-          <dd className="text-right">
-            {active.business_name}{" "}
-            <span className="text-muted" data-numeric>
-              {active.business_code}
-            </span>
-          </dd>
-        </div>
-        <div className="flex justify-between gap-6 py-2.5">
-          <dt className="text-muted">Şube</dt>
-          <dd className="text-right">{branch ? `${branch.name} (${branch.code})` : "—"}</dd>
-        </div>
-        <div className="flex justify-between gap-6 py-2.5">
-          <dt className="text-muted">Yetki</dt>
-          <dd className="text-right">{ROLE_LABELS[active.role]}</dd>
-        </div>
-      </dl>
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {MODULES.map(({ href, icon: Icon, title, body }) => (
+          <li key={href}>
+            <Link
+              href={href}
+              className="flex h-full gap-3 border border-line p-4 transition-colors hover:border-line-strong hover:bg-panel/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Icon aria-hidden className="mt-0.5 h-4 w-4 shrink-0 stroke-[1.5] text-accent" />
+              <span>
+                <span className="block text-sm font-medium">{title}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-muted">{body}</span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      <p className="border-t border-line pt-4 text-2xs leading-relaxed text-muted">
+        Kasa, satış, müşteriler, rezervasyonlar ve raporlar henüz açılmadı; menüde gri görünürler.
+      </p>
     </div>
   );
 }

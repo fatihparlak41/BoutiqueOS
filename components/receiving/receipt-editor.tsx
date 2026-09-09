@@ -325,7 +325,7 @@ export function ReceiptEditor({ receipt, fxHint }: { receipt: ReceiptDetail; fxH
             Henüz satır yok. Aşağıdan varyant arayıp ekleyin.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[46rem] border-collapse text-sm">
               <thead>
                 <tr className="border-y border-line text-left text-xs text-muted">

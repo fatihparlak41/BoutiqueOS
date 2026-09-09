@@ -54,8 +54,8 @@ export default async function ReceiptsPage({
         ) : null}
       </header>
 
-      <form method="get" className="grid gap-3 border-y border-line py-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="space-y-1.5 lg:col-span-2">
+      <form method="get" className="grid grid-cols-2 gap-3 border-y border-line py-4 lg:grid-cols-5">
+        <div className="col-span-2 space-y-1.5">
           <Label htmlFor="q">Ara</Label>
           <Input id="q" name="q" defaultValue={search} placeholder="Belge no veya referans" spellCheck={false} />
         </div>
@@ -81,7 +81,7 @@ export default async function ReceiptsPage({
             ))}
           </Select>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="col-span-2 grid grid-cols-2 gap-2 lg:col-span-1">
           <div className="space-y-1.5">
             <Label htmlFor="baslangic">Başlangıç</Label>
             <Input id="baslangic" name="baslangic" type="date" defaultValue={from} />
@@ -91,7 +91,7 @@ export default async function ReceiptsPage({
             <Input id="bitis" name="bitis" type="date" defaultValue={to} />
           </div>
         </div>
-        <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-5">
+        <div className="col-span-2 flex items-center gap-3 lg:col-span-5">
           <Button type="submit" size="sm" variant="outline">
             Filtrele
           </Button>
@@ -115,7 +115,7 @@ export default async function ReceiptsPage({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[56rem] border-collapse text-sm">
             <thead>
               <tr className="border-y border-line text-left text-xs text-muted">

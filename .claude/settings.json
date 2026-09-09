@@ -14,6 +14,7 @@
     "ask": [
       "Bash(npm install:*)",
       "Bash(git commit:*)",
+      "Bash(git push:*)",
       "Bash(scripts/db_fresh.ps1:*)",
       "Bash(psql:*)"
     ],
@@ -21,7 +22,6 @@
       "Bash(supabase db push:*)",
       "Bash(supabase db reset --linked:*)",
       "Bash(npm audit fix --force:*)",
-      "Bash(git push:*)",
       "Read(./.env)",
       "Read(./.env.local)"
     ]

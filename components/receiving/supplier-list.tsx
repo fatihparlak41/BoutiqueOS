@@ -75,7 +75,7 @@ function SupplierRow({ supplier, canEdit }: { supplier: Supplier; canEdit: boole
 
 export function SupplierList({ suppliers, canEdit }: { suppliers: Supplier[]; canEdit: boolean }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
       <table className="w-full min-w-[42rem] border-collapse text-sm">
         <thead>
           <tr className="border-y border-line text-left text-xs text-muted">

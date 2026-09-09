@@ -47,7 +47,7 @@ export default async function StockDetailPage({ params }: { params: Promise<{ va
 
       <section className="space-y-3">
         <h3 className="text-sm font-medium tracking-tightish">Şube bazında stok</h3>
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[44rem] border-collapse text-sm">
             <thead>
               <tr className="border-y border-line text-left text-xs text-muted">
@@ -88,7 +88,7 @@ export default async function StockDetailPage({ params }: { params: Promise<{ va
             Bu varyant için henüz hareket yok.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[48rem] border-collapse text-sm">
               <thead>
                 <tr className="border-y border-line text-left text-xs text-muted">

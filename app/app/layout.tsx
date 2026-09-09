@@ -27,7 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </h1>
             <p className="mt-0.5 truncate text-xs text-muted">
               {branch ? `${branch.name} (${branch.code})` : "Şube atanmamış"}
-              <span className="mx-1.5 text-line-strong">/</span>
+              <span aria-hidden className="mx-2 text-line-strong">·</span>
               {ROLE_LABELS[active.role]}
             </p>
           </div>

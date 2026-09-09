@@ -70,7 +70,12 @@ export function PrimaryNav() {
                 <span
                   aria-disabled="true"
                   title="Bu bölüm henüz açılmadı"
-                  className="flex cursor-not-allowed items-center gap-2.5 rounded px-3 py-2 text-sm text-muted/70"
+                  className={cn(
+                    "cursor-not-allowed items-center gap-2.5 rounded px-3 py-2 text-sm text-muted/70",
+                    // On a phone the nav is a wrap-around block at the top of every screen;
+                    // items that cannot be tapped would push the actual content below the fold.
+                    "hidden lg:flex",
+                  )}
                 >
                   <Icon aria-hidden className="h-4 w-4 shrink-0 stroke-[1.5]" />
                   <span className="truncate">{label}</span>

@@ -64,8 +64,8 @@ export default async function ProductsPage({
         ) : null}
       </header>
 
-      <form method="get" className="grid gap-3 border-y border-line py-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="space-y-1.5 sm:col-span-2">
+      <form method="get" className="grid grid-cols-2 gap-3 border-y border-line py-4 lg:grid-cols-5">
+        <div className="col-span-2 space-y-1.5">
           <Label htmlFor="q">Ara</Label>
           <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı veya SKU ön eki" spellCheck={false} />
         </div>
@@ -106,7 +106,7 @@ export default async function ProductsPage({
           </Select>
         </div>
 
-        <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-5">
+        <div className="col-span-2 flex items-center gap-3 lg:col-span-5">
           <Button type="submit" size="sm" variant="outline">
             Filtrele
           </Button>
@@ -130,7 +130,7 @@ export default async function ProductsPage({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[46rem] border-collapse text-sm">
             <thead>
               <tr className="border-y border-line text-left text-xs text-muted">

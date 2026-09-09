@@ -46,8 +46,8 @@ export default async function SuppliersPage({
         ) : null}
       </header>
 
-      <form method="get" className="grid gap-3 border-y border-line py-4 sm:grid-cols-3">
-        <div className="space-y-1.5 sm:col-span-2">
+      <form method="get" className="grid grid-cols-2 gap-3 border-y border-line py-4 sm:grid-cols-3">
+        <div className="col-span-2 space-y-1.5">
           <Label htmlFor="q">Ara</Label>
           <Input id="q" name="q" defaultValue={search} placeholder="Tedarikçi adı veya kodu" spellCheck={false} />
         </div>
@@ -62,7 +62,7 @@ export default async function SuppliersPage({
             ))}
           </Select>
         </div>
-        <div className="flex items-center gap-3 sm:col-span-3">
+        <div className="col-span-2 flex items-center gap-3 sm:col-span-3">
           <Button type="submit" size="sm" variant="outline">
             Filtrele
           </Button>
