@@ -18,9 +18,24 @@ VALUES (
     'money_refund_allowed', false,            -- J-2: no money refund (cash/card/bank alike)
     'store_credit_allowed', false,            -- J-2: not enabled until pilot approves
     'exchange_window_days', 3,                -- confirmed: 3-day exchange window
-    'accepted_currencies', jsonb_build_array('TRY','GBP','EUR','USD')
+    'accepted_currencies', jsonb_build_array('TRY','GBP','EUR','USD'),
+    -- Phase 3.5E: tenant policy, never compiled into application code
+    'sales_visibility_scope', 'own',          -- sales_staff sees only their own sales
+    'default_charge_allocation_method', 'invoice_value_proportional'  -- Phase 6 landed cost
   )
 ) ON CONFLICT (id) DO NOTHING;
+
+-- An existing pilot row is not replaced by the INSERT above, so policy keys added after
+-- the first seed are merged in. jsonb_build_object(...) || settings keeps every stored
+-- value: only absent keys receive the default.
+UPDATE businesses
+SET settings = jsonb_build_object(
+      'sales_visibility_scope', 'own',
+      'default_charge_allocation_method', 'invoice_value_proportional'
+    ) || settings
+WHERE id = 'b0000000-0000-4000-8000-000000000001'
+  AND (NOT (settings ? 'sales_visibility_scope')
+    OR NOT (settings ? 'default_charge_allocation_method'));
 
 INSERT INTO branches (id, business_id, name, code, address, is_default, status)
 VALUES ('b1000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001',
@@ -123,7 +138,7 @@ ON CONFLICT (business_id, slug) DO NOTHING;
 DO $$
 DECLARE k TEXT;
 BEGIN
-  FOREACH k IN ARRAY ARRAY['money_refund_allowed','store_credit_allowed','exchange_window_days','accepted_currencies'] LOOP
+  FOREACH k IN ARRAY ARRAY['money_refund_allowed','store_credit_allowed','exchange_window_days','accepted_currencies','sales_visibility_scope','default_charge_allocation_method'] LOOP
     PERFORM fn_setting('b0000000-0000-4000-8000-000000000001', k);
   END LOOP;
   RAISE NOTICE 'seed OK: TLC policy settings readable';

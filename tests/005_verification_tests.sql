@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 47 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 47,
+SELECT t_check('T01 all 49 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 49,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -557,6 +557,849 @@ SELECT t_check('T35ad posting produced a sellable ledger row for the new receipt
               WHERE i.goods_receipt_id = t_get('gr3') AND m.bucket = 'sellable' AND m.quantity = 4 $q$) = 1);
 SELECT t_check('T35ae posting produced exactly one supplier liability entry',
   t_count($q$ SELECT count(*) FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr3') AND entry_type = 'liability' $q$) = 1);
+
+-- ============================================================
+-- T36  business lifecycle enforcement  (Phase 3.5A)
+-- ============================================================
+SELECT t_check('T36a fn_is_business_active true for active TLC', (SELECT fn_is_business_active(t_get('biz'))));
+SELECT t_check('T36b fn_is_business_active callable by authenticated (policies need it)',
+  has_function_privilege('authenticated', 'fn_is_business_active(uuid)', 'EXECUTE'));
+SELECT t_check('T36c fn_require_active_business stays internal',
+  NOT has_function_privilege('authenticated', 'fn_require_active_business(uuid)', 'EXECUTE'));
+
+-- structural: an omitted policy is a silent hole, so completeness is asserted, not assumed
+SELECT t_check('T36d every business-scoped write policy enforces lifecycle',
+  (SELECT count(*) FROM pg_policies p
+    WHERE p.schemaname = 'public'
+      AND p.cmd IN ('ALL','INSERT','UPDATE','DELETE')
+      AND p.tablename <> 'businesses'
+      AND EXISTS (SELECT 1 FROM information_schema.columns c
+                  WHERE c.table_schema = 'public' AND c.table_name = p.tablename AND c.column_name = 'business_id')
+      AND COALESCE(p.qual,'') || COALESCE(p.with_check,'') NOT LIKE '%fn_is_business_active%') = 0,
+  (SELECT COALESCE(string_agg(p.policyname, ', '), 'none') FROM pg_policies p
+    WHERE p.schemaname = 'public'
+      AND p.cmd IN ('ALL','INSERT','UPDATE','DELETE')
+      AND p.tablename <> 'businesses'
+      AND EXISTS (SELECT 1 FROM information_schema.columns c
+                  WHERE c.table_schema = 'public' AND c.table_name = p.tablename AND c.column_name = 'business_id')
+      AND COALESCE(p.qual,'') || COALESCE(p.with_check,'') NOT LIKE '%fn_is_business_active%'));
+-- businesses is exempt from the lifecycle rule on purpose: the owner keeps editing name,
+-- address, phone, email, logo and settings. The one field that must not move -- status --
+-- is taken away from them by the 3.5G trigger, not by this policy.
+SELECT t_check('T36e businesses UPDATE stays exempt from the lifecycle rule (metadata edits)',
+  (SELECT COALESCE(qual,'') NOT LIKE '%fn_is_business_active%' FROM pg_policies WHERE policyname = 'pol_businesses_update'));
+SELECT t_check('T36f no SELECT policy was narrowed by the lifecycle rule',
+  (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND cmd = 'SELECT'
+     AND COALESCE(qual,'') LIKE '%fn_is_business_active%') = 0);
+
+-- fixture: tenant B needs a supplier so the receipt RPC gets past its own lookups
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizB'), 'B Supplier', 'TRY') RETURNING id)
+SELECT t_set('supB', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('bizB'), t_get('brB'), 'B Kasa') RETURNING id)
+SELECT t_set('regB', id) FROM x;
+
+-- ---------------- suspended ----------------
+UPDATE businesses SET status = 'suspended' WHERE id = t_get('bizB');
+SELECT t_login('u5');
+SELECT t_check('T36g suspended tenant still SELECTs its own history',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('bizB') $q$) = 1);
+SELECT t_check('T36h suspended tenant still SELECTs its own business row',
+  t_count($q$ SELECT count(*) FROM businesses WHERE id = t_get('bizB') $q$) = 1);
+SELECT t_err('T36i suspended tenant cannot INSERT a product',
+  $q$ INSERT INTO products (business_id, name, sku_prefix, default_sale_price) VALUES (t_get('bizB'), 'blocked', 'BLK-1', 1) $q$, '42501');
+SELECT t_check('T36j suspended tenant UPDATE is filtered to 0 rows',
+  t_count($q$ WITH u AS (UPDATE products SET name = 'x' WHERE business_id = t_get('bizB') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_err('T36k suspended tenant cannot INSERT a supplier',
+  $q$ INSERT INTO suppliers (business_id, name) VALUES (t_get('bizB'), 'blocked') $q$, '42501');
+SELECT t_err('T36l suspended tenant blocked in rpc_create_goods_receipt',
+  $q$ SELECT rpc_create_goods_receipt(t_get('brB'), t_get('supB')) $q$, 'BUSINESS_SUSPENDED');
+SELECT t_err('T36m suspended tenant blocked in rpc_process_sale',
+  $q$ SELECT rpc_process_sale(t_get('bizB'), t_get('brB'), gen_random_uuid(), '[]'::jsonb, '[]'::jsonb) $q$, 'BUSINESS_SUSPENDED');
+SELECT t_err('T36n suspended tenant blocked in rpc_set_fx_rate',
+  $q$ SELECT rpc_set_fx_rate(t_get('bizB'), 'GBP', 40) $q$, 'BUSINESS_SUSPENDED');
+SELECT t_err('T36o suspended tenant blocked in rpc_open_register_session',
+  $q$ SELECT rpc_open_register_session(t_get('regB')) $q$, 'BUSINESS_SUSPENDED');
+SELECT t_logout();
+
+-- ---------------- cancelled behaves the same ----------------
+UPDATE businesses SET status = 'cancelled' WHERE id = t_get('bizB');
+SELECT t_login('u5');
+SELECT t_check('T36p cancelled tenant still SELECTs its own history',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('bizB') $q$) = 1);
+SELECT t_err('T36q cancelled tenant cannot INSERT a product',
+  $q$ INSERT INTO products (business_id, name, sku_prefix, default_sale_price) VALUES (t_get('bizB'), 'blocked', 'BLK-2', 1) $q$, '42501');
+SELECT t_err('T36r cancelled tenant blocked in RPC',
+  $q$ SELECT rpc_create_goods_receipt(t_get('brB'), t_get('supB')) $q$, 'BUSINESS_SUSPENDED');
+
+-- ---------------- reactivation is NOT a tenant privilege (3.5G) ----------------
+SELECT t_err('T36s owner of a cancelled tenant cannot reactivate it themselves',
+  $q$ UPDATE businesses SET status = 'active' WHERE id = t_get('bizB') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_logout();
+-- brought back through the break-glass maintenance path (postgres, no marker).
+-- The audited platform RPC path is exercised in T41 and T43.
+UPDATE businesses SET status = 'active' WHERE id = t_get('bizB');
+SELECT t_login('u5');
+SELECT t_ok('T36t writes work again after reactivation',
+  $q$ INSERT INTO products (business_id, name, sku_prefix, default_sale_price) VALUES (t_get('bizB'), 'after', 'AFT-1', 1) $q$);
+SELECT t_ok('T36u RPC works again after reactivation',
+  $q$ SELECT rpc_create_goods_receipt(t_get('brB'), t_get('supB')) $q$);
+SELECT t_logout();
+
+-- ---------------- the active tenant is untouched ----------------
+SELECT t_login('u1');
+SELECT t_ok('T36v active tenant owner still writes master data',
+  $q$ INSERT INTO brands (business_id, name) VALUES (t_get('biz'), 'Lifecycle Test Brand') $q$);
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_ok('T36w active tenant stock_staff still creates a draft receipt',
+  $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1')) $q$);
+SELECT t_logout();
+
+-- ============================================================
+-- T37  last owner protection  (Phase 3.5B)
+-- ============================================================
+-- The rule is a DEFERRED constraint trigger, so it only fires at COMMIT. This whole
+-- file is one transaction that ends in ROLLBACK, so the check has to be forced with
+-- SET CONSTRAINTS ALL IMMEDIATE inside a subtransaction.
+CREATE FUNCTION t_err_deferred(name TEXT, sql TEXT, expect TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    EXECUTE sql;
+    SET CONSTRAINTS ALL IMMEDIATE;
+    PERFORM t_res(name, false, 'expected error ' || expect || ' but succeeded');
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLSTATE = expect OR SQLERRM LIKE '%' || expect || '%' THEN PERFORM t_res(name, true, expect);
+    ELSE PERFORM t_res(name, false, 'expected ' || expect || ' got ' || SQLSTATE || ' ' || SQLERRM); END IF;
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+END $$;
+
+CREATE FUNCTION t_ok_deferred(name TEXT, sql TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    EXECUTE sql;
+    SET CONSTRAINTS ALL IMMEDIATE;
+    PERFORM t_res(name, true);
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM t_res(name, false, SQLSTATE || ' ' || SQLERRM);
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+END $$;
+
+SELECT t_check('T37a last-owner rule is a deferred constraint trigger',
+  (SELECT tgconstraint <> 0 AND tgdeferrable AND tginitdeferred
+   FROM pg_trigger WHERE tgname = 'trg_bm_last_owner'));
+SELECT t_check('T37b trigger fires on UPDATE and DELETE only',
+  (SELECT (tgtype & 4) = 0 AND (tgtype & 8) > 0 AND (tgtype & 16) > 0
+   FROM pg_trigger WHERE tgname = 'trg_bm_last_owner'));
+SELECT t_check('T37c fn_assert_last_owner stays internal',
+  NOT has_function_privilege('authenticated', 'fn_assert_last_owner()', 'EXECUTE'));
+
+-- TLC has exactly one owner (u1) at this point; so does tenant B (u5).
+SELECT t_check('T37d TLC starts with exactly one active owner',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz') AND role = 'owner' AND is_active) = 1);
+
+-- ---------------- the invariant holds for an RLS-bypassing writer (postgres) ----------------
+SELECT t_err_deferred('T37e postgres cannot demote the only owner',
+  $q$ UPDATE business_members SET role = 'sales_staff' WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_err_deferred('T37f postgres cannot deactivate the only owner',
+  $q$ UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_err_deferred('T37g postgres cannot delete the only owner membership',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_err_deferred('T37h the rule applies to tenant B as well',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('bizB') AND user_id = t_get('u5') $q$, 'LAST_OWNER');
+
+-- ---------------- and for the owner acting through RLS ----------------
+SELECT t_login('u1');
+SELECT t_err_deferred('T37i owner cannot demote themselves through RLS',
+  $q$ UPDATE business_members SET role = 'sales_staff' WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_err_deferred('T37j owner cannot deactivate themselves through RLS',
+  $q$ UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_logout();
+
+-- ---------------- with a second owner the first one is free to go ----------------
+SELECT t_ok_deferred('T37k a second owner can be promoted',
+  $q$ UPDATE business_members SET role = 'owner' WHERE business_id = t_get('biz') AND user_id = t_get('u2') $q$);
+SELECT t_ok_deferred('T37l with two owners the first can be demoted',
+  $q$ UPDATE business_members SET role = 'sales_staff' WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$);
+SELECT t_check('T37m TLC still has one active owner after the demotion',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz') AND role = 'owner' AND is_active) = 1);
+
+-- restore u1=owner, u2=manager (deferred, so the intermediate zero-owner state is fine)
+UPDATE business_members SET role = 'owner'   WHERE business_id = t_get('biz') AND user_id = t_get('u1');
+UPDATE business_members SET role = 'manager' WHERE business_id = t_get('biz') AND user_id = t_get('u2');
+
+-- ---------------- the point of DEFERRED: demote first, promote second ----------------
+DO $$
+BEGIN
+  BEGIN
+    -- after this statement the business has zero active owners; an IMMEDIATE trigger
+    -- would already have rejected it
+    UPDATE business_members SET role = 'sales_staff' WHERE business_id = t_get('biz') AND user_id = t_get('u1');
+    UPDATE business_members SET role = 'owner'       WHERE business_id = t_get('biz') AND user_id = t_get('u2');
+    SET CONSTRAINTS ALL IMMEDIATE;
+    PERFORM t_res('T37n demote-then-promote ownership transfer allowed in one transaction', true);
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM t_res('T37n demote-then-promote ownership transfer allowed in one transaction', false, SQLSTATE || ' ' || SQLERRM);
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+END $$;
+
+-- restore again
+UPDATE business_members SET role = 'owner'   WHERE business_id = t_get('biz') AND user_id = t_get('u1');
+UPDATE business_members SET role = 'manager' WHERE business_id = t_get('biz') AND user_id = t_get('u2');
+
+-- ---------------- an inactive owner does not count as an owner ----------------
+SELECT t_err_deferred('T37o an inactive owner does not satisfy the invariant',
+  $q$ UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+
+-- ---------------- a tenant that has no owner YET must stay editable ----------------
+-- This is the onboarding shape (the pilot seed creates the business and no members) and
+-- also the shape the concurrency fixture builds. The rule guards the transition that
+-- removes the last owner, not the mere absence of one.
+SELECT t_set('bizC', 'b0000000-0000-4000-8000-0000000000c3');
+INSERT INTO businesses (id, name, code, settings) VALUES (t_get('bizC'), 'Onboarding Boutique', 'ONB', '{}'::jsonb);
+SELECT t_set('u9', 'aaaaaaaa-0000-4000-8000-000000000009');
+INSERT INTO auth.users (id, instance_id, aud, role, email)
+VALUES (t_get('u9'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'onboarding@tlc.test')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO profiles (id) VALUES (t_get('u9')) ON CONFLICT DO NOTHING;
+INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('bizC'), t_get('u9'), 'sales_staff');
+SELECT t_check('T37q the new business has no active owner',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('bizC') AND role = 'owner' AND is_active) = 0);
+SELECT t_ok_deferred('T37r a member of an ownerless business can still be edited',
+  $q$ UPDATE business_members SET role = 'stock_staff' WHERE business_id = t_get('bizC') AND user_id = t_get('u9') $q$);
+SELECT t_ok_deferred('T37s a member of an ownerless business can still be removed',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('bizC') AND user_id = t_get('u9') $q$);
+INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('bizC'), t_get('u9'), 'owner');
+SELECT t_err_deferred('T37t once the business has an owner the rule engages',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('bizC') AND user_id = t_get('u9') $q$, 'LAST_OWNER');
+SELECT t_ok_deferred('T37u a non-owner row in a business WITH an owner is unaffected',
+  $q$ UPDATE business_members SET max_discount_pct = 5 WHERE business_id = t_get('biz') AND user_id = t_get('u3') $q$);
+
+SELECT t_check('T37p fixture restored: u1 owner, u2 manager, both active',
+  (SELECT count(*) FROM business_members
+    WHERE business_id = t_get('biz')
+      AND ((user_id = t_get('u1') AND role = 'owner'   AND is_active)
+        OR (user_id = t_get('u2') AND role = 'manager' AND is_active))) = 2);
+
+-- ============================================================
+-- T38  business_members read minimisation  (Phase 3.5C)
+-- ============================================================
+-- give the sales_staff row a discount ceiling so "can a colleague read it" is a real question
+UPDATE business_members SET max_discount_pct = 15 WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+UPDATE business_members SET max_discount_pct = 40 WHERE business_id = t_get('biz') AND user_id = t_get('u2');
+
+SELECT t_check('T38a TLC has four members in total',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz')) = 4);
+
+-- ---------------- sales_staff ----------------
+SELECT t_login('u3');
+SELECT t_check('T38b sales_staff sees exactly one membership row',
+  t_count($q$ SELECT count(*) FROM business_members $q$) = 1);
+SELECT t_check('T38c the row sales_staff sees is their own',
+  t_count($q$ SELECT count(*) FROM business_members WHERE user_id = t_get('u3') $q$) = 1);
+SELECT t_check('T38d sales_staff cannot read a colleague''s role',
+  t_count($q$ SELECT count(*) FROM business_members WHERE user_id = t_get('u2') $q$) = 0);
+SELECT t_check('T38e sales_staff cannot read anyone else''s discount ceiling',
+  t_count($q$ SELECT count(*) FROM business_members WHERE max_discount_pct = 40 $q$) = 0);
+SELECT t_check('T38f sales_staff still reads their own discount ceiling',
+  t_num($q$ SELECT max_discount_pct FROM business_members WHERE user_id = t_get('u3') $q$) = 15);
+-- authorisation must not depend on what the client can SELECT
+SELECT t_check('T38g fn_is_member still true for sales_staff', (SELECT fn_is_member(t_get('biz'))));
+SELECT t_check('T38h fn_my_role still resolves for sales_staff', (SELECT fn_my_role(t_get('biz'))) = 'sales_staff');
+SELECT t_check('T38i fn_is_manager_plus still false for sales_staff', NOT (SELECT fn_is_manager_plus(t_get('biz'))));
+SELECT t_check('T38j fn_my_business_ids still returns the tenant', t_get('biz') = ANY(SELECT unnest(fn_my_business_ids())));
+-- the tenant-resolution query the application actually runs
+SELECT t_check('T38k tenant resolution query still returns the membership',
+  t_count($q$ SELECT count(*) FROM business_members WHERE user_id = t_get('u3') AND is_active $q$) = 1);
+-- reads that were already allowed stay allowed
+SELECT t_check('T38l sales_staff still reads products', t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_logout();
+
+-- ---------------- stock_staff ----------------
+SELECT t_login('u4');
+SELECT t_check('T38m stock_staff sees exactly one membership row',
+  t_count($q$ SELECT count(*) FROM business_members $q$) = 1);
+SELECT t_check('T38n stock_staff still passes the procurement helper', (SELECT fn_is_procurement(t_get('biz'))));
+SELECT t_logout();
+
+-- ---------------- manager / owner keep team visibility ----------------
+SELECT t_login('u2');
+SELECT t_check('T38o manager sees all four members',
+  t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$) = 4);
+SELECT t_check('T38p manager reads a subordinate discount ceiling',
+  t_num($q$ SELECT max_discount_pct FROM business_members WHERE user_id = t_get('u3') $q$) = 15);
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_check('T38q owner sees all four members',
+  t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$) = 4);
+SELECT t_logout();
+
+-- ---------------- cross-tenant is unchanged ----------------
+SELECT t_login('u5');
+SELECT t_check('T38r tenant B owner sees no TLC membership row',
+  t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_check('T38s tenant B owner still sees their own membership',
+  t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('bizB') $q$) = 1);
+SELECT t_logout();
+
+-- ---------------- an RPC that reads business_members internally still works ----------------
+SELECT t_login('u4');
+SELECT t_ok('T38t procurement RPC still resolves the caller''s membership',
+  $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1')) $q$);
+SELECT t_logout();
+
+-- ============================================================
+-- T39  manager subordinate role management  (Phase 3.5D)
+-- ============================================================
+-- extra identities to be managed (u2 = manager with a 40% ceiling from T38)
+SELECT t_set('u6', 'aaaaaaaa-0000-4000-8000-000000000006');
+SELECT t_set('u7', 'aaaaaaaa-0000-4000-8000-000000000007');
+INSERT INTO auth.users (id, instance_id, aud, role, email) VALUES
+  (t_get('u6'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'new.sales@tlc.test'),
+  (t_get('u7'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'new.stock@tlc.test')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO profiles (id) SELECT t_get(k) FROM unnest(ARRAY['u6','u7']) k ON CONFLICT DO NOTHING;
+
+SELECT t_check('T39a fn_my_max_discount callable by authenticated (policy needs it)',
+  has_function_privilege('authenticated', 'fn_my_max_discount(uuid)', 'EXECUTE'));
+
+SELECT t_login('u2');
+SELECT t_check('T39b manager ceiling is the one the owner configured',
+  (SELECT fn_my_max_discount(t_get('biz'))) = 40);
+
+-- ---------------- what a manager MAY do ----------------
+SELECT t_ok('T39c manager creates a sales_staff member',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u6'), 'sales_staff') $q$);
+SELECT t_ok('T39d manager creates a stock_staff member',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u7'), 'stock_staff') $q$);
+SELECT t_ok('T39e manager grants a ceiling at their own limit',
+  $q$ UPDATE business_members SET max_discount_pct = 40 WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$);
+SELECT t_ok('T39f manager grants a ceiling below their own limit',
+  $q$ UPDATE business_members SET max_discount_pct = 10 WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$);
+SELECT t_ok('T39g manager moves a subordinate between the two junior roles',
+  $q$ UPDATE business_members SET role = 'stock_staff' WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$);
+SELECT t_ok('T39h manager deactivates a subordinate',
+  $q$ UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u7') $q$);
+SELECT t_ok('T39i manager removes a subordinate membership',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u7') $q$);
+
+-- ---------------- escalation attempts ----------------
+SELECT t_err('T39j manager cannot create an owner',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u7'), 'owner') $q$, '42501');
+SELECT t_err('T39k manager cannot create another manager',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u7'), 'manager') $q$, '42501');
+SELECT t_err('T39l manager cannot promote a subordinate to manager',
+  $q$ UPDATE business_members SET role = 'manager' WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$, '42501');
+SELECT t_err('T39m manager cannot promote a subordinate to owner',
+  $q$ UPDATE business_members SET role = 'owner' WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$, '42501');
+SELECT t_check('T39n manager cannot edit the owner row (filtered to 0 rows)',
+  t_count($q$ WITH u AS (UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u1') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_check('T39o manager cannot delete the owner row (filtered to 0 rows)',
+  t_count($q$ WITH u AS (DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u1') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_check('T39p manager cannot change their own row (filtered to 0 rows)',
+  t_count($q$ WITH u AS (UPDATE business_members SET max_discount_pct = 100 WHERE business_id = t_get('biz') AND user_id = t_get('u2') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_check('T39q manager cannot delete their own row (filtered to 0 rows)',
+  t_count($q$ WITH u AS (DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u2') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_err('T39r manager cannot grant a ceiling above their own',
+  $q$ UPDATE business_members SET max_discount_pct = 41 WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$, '42501');
+SELECT t_err('T39s manager cannot create a subordinate with a ceiling above their own',
+  $q$ INSERT INTO business_members (business_id, user_id, role, max_discount_pct) VALUES (t_get('biz'), t_get('u7'), 'sales_staff', 90) $q$, '42501');
+SELECT t_err('T39t manager cannot add a member to another tenant',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('bizB'), t_get('u7'), 'sales_staff') $q$, '42501');
+SELECT t_check('T39u the manager row still says manager with an unchanged ceiling',
+  (SELECT role = 'manager' AND max_discount_pct = 40 FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u2')));
+SELECT t_logout();
+
+-- ---------------- sales_staff gets nothing ----------------
+SELECT t_login('u3');
+SELECT t_err('T39v sales_staff still cannot create a member',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u7'), 'sales_staff') $q$, '42501');
+SELECT t_check('T39w sales_staff cannot edit their own ceiling (filtered to 0 rows)',
+  t_count($q$ WITH u AS (UPDATE business_members SET max_discount_pct = 99 WHERE user_id = t_get('u3') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+
+-- ---------------- the owner keeps full authority ----------------
+SELECT t_login('u1');
+SELECT t_ok('T39x owner creates a manager',
+  $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('u7'), 'manager') $q$);
+SELECT t_ok('T39y owner sets any ceiling',
+  $q$ UPDATE business_members SET max_discount_pct = 100 WHERE business_id = t_get('biz') AND user_id = t_get('u6') $q$);
+SELECT t_ok('T39z owner removes the manager again',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u7') $q$);
+SELECT t_logout();
+
+-- ---------------- 3.5B still binds the owner ----------------
+SELECT t_err_deferred('T39aa last-owner rule still applies after 3.5D',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+
+-- clean up the extra identity so later blocks see the original four members
+DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u6');
+SELECT t_check('T39ab TLC is back to its four original members',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz')) = 4);
+
+-- ============================================================
+-- T40  sales visibility hardening  (Phase 3.5E)
+-- ============================================================
+-- Fixture recap: sale1/sale2/sale4/sale5/sale6 were sold by u3 (sales_staff),
+-- sale3 by u2 (manager). sess1 was opened by u3. u4 (stock_staff) sold nothing.
+
+-- ---------------- settings ----------------
+SELECT t_check('T40a TLC carries an explicit sales_visibility_scope',
+  (SELECT settings ->> 'sales_visibility_scope' FROM businesses WHERE id = t_get('biz')) = 'own');
+SELECT t_check('T40b TLC carries the landed-cost allocation policy',
+  (SELECT settings ->> 'default_charge_allocation_method' FROM businesses WHERE id = t_get('biz')) = 'invoice_value_proportional');
+SELECT t_check('T40c the merge did not overwrite existing policy keys',
+  (SELECT settings ->> 'money_refund_allowed' = 'false'
+      AND settings ->> 'exchange_window_days' = '3'
+      AND jsonb_array_length(settings -> 'accepted_currencies') = 4
+   FROM businesses WHERE id = t_get('biz')));
+-- tenant B is created by these fixtures, i.e. AFTER the 3.5E merge ran, so it has no
+-- explicit key. That is the shape every business created from now on will have until
+-- onboarding writes one, and it must still resolve to the tightest scope.
+SELECT t_check('T40d a business created after the merge carries no explicit scope',
+  (SELECT settings ? 'sales_visibility_scope' FROM businesses WHERE id = t_get('bizB')) = false);
+SELECT t_check('T40d2 and still resolves fail-closed to own',
+  (SELECT fn_sales_visibility_scope(t_get('bizB'))) = 'own');
+SELECT t_check('T40e scope helper resolves the configured value',
+  (SELECT fn_sales_visibility_scope(t_get('biz'))) = 'own');
+SELECT t_check('T40f scope helper stays internal',
+  NOT has_function_privilege('authenticated', 'fn_sales_visibility_scope(uuid)', 'EXECUTE'));
+SELECT t_check('T40g fn_my_branch stays internal',
+  NOT has_function_privilege('authenticated', 'fn_my_branch(uuid)', 'EXECUTE'));
+SELECT t_check('T40h the sale predicate is callable by authenticated (policies need it)',
+  has_function_privilege('authenticated', 'fn_can_see_sale(uuid,uuid,uuid)', 'EXECUTE'));
+
+-- ---------------- scope = own ----------------
+SELECT t_login('u2');
+SELECT t_check('T40i manager sees every sale in the business',
+  t_count($q$ SELECT count(*) FROM sales WHERE business_id = t_get('biz') $q$) >= 6);
+SELECT t_logout();
+
+SELECT t_login('u3');
+SELECT t_check('T40j sales_staff sees their own sales',
+  t_count($q$ SELECT count(*) FROM sales WHERE id = t_get('sale1') $q$) = 1);
+SELECT t_check('T40k sales_staff does NOT see the manager''s sale',
+  t_count($q$ SELECT count(*) FROM sales WHERE id = t_get('sale3') $q$) = 0);
+SELECT t_check('T40l every sale sales_staff can see was sold by them',
+  t_count($q$ SELECT count(*) FROM sales WHERE sold_by <> t_get('u3') $q$) = 0);
+-- side doors
+SELECT t_check('T40m sale_items of an invisible sale are hidden',
+  t_count($q$ SELECT count(*) FROM sale_items WHERE sale_id = t_get('sale3') $q$) = 0);
+SELECT t_check('T40n sale_items of their own sale stay visible',
+  t_count($q$ SELECT count(*) FROM sale_items WHERE sale_id = t_get('sale1') $q$) >= 1);
+SELECT t_check('T40o sale_payments of an invisible sale are hidden',
+  t_count($q$ SELECT count(*) FROM sale_payments WHERE sale_id = t_get('sale3') $q$) = 0);
+SELECT t_check('T40p sale_payments of their own sale stay visible',
+  t_count($q$ SELECT count(*) FROM sale_payments WHERE sale_id = t_get('sale1') $q$) >= 1);
+SELECT t_check('T40q no sale_item row leaks from a sale they cannot see',
+  t_count($q$ SELECT count(*) FROM sale_items si WHERE NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = si.sale_id) $q$) = 0);
+SELECT t_check('T40r every visible return is theirs or belongs to a visible sale',
+  t_count($q$ SELECT count(*) FROM returns r
+             WHERE r.processed_by <> t_get('u3')
+               AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = r.original_sale_id) $q$) = 0);
+SELECT t_check('T40s no return_item leaks from an invisible return',
+  t_count($q$ SELECT count(*) FROM return_items ri WHERE NOT EXISTS (SELECT 1 FROM returns r WHERE r.id = ri.return_id) $q$) = 0);
+-- cost protection is unchanged
+SELECT t_check('T40t sale_item_costs still invisible to sales_staff', t_count($q$ SELECT count(*) FROM sale_item_costs $q$) = 0);
+SELECT t_check('T40u sale_costs still invisible to sales_staff', t_count($q$ SELECT count(*) FROM sale_costs $q$) = 0);
+SELECT t_check('T40v variant_cost_pools still invisible to sales_staff', t_count($q$ SELECT count(*) FROM variant_cost_pools $q$) = 0);
+-- own register session and its cash stay readable (reconciliation)
+SELECT t_check('T40w cashier sees the session they opened',
+  t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess1') $q$) = 1);
+SELECT t_check('T40x cashier sees the cash movements of their own session',
+  t_count($q$ SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess1') $q$) > 0);
+SELECT t_logout();
+
+-- a member who sold nothing sees nothing
+SELECT t_login('u4');
+SELECT t_check('T40y stock_staff sees no sales at all', t_count($q$ SELECT count(*) FROM sales $q$) = 0);
+SELECT t_check('T40z stock_staff sees no sale_items', t_count($q$ SELECT count(*) FROM sale_items $q$) = 0);
+SELECT t_check('T40aa stock_staff sees no cash movements', t_count($q$ SELECT count(*) FROM cash_movements $q$) = 0);
+SELECT t_check('T40ab stock_staff sees no register session they did not open',
+  t_count($q$ SELECT count(*) FROM register_sessions $q$) = 0);
+SELECT t_check('T40ac stock_staff still reads stock (unchanged)',
+  t_count($q$ SELECT count(*) FROM inventory_movements $q$) > 0);
+SELECT t_logout();
+
+-- ---------------- scope = business ----------------
+UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope', 'business') WHERE id = t_get('biz');
+SELECT t_login('u4');
+SELECT t_check('T40ad scope=business lets any member see every sale',
+  t_count($q$ SELECT count(*) FROM sales WHERE business_id = t_get('biz') $q$) >= 6);
+SELECT t_check('T40ae scope=business does NOT open the cost tables',
+  t_count($q$ SELECT count(*) FROM sale_item_costs $q$) = 0);
+SELECT t_logout();
+
+-- ---------------- scope = branch ----------------
+UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope', 'branch') WHERE id = t_get('biz');
+SELECT t_login('u4');
+SELECT t_check('T40af scope=branch with no pinned branch falls back to own (0 sales)',
+  t_count($q$ SELECT count(*) FROM sales $q$) = 0);
+SELECT t_logout();
+UPDATE business_members SET branch_id = t_get('br1') WHERE business_id = t_get('biz') AND user_id = t_get('u4');
+SELECT t_login('u4');
+SELECT t_check('T40ag scope=branch with a pinned branch shows that branch''s sales',
+  t_count($q$ SELECT count(*) FROM sales WHERE branch_id = t_get('br1') $q$) >= 6);
+SELECT t_logout();
+UPDATE business_members SET branch_id = t_get('br2') WHERE business_id = t_get('biz') AND user_id = t_get('u4');
+SELECT t_login('u4');
+SELECT t_check('T40ah scope=branch hides another branch''s sales',
+  t_count($q$ SELECT count(*) FROM sales $q$) = 0);
+SELECT t_logout();
+
+-- ---------------- unknown value must not open anything ----------------
+UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope', 'everything') WHERE id = t_get('biz');
+SELECT t_check('T40ai an unrecognised scope resolves to own',
+  (SELECT fn_sales_visibility_scope(t_get('biz'))) = 'own');
+SELECT t_login('u4');
+SELECT t_check('T40aj an unrecognised scope shows no foreign sales', t_count($q$ SELECT count(*) FROM sales $q$) = 0);
+SELECT t_logout();
+UPDATE businesses SET settings = settings - 'sales_visibility_scope' WHERE id = t_get('biz');
+SELECT t_check('T40ak a missing scope key resolves to own',
+  (SELECT fn_sales_visibility_scope(t_get('biz'))) = 'own');
+
+-- restore the pilot configuration
+UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope', 'own') WHERE id = t_get('biz');
+UPDATE business_members SET branch_id = NULL WHERE business_id = t_get('biz') AND user_id = t_get('u4');
+SELECT t_check('T40al pilot configuration restored to own',
+  (SELECT settings ->> 'sales_visibility_scope' FROM businesses WHERE id = t_get('biz')) = 'own');
+
+-- ---------------- cross-tenant is still absolute ----------------
+SELECT t_login('u5');
+SELECT t_check('T40am tenant B sees no TLC sale', t_count($q$ SELECT count(*) FROM sales WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_check('T40an tenant B sees no TLC sale_item', t_count($q$ SELECT count(*) FROM sale_items $q$) = 0);
+SELECT t_check('T40ao tenant B sees no TLC cash movement', t_count($q$ SELECT count(*) FROM cash_movements $q$) = 0);
+SELECT t_logout();
+
+-- ---------------- owner keeps everything ----------------
+SELECT t_login('u1');
+SELECT t_check('T40ap owner sees every sale', t_count($q$ SELECT count(*) FROM sales WHERE business_id = t_get('biz') $q$) >= 6);
+SELECT t_check('T40aq owner sees the cost tables', t_count($q$ SELECT count(*) FROM sale_costs $q$) > 0);
+SELECT t_logout();
+
+-- ============================================================
+-- T41  platform admin foundation  (Phase 3.5F)
+-- ============================================================
+SELECT t_check('T41a super_admin was NOT added to the tenant role enum',
+  (SELECT count(*) FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+    WHERE t.typname = 'user_role' AND e.enumlabel = 'super_admin') = 0);
+SELECT t_check('T41b user_role still has exactly the four tenant roles',
+  (SELECT count(*) FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'user_role') = 4);
+SELECT t_check('T41c platform tables have RLS enabled',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('platform_admins','platform_audit_log') AND relrowsecurity) = 2);
+SELECT t_check('T41d platform tables have zero policies',
+  (SELECT count(*) FROM pg_policies WHERE tablename IN ('platform_admins','platform_audit_log')) = 0);
+SELECT t_check('T41e platform tables are not granted to authenticated',
+  NOT has_table_privilege('authenticated', 'platform_admins', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'platform_audit_log', 'SELECT'));
+-- fn_is_platform_admin became callable by authenticated in 3.5G: the status guard runs
+-- SECURITY INVOKER and has to ask the question from the caller's side. It answers only
+-- about the current user; the table behind it stays unreadable (T41e, T41q).
+SELECT t_check('T41f the raising platform helper stays internal',
+  NOT has_function_privilege('authenticated', 'fn_require_platform_admin()', 'EXECUTE'));
+SELECT t_check('T41f2 fn_is_platform_admin is callable but tells a tenant only about itself',
+  has_function_privilege('authenticated', 'fn_is_platform_admin()', 'EXECUTE'));
+SELECT t_check('T41g the platform RPC is reachable by authenticated (it guards itself)',
+  has_function_privilege('authenticated', 'rpc_platform_set_business_status(uuid,text,text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_platform_set_business_status(uuid,text,text)', 'EXECUTE'));
+-- the design rule: platform authority must not be an OR-branch in tenant RLS
+SELECT t_check('T41h no tenant policy grants access via fn_is_platform_admin',
+  (SELECT count(*) FROM pg_policies
+    WHERE schemaname = 'public'
+      AND COALESCE(qual,'') || COALESCE(with_check,'') LIKE '%platform_admin%') = 0);
+
+-- ---------------- a tenant owner is not a platform admin ----------------
+SELECT t_login('u1');
+SELECT t_err('T41i owner cannot select platform_admins at all',
+  $q$ SELECT count(*) FROM platform_admins $q$, '42501');
+SELECT t_err('T41j owner cannot select platform_audit_log at all',
+  $q$ SELECT count(*) FROM platform_audit_log $q$, '42501');
+SELECT t_err('T41k owner cannot make themselves a platform admin',
+  $q$ INSERT INTO platform_admins (user_id) VALUES (t_get('u1')) $q$, '42501');
+SELECT t_err('T41l owner cannot call the platform RPC',
+  $q$ SELECT rpc_platform_set_business_status(t_get('biz'), 'suspended') $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- ---------------- an appointed platform admin, who belongs to no tenant ----------------
+SELECT t_set('u8', 'aaaaaaaa-0000-4000-8000-000000000008');
+INSERT INTO auth.users (id, instance_id, aud, role, email)
+VALUES (t_get('u8'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'platform@boutiqueos.test')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO profiles (id) VALUES (t_get('u8')) ON CONFLICT DO NOTHING;
+INSERT INTO platform_admins (user_id, note) VALUES (t_get('u8'), 'phase 3.5F test');
+
+SELECT t_login('u8');
+SELECT t_check('T41m the platform admin is a member of no business',
+  t_count($q$ SELECT count(*) FROM business_members $q$) = 0);
+SELECT t_check('T41n the platform admin gets no blanket read on tenant products',
+  t_count($q$ SELECT count(*) FROM products $q$) = 0);
+SELECT t_check('T41o the platform admin gets no blanket read on tenant sales',
+  t_count($q$ SELECT count(*) FROM sales $q$) = 0);
+SELECT t_check('T41p the platform admin cannot even read the businesses table directly',
+  t_count($q$ SELECT count(*) FROM businesses $q$) = 0);
+SELECT t_err('T41q the platform admin cannot read the audit log directly either',
+  $q$ SELECT count(*) FROM platform_audit_log $q$, '42501');
+SELECT t_err('T41r invalid status rejected',
+  $q$ SELECT rpc_platform_set_business_status(t_get('bizB'), 'deleted') $q$, 'INVALID_STATUS');
+SELECT t_err('T41s unknown business rejected',
+  $q$ SELECT rpc_platform_set_business_status(gen_random_uuid(), 'suspended') $q$, 'NOT_FOUND');
+SELECT t_ok('T41t the platform admin can suspend a tenant through the RPC',
+  $q$ SELECT rpc_platform_set_business_status(t_get('bizB'), 'suspended', 'unpaid subscription') $q$);
+SELECT t_logout();
+
+SELECT t_check('T41u the tenant is now suspended',
+  (SELECT status FROM businesses WHERE id = t_get('bizB')) = 'suspended');
+SELECT t_check('T41v the operation was written to the audit log',
+  (SELECT count(*) FROM platform_audit_log
+    WHERE admin_user_id = t_get('u8') AND action = 'set_business_status'
+      AND target_business_id = t_get('bizB')
+      AND payload ->> 'from' = 'active' AND payload ->> 'to' = 'suspended'
+      AND payload ->> 'reason' = 'unpaid subscription') = 1);
+
+-- 3.5A and 3.5F meet here: a platform suspension really stops tenant writes
+SELECT t_login('u5');
+SELECT t_err('T41w platform-suspended tenant cannot write',
+  $q$ INSERT INTO products (business_id, name, sku_prefix, default_sale_price) VALUES (t_get('bizB'), 'blocked', 'BLK-9', 1) $q$, '42501');
+SELECT t_check('T41x platform-suspended tenant still reads its history',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('bizB') $q$) > 0);
+SELECT t_logout();
+
+SELECT t_login('u8');
+SELECT t_ok('T41y the platform admin can reactivate the tenant',
+  $q$ SELECT rpc_platform_set_business_status(t_get('bizB'), 'active', 'payment received') $q$);
+SELECT t_logout();
+SELECT t_check('T41z the tenant is active again',
+  (SELECT status FROM businesses WHERE id = t_get('bizB')) = 'active');
+SELECT t_check('T41aa both operations are in the audit log',
+  (SELECT count(*) FROM platform_audit_log WHERE admin_user_id = t_get('u8')) = 2);
+
+-- a deactivated platform admin loses the authority
+UPDATE platform_admins SET is_active = false WHERE user_id = t_get('u8');
+SELECT t_login('u8');
+SELECT t_err('T41ab a deactivated platform admin is rejected',
+  $q$ SELECT rpc_platform_set_business_status(t_get('bizB'), 'suspended') $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- ============================================================
+-- T42  owner regression  (Phase 3.5, all sub-steps together)
+-- ============================================================
+-- Mirrors the reads the shipped application actually performs, table for table, so a
+-- policy narrowed in 3.5A-F cannot break the pilot without failing here first.
+-- lib/tenant.ts, lib/catalog/queries.ts, lib/receiving/queries.ts, lib/stock/queries.ts.
+
+SELECT t_login('u1');
+
+-- lib/tenant.ts :: loadMemberships
+SELECT t_check('T42a tenant resolution: own membership row',
+  t_count($q$ SELECT count(*) FROM business_members WHERE user_id = t_get('u1') AND is_active $q$) = 1);
+SELECT t_check('T42b tenant resolution: active business row',
+  t_count($q$ SELECT count(*) FROM businesses WHERE id = t_get('biz') AND status = 'active' $q$) = 1);
+SELECT t_check('T42c tenant resolution: active branches',
+  t_count($q$ SELECT count(*) FROM branches WHERE business_id = t_get('biz') AND status = 'active' $q$) >= 1);
+SELECT t_check('T42d tenant resolution: own profile row',
+  t_count($q$ SELECT count(*) FROM profiles WHERE id = t_get('u1') $q$) = 1);
+SELECT t_check('T42e tenant resolution: business settings readable by the owner',
+  t_count($q$ SELECT count(*) FROM businesses WHERE id = t_get('biz') AND settings ? 'sales_visibility_scope' $q$) = 1);
+
+-- /app/urunler
+SELECT t_check('T42f catalog: products', t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) >= 2);
+SELECT t_check('T42g catalog: variants', t_count($q$ SELECT count(*) FROM product_variants WHERE business_id = t_get('biz') $q$) >= 3);
+SELECT t_check('T42h catalog: barcodes', t_count($q$ SELECT count(*) FROM barcodes WHERE business_id = t_get('biz') $q$) >= 0);
+SELECT t_check('T42i catalog: brands', t_count($q$ SELECT count(*) FROM brands WHERE business_id = t_get('biz') $q$) >= 0);
+SELECT t_check('T42j catalog: categories', t_count($q$ SELECT count(*) FROM categories WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42k catalog: options and values',
+  t_count($q$ SELECT count(*) FROM product_options WHERE business_id = t_get('biz') $q$) > 0
+  AND t_count($q$ SELECT count(*) FROM option_values WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42l catalog: variant option values',
+  t_count($q$ SELECT count(*) FROM variant_option_values WHERE business_id = t_get('biz') $q$) > 0);
+
+-- /app/tedarikciler
+SELECT t_check('T42m suppliers list', t_count($q$ SELECT count(*) FROM suppliers WHERE business_id = t_get('biz') $q$) >= 2);
+
+-- /app/mal-kabul
+SELECT t_check('T42n goods receipts list', t_count($q$ SELECT count(*) FROM goods_receipts WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42o goods receipt lines', t_count($q$ SELECT count(*) FROM goods_receipt_items WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42p branches picker', t_count($q$ SELECT count(*) FROM branches WHERE business_id = t_get('biz') $q$) >= 1);
+
+-- /app/stok
+SELECT t_check('T42q stock by bucket view', t_count($q$ SELECT count(*) FROM v_stock_by_bucket WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42r stock available view', t_count($q$ SELECT count(*) FROM v_stock_available WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42s inventory movements', t_count($q$ SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz') $q$) > 0);
+
+-- owner-only surfaces still open to the owner
+SELECT t_check('T42t owner still reads cost pools', t_count($q$ SELECT count(*) FROM variant_cost_pools $q$) > 0);
+SELECT t_check('T42u owner still reads the supplier ledger', t_count($q$ SELECT count(*) FROM supplier_account_entries $q$) > 0);
+SELECT t_check('T42v owner still reads the team', t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$) = 4);
+
+-- the owner can still write through the paths the app uses
+SELECT t_ok('T42w owner creates a supplier',
+  $q$ INSERT INTO suppliers (business_id, name) VALUES (t_get('biz'), 'Regression Supplier') $q$);
+SELECT t_ok('T42x owner creates a draft goods receipt through the RPC',
+  $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'REG-1', 'regression') $q$);
+SELECT t_ok('T42y owner updates business settings',
+  $q$ UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope','own') WHERE id = t_get('biz') $q$);
+SELECT t_logout();
+
+-- the two staff roles the pilot will actually use
+SELECT t_login('u4');
+SELECT t_check('T42z stock_staff still reads the stock screen',
+  t_count($q$ SELECT count(*) FROM v_stock_available WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42aa stock_staff still reads goods receipts',
+  t_count($q$ SELECT count(*) FROM goods_receipts WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42ab stock_staff still reads suppliers',
+  t_count($q$ SELECT count(*) FROM suppliers WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T42ac sales_staff still reads the catalog',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42ad sales_staff still reads stock quantities',
+  t_count($q$ SELECT count(*) FROM v_stock_available WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_check('T42ae sales_staff still sees no supplier and no cost',
+  t_count($q$ SELECT count(*) FROM suppliers $q$) = 0 AND t_count($q$ SELECT count(*) FROM variant_cost_pools $q$) = 0);
+SELECT t_logout();
+
+-- ============================================================
+-- T43  businesses.status is platform controlled  (Phase 3.5G)
+-- ============================================================
+-- T41 left u8 deactivated; bring the platform admin back for these tests.
+UPDATE platform_admins SET is_active = true WHERE user_id = t_get('u8');
+
+SELECT t_check('T43a the guard is a BEFORE UPDATE row trigger on businesses',
+  (SELECT pg_get_triggerdef(oid) LIKE '%BEFORE UPDATE OF status ON public.businesses%'
+      AND pg_get_triggerdef(oid) LIKE '%FOR EACH ROW%'
+   FROM pg_trigger WHERE tgname = 'trg_businesses_status_guard'),
+  (SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'trg_businesses_status_guard'));
+SELECT t_check('T43b exactly one status guard trigger exists',
+  (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_businesses_status_guard') = 1);
+SELECT t_check('T43c the guard function stays internal',
+  NOT has_function_privilege('authenticated', 'fn_guard_business_status()', 'EXECUTE'));
+
+-- ---------------- 1-3. the tenant owner cannot move status in any direction ----------------
+SELECT t_check('T43d TLC starts active', (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+SELECT t_login('u1');
+SELECT t_err('T43e owner cannot suspend their own business',
+  $q$ UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_err('T43f owner cannot cancel their own business',
+  $q$ UPDATE businesses SET status = 'cancelled' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_logout();
+SELECT t_check('T43g TLC is still active after the refused attempts',
+  (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+
+-- put TLC into each non-active state through the maintenance path and try to escape
+UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz');
+SELECT t_login('u1');
+SELECT t_err('T43h owner cannot lift a suspension',
+  $q$ UPDATE businesses SET status = 'active' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_logout();
+UPDATE businesses SET status = 'cancelled' WHERE id = t_get('biz');
+SELECT t_login('u1');
+SELECT t_err('T43i owner cannot reverse a cancellation',
+  $q$ UPDATE businesses SET status = 'active' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_logout();
+UPDATE businesses SET status = 'active' WHERE id = t_get('biz');
+
+-- ---------------- 4-5. tenant-owned fields stay editable ----------------
+SELECT t_login('u1');
+SELECT t_ok('T43j owner still edits business settings',
+  $q$ UPDATE businesses SET settings = settings || jsonb_build_object('sales_visibility_scope','own') WHERE id = t_get('biz') $q$);
+SELECT t_ok('T43k owner still edits business name and metadata',
+  $q$ UPDATE businesses SET name = 'Things Like Crop', address = 'Lefkoşa, KKTC', phone = '+90 533 000 00 00', email = 'info@tlc.test' WHERE id = t_get('biz') $q$);
+SELECT t_ok('T43l mentioning status without changing it is not a status change',
+  $q$ UPDATE businesses SET status = status, name = 'Things Like Crop' WHERE id = t_get('biz') $q$);
+SELECT t_check('T43m the metadata edit really landed',
+  (SELECT phone = '+90 533 000 00 00' AND email = 'info@tlc.test' FROM businesses WHERE id = t_get('biz')));
+SELECT t_logout();
+
+-- ---------------- 6-7. manager and sales_staff have no path at all ----------------
+SELECT t_login('u2');
+SELECT t_check('T43n manager UPDATE on businesses is filtered to 0 rows',
+  t_count($q$ WITH u AS (UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T43o sales_staff UPDATE on businesses is filtered to 0 rows',
+  t_count($q$ WITH u AS (UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+SELECT t_check('T43p TLC is still active after manager and sales_staff attempts',
+  (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+
+-- ---------------- 11. the marker alone is not authority ----------------
+SELECT t_login('u1');
+-- set_config is not a privileged operation, so the marker is forgeable by anyone. It is
+-- only ever half of the platform path: the other half is being a platform admin.
+SELECT set_config('boutiqueos.platform_status_change', t_get('biz')::text, false);
+SELECT t_err('T43q owner cannot forge the platform marker to bypass the guard',
+  $q$ UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT set_config('boutiqueos.platform_status_change', '', false);
+SELECT t_logout();
+SELECT t_check('T43r TLC survived the forged-marker attempt',
+  (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+
+-- ---------------- 8-10. the audited platform path ----------------
+SELECT t_check('T43s audit log baseline is two rows from T41',
+  (SELECT count(*) FROM platform_audit_log) = 2);
+SELECT t_login('u8');
+SELECT t_ok('T43t platform admin suspends a tenant through the RPC',
+  $q$ SELECT rpc_platform_set_business_status(t_get('biz'), 'suspended', 'subscription lapsed') $q$);
+SELECT t_logout();
+SELECT t_check('T43u the tenant is suspended', (SELECT status FROM businesses WHERE id = t_get('biz')) = 'suspended');
+SELECT t_check('T43v the suspension was audited',
+  (SELECT count(*) FROM platform_audit_log
+    WHERE target_business_id = t_get('biz') AND payload ->> 'from' = 'active'
+      AND payload ->> 'to' = 'suspended' AND payload ->> 'reason' = 'subscription lapsed') = 1);
+
+-- and the owner still cannot undo it
+SELECT t_login('u1');
+SELECT t_err('T43w the suspended owner still cannot reactivate',
+  $q$ UPDATE businesses SET status = 'active' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_logout();
+
+SELECT t_login('u8');
+SELECT t_ok('T43x platform admin reactivates the tenant through the RPC',
+  $q$ SELECT rpc_platform_set_business_status(t_get('biz'), 'active', 'payment cleared') $q$);
+SELECT t_logout();
+
+-- The sharpest case for "the audit row cannot be skipped": someone wearing BOTH hats, so
+-- RLS lets the UPDATE reach the row (they are the tenant owner) and the platform-admin
+-- half of the guard is satisfied too. Only the missing RPC marker refuses them.
+-- u8 alone could not prove this: not being a member of any business, RLS filters the row
+-- out and the direct UPDATE touches 0 rows instead of being rejected.
+INSERT INTO platform_admins (user_id, note) VALUES (t_get('u1'), 'dual-hat test')
+ON CONFLICT (user_id) DO UPDATE SET is_active = true;
+SELECT t_login('u1');
+SELECT t_check('T43y the dual-hat user really is both owner and platform admin',
+  (SELECT fn_is_platform_admin()) AND (SELECT fn_my_role(t_get('biz'))) = 'owner');
+SELECT t_err('T43y2 owner+platform-admin still cannot change status outside the audited RPC',
+  $q$ UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_ok('T43y3 the same person succeeds through the RPC',
+  $q$ SELECT rpc_platform_set_business_status(t_get('biz'), 'suspended', 'dual hat via rpc') $q$);
+SELECT t_ok('T43y4 and brings it back the same way',
+  $q$ SELECT rpc_platform_set_business_status(t_get('biz'), 'active', 'dual hat restore') $q$);
+SELECT t_logout();
+UPDATE platform_admins SET is_active = false WHERE user_id = t_get('u1');
+
+SELECT t_check('T43z the tenant is active again', (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+SELECT t_check('T43aa every RPC status change left an audit row (2 on tenant B in T41 + 4 on TLC here)',
+  (SELECT count(*) FROM platform_audit_log WHERE action = 'set_business_status') = 6);
+SELECT t_check('T43ab each RPC call on TLC produced exactly one audit row',
+  (SELECT count(*) FROM platform_audit_log WHERE target_business_id = t_get('biz')) = 4);
+SELECT t_check('T43ab2 the refused direct update wrote no audit row',
+  (SELECT count(*) FROM platform_audit_log
+    WHERE target_business_id = t_get('biz') AND payload ->> 'reason' IS NULL) = 0);
+
+-- ---------------- the break-glass path is database-level only ----------------
+SELECT set_config('boutiqueos.platform_status_change', '', false);
+SELECT t_check('T43ac maintenance path works for postgres (bootstrap / recovery)',
+  t_count($q$ WITH u AS (UPDATE businesses SET status = 'suspended' WHERE id = t_get('biz') RETURNING 1) SELECT count(*) FROM u $q$) = 1);
+UPDATE businesses SET status = 'active' WHERE id = t_get('biz');
+SELECT t_check('T43ad authenticated is neither superuser nor BYPASSRLS',
+  (SELECT NOT (rolsuper OR rolbypassrls) FROM pg_roles WHERE rolname = 'authenticated'));
+SELECT t_check('T43ae TLC left active for the remaining blocks',
+  (SELECT status FROM businesses WHERE id = t_get('biz')) = 'active');
+
+-- restore T41's fixture state
+UPDATE platform_admins SET is_active = false WHERE user_id = t_get('u8');
 
 -- ============================================================
 -- SUMMARY

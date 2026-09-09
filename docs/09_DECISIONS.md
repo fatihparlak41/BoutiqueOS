@@ -146,3 +146,58 @@ The `user_role` enum does not include an `accounting` role. This was removed fro
 5. `GRANT EXECUTE ... TO authenticated`
 
 This is a project-wide invariant. Any RPC that does not follow this pattern is a security bug.
+
+---
+
+## ADR-14 · businesses.status is Platform Controlled
+
+**Status:** DECIDED (Phase 3.5G)
+
+**Decision:** `businesses.status` is a platform field. A tenant owner may edit every other
+column of their own business row — name, address, phone, email, logo_url, settings — but
+may not move `status` in any direction.
+
+**Why:** the status column is what a subscription lapse, a payment failure or an abuse
+report will act on. If the tenant can set it back to `active`, the enforcement built in
+Phase 3.5A is decorative.
+
+**Mechanism:** RLS cannot compare OLD and NEW, so the rule is the trigger
+`trg_businesses_status_guard` (`BEFORE UPDATE OF status ON businesses`). It accepts a
+change on exactly two paths:
+
+1. **Audited platform path** — a transaction-local marker naming this business AND an
+   active `platform_admins` row for `auth.uid()`. Both halves are required. The marker
+   alone is forgeable (`set_config` is unprivileged) and being inside a SECURITY DEFINER
+   function proves nothing, since every RPC in this schema is owned by `postgres`; so the
+   guard re-derives the caller's identity itself. A platform admin who edits the table
+   directly has no marker and is refused, which is what makes the audit row unavoidable.
+2. **Break-glass maintenance** — `current_user` is a superuser or BYPASSRLS role
+   (`postgres`, `service_role`) and no marker is set. Bootstrap of the first platform
+   admin and disaster recovery need this. It is the only unaudited path and it requires
+   database credentials; a tenant session runs as `authenticated`, which is neither.
+
+Everything else raises `PLATFORM_MANAGED_FIELD` (SQLSTATE 42501).
+
+**Consequence:** `rpc_platform_set_business_status` is the only application-level way to
+change tenant status, and every such change is written to `platform_audit_log`.
+
+---
+
+## ADR-15 · Business Creation and First Owner Must Be Atomic
+
+**Status:** TODO (Phase 8)
+
+The last-owner invariant (Phase 3.5B, `trg_bm_last_owner`) guards a transition: *if* a
+business has an active owner, that owner cannot be removed. It deliberately does **not**
+require that a business always has one, because a business row can legitimately exist for
+a moment before its first membership is written — that is exactly what the pilot seed and
+the concurrency fixture do, and blocking it would deadlock onboarding on its first member.
+
+The gap this leaves is that a business can be created and then left ownerless. That is not
+a Phase 3.5 blocker (there is no self-service signup yet; businesses are created
+out-of-band), but it must be closed when public signup lands.
+
+**Required in Phase 8:** a single SECURITY DEFINER RPC that creates the business row and
+its first `owner` membership in one transaction, so no code path can produce an ownerless
+business. Once that RPC is the only way in, the invariant can be tightened from
+"the last owner cannot be lost" to "every business has an owner".
