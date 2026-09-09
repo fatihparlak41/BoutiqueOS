@@ -15,11 +15,11 @@
       "Bash(npm install:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
+      "Bash(supabase db push:*)",
       "Bash(scripts/db_fresh.ps1:*)",
       "Bash(psql:*)"
     ],
     "deny": [
-      "Bash(supabase db push:*)",
       "Bash(supabase db reset --linked:*)",
       "Bash(npm audit fix --force:*)",
       "Read(./.env)",
