@@ -327,7 +327,7 @@ Kullanılan DEV test verisi (silinmedi, olduğu gibi duruyor): `TEST TLC Studio`
 | T-2 | Ürün listesi toplamları uygulamada hesaplanıyor | Varyant sayısı ve fiyat aralığı bellekte; liste 200 ürünle sınırlı |
 | T-3 | `rpc_create_variant` `status` parametresi almıyor | Varyant her zaman `active` doğar |
 | T-4 | Varyant seçenek kombinasyonu düzenlenemiyor | Güvenli yol yok; arşivle + yeniden oluştur |
-| T-5 | `products` / `product_variants` üzerinde `updated_at` trigger'ı yok | Server action'lar alanı açıkça yazıyor |
+| T-5 | ~~`products` / `product_variants` `updated_at` trigger'ı yok~~ — **DÜZELTME (2026-09-09): bu kayıt yanlıştı** | `trg_updated_at`, `20260908000001_core_schema.sql` sonundaki dinamik `DO` bloğunda `EXECUTE format('CREATE TRIGGER trg_updated_at …')` ile kuruluyor ve `businesses`, `branches`, `profiles`, `suppliers`, `products`, `product_variants`, `goods_receipts` tablolarını kapsıyor. İlk denetimde `^CREATE TRIGGER` grep'i dinamik bloğu görmediği için eksik raporlandı. Faz 2 server action'larının `updated_at`'i açıkça yazması **zararsız ama gereksiz** (trigger zaten `now()` ile üzerine yazıyor); bu aşamada refactor edilmiyor |
 | T-6 | İstek başına birden çok Supabase istemcisi kuruluyor | `loadCatalogContext()` tekrar tekrar `createClient()` çağırıyor |
 | T-7 | Token refresh + cache-header yolu doğrulanmadı | Faz 1'den devam; token süresi dolmadan tetiklenmiyor |
 | T-8 | `w32time` başlangıç türü `Manual` | Saat kayarsa `JWT issued at future` geri döner |

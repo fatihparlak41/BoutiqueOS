@@ -488,6 +488,77 @@ SELECT t_check('T34j no unit_cost anywhere in member-readable tables',
      AND column_name ILIKE '%cost%') = 0);
 
 -- ============================================================
+-- T35  rpc_create_goods_receipt  (Phase 3 GAP-1)
+-- ============================================================
+-- extra fixtures (as postgres)
+WITH x AS (INSERT INTO branches (business_id, name, code, status) VALUES (t_get('biz'), 'Kapali Sube', 'CLS', 'inactive') RETURNING id) SELECT t_set('brOff', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizB'), 'Other Supplier', 'TRY') RETURNING id) SELECT t_set('supB', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name, currency, status) VALUES (t_get('biz'), 'Pasif Tedarikci', 'TRY', 'inactive') RETURNING id) SELECT t_set('supOff', id) FROM x;
+
+SELECT t_login('u1');
+SELECT t_ok ('T35a owner creates draft goods receipt', $q$ SELECT t_set('gr3', rpc_create_goods_receipt(t_get('br1'), t_get('sup1'))) $q$);
+SELECT t_err('T35b cross-tenant branch rejected (no membership)', $q$ SELECT rpc_create_goods_receipt(t_get('brB'), t_get('sup1')) $q$, 'FORBIDDEN');
+SELECT t_err('T35c cross-tenant supplier rejected', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('supB')) $q$, 'INVALID_SUPPLIER');
+SELECT t_err('T35d inactive supplier rejected', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('supOff')) $q$, 'INVALID_SUPPLIER');
+SELECT t_err('T35e inactive branch rejected', $q$ SELECT rpc_create_goods_receipt(t_get('brOff'), t_get('sup1')) $q$, 'INVALID_BRANCH');
+SELECT t_err('T35f unknown branch rejected', $q$ SELECT rpc_create_goods_receipt(gen_random_uuid(), t_get('sup1')) $q$, 'INVALID_BRANCH');
+SELECT t_err('T35g TRY invoice with rate <> 1 rejected', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1'), 'TRY', 40) $q$, 'INVALID_FX');
+SELECT t_err('T35h non-positive rate rejected', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup2'), 'GBP', 0) $q$, 'INVALID_FX');
+SELECT t_err('T35i unsupported currency rejected', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1'), 'XXX', 1) $q$, 'INVALID_CURRENCY');
+SELECT t_ok ('T35j non-TRY draft with valid rate', $q$ SELECT t_set('gr5', rpc_create_goods_receipt(t_get('br1'), t_get('sup2'), 'GBP', 42.5)) $q$);
+
+SELECT t_login('u2');
+SELECT t_ok ('T35k manager creates draft goods receipt', $q$ SELECT t_set('gr4', rpc_create_goods_receipt(t_get('br1'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'FTR-99', 'manager notu')) $q$);
+
+SELECT t_login('u4');
+SELECT t_ok ('T35l stock_staff creates draft goods receipt', $q$ SELECT t_set('gr6', rpc_create_goods_receipt(t_get('br2'), t_get('sup1'))) $q$);
+
+SELECT t_login('u3');
+SELECT t_err('T35m sales_staff cannot create draft goods receipt', $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1')) $q$, '42501');
+SELECT t_err('T35n sales_staff still cannot call fn_next_sequence', $q$ SELECT fn_next_sequence(t_get('biz'), 'GR') $q$, '42501');
+SELECT t_err('T35o document_sequences still not client-writable', $q$ INSERT INTO document_sequences (business_id, prefix, year, last_value) VALUES (t_get('biz'), 'GR', 2026, 999) $q$, '42501');
+SELECT t_logout();
+
+SELECT t_check('T35p generated receipt_number is not null',
+  (SELECT bool_and(receipt_number IS NOT NULL AND length(receipt_number) > 0) FROM goods_receipts WHERE id IN (t_get('gr3'), t_get('gr4'), t_get('gr5'), t_get('gr6'))));
+SELECT t_check('T35q receipt_number format GR-YYYY-NNNNNN',
+  (SELECT bool_and(receipt_number ~ '^GR-[0-9]{4}-[0-9]{6}$') FROM goods_receipts WHERE id IN (t_get('gr3'), t_get('gr4'), t_get('gr5'), t_get('gr6'))));
+SELECT t_check('T35r four distinct receipt numbers',
+  (SELECT count(DISTINCT receipt_number) FROM goods_receipts WHERE id IN (t_get('gr3'), t_get('gr4'), t_get('gr5'), t_get('gr6'))) = 4);
+SELECT t_check('T35s numbers strictly increasing in creation order',
+  (SELECT (regexp_replace(receipt_number, '\D', '', 'g'))::BIGINT FROM goods_receipts WHERE id = t_get('gr4'))
+  > (SELECT (regexp_replace(receipt_number, '\D', '', 'g'))::BIGINT FROM goods_receipts WHERE id = t_get('gr3')));
+SELECT t_check('T35t every created receipt is draft',
+  (SELECT bool_and(status = 'draft') FROM goods_receipts WHERE id IN (t_get('gr3'), t_get('gr4'), t_get('gr5'), t_get('gr6'))));
+SELECT t_check('T35u created_by is the acting user', (SELECT created_by FROM goods_receipts WHERE id = t_get('gr3')) = t_get('u1'));
+SELECT t_check('T35v TRY draft stored with exchange_rate 1',
+  (SELECT invoice_currency = 'TRY' AND exchange_rate = 1 FROM goods_receipts WHERE id = t_get('gr3')));
+SELECT t_check('T35w non-TRY draft keeps the supplied rate',
+  (SELECT invoice_currency = 'GBP' AND exchange_rate = 42.5 FROM goods_receipts WHERE id = t_get('gr5')));
+SELECT t_check('T35x optional fields stored verbatim',
+  (SELECT document_ref = 'FTR-99' AND note = 'manager notu' FROM goods_receipts WHERE id = t_get('gr4')));
+SELECT t_check('T35y rpc exposes no status/business_id parameter',
+  (SELECT pg_get_function_arguments(oid) !~ 'status' AND pg_get_function_arguments(oid) !~ 'business_id'
+   FROM pg_proc WHERE proname = 'rpc_create_goods_receipt'));
+SELECT t_check('T35z execute granted to authenticated only',
+  (SELECT has_function_privilege('authenticated', oid, 'EXECUTE')
+      AND NOT has_function_privilege('anon', oid, 'EXECUTE')
+   FROM pg_proc WHERE proname = 'rpc_create_goods_receipt'));
+
+-- the created draft must flow through the UNCHANGED posting RPC
+SELECT t_login('u4');
+INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr3'), t_get('v1'), 4, 120);
+SELECT t_ok ('T35aa rpc-created draft posts via existing rpc_post_goods_receipt', $q$ SELECT rpc_post_goods_receipt(t_get('gr3')) $q$);
+SELECT t_err('T35ab second post of the same receipt rejected', $q$ SELECT rpc_post_goods_receipt(t_get('gr3')) $q$, 'INVALID_STATE');
+SELECT t_err('T35ac empty rpc-created draft cannot be posted', $q$ SELECT rpc_post_goods_receipt(t_get('gr6')) $q$, 'EMPTY_DOCUMENT');
+SELECT t_logout();
+SELECT t_check('T35ad posting produced a sellable ledger row for the new receipt',
+  t_count($q$ SELECT count(*) FROM inventory_movements m JOIN goods_receipt_items i ON i.id = m.reference_id
+              WHERE i.goods_receipt_id = t_get('gr3') AND m.bucket = 'sellable' AND m.quantity = 4 $q$) = 1);
+SELECT t_check('T35ae posting produced exactly one supplier liability entry',
+  t_count($q$ SELECT count(*) FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr3') AND entry_type = 'liability' $q$) = 1);
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$
