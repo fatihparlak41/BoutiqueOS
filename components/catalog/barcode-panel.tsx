@@ -121,12 +121,12 @@ export function BarcodePanel({
                 spellCheck={false}
                 inputMode="numeric"
                 placeholder="Etiketteki barkod"
-                className="h-9"
+                className="h-11 sm:h-9"
               />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`symbology-${variant.id}`}>Tip</Label>
-              <Select id={`symbology-${variant.id}`} name="symbology" defaultValue="EAN13" className="h-9">
+              <Select id={`symbology-${variant.id}`} name="symbology" defaultValue="EAN13" className="h-11 sm:h-9">
                 <option value="EAN13">EAN13</option>
                 <option value="CODE128">CODE128</option>
               </Select>

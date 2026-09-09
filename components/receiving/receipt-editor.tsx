@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FormMessage } from "@/components/catalog/form-message";
 import { IDLE } from "@/lib/catalog/action-state";
 import {
+  addReceiptLinesAction,
   cancelReceiptAction,
   deleteReceiptLineAction,
   postReceiptAction,
@@ -54,11 +55,11 @@ function HeaderForm({ receipt, fxHint }: { receipt: ReceiptDetail; fxHint: numbe
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-1.5">
           <Label htmlFor="received_at">Alım tarihi</Label>
-          <Input id="received_at" name="received_at" type="date" required defaultValue={receipt.received_at} className="h-9" />
+          <Input id="received_at" name="received_at" type="date" required defaultValue={receipt.received_at} className="h-11 sm:h-9" />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="document_ref">Belge referansı</Label>
-          <Input id="document_ref" name="document_ref" maxLength={80} defaultValue={receipt.document_ref ?? ""} className="h-9" spellCheck={false} />
+          <Input id="document_ref" name="document_ref" maxLength={80} defaultValue={receipt.document_ref ?? ""} className="h-11 sm:h-9" spellCheck={false} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="exchange_rate">Kur (1 {receipt.invoice_currency} = ? TRY)</Label>
@@ -68,7 +69,7 @@ function HeaderForm({ receipt, fxHint }: { receipt: ReceiptDetail; fxHint: numbe
             inputMode="decimal"
             defaultValue={isBase ? "1" : moneyInputValue(receipt.exchange_rate)}
             disabled={isBase}
-            className="h-9"
+            className="h-11 sm:h-9"
           />
           {!isBase && fxHint !== null && Math.abs(fxHint - receipt.exchange_rate) > 0.000001 ? (
             <p className="text-2xs text-danger">
@@ -120,13 +121,13 @@ function LineRow({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine 
               <Label htmlFor={`qty-${line.id}`} className="sr-only">
                 Adet
               </Label>
-              <Input id={`qty-${line.id}`} name="quantity" inputMode="numeric" defaultValue={String(line.quantity)} className="h-9 text-right" />
+              <Input id={`qty-${line.id}`} name="quantity" inputMode="numeric" defaultValue={String(line.quantity)} className="h-11 text-right sm:h-9" />
             </div>
             <div className="w-28">
               <Label htmlFor={`cost-${line.id}`} className="sr-only">
                 Birim maliyet
               </Label>
-              <Input id={`cost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={moneyInputValue(line.unit_cost)} className="h-9 text-right" />
+              <Input id={`cost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={moneyInputValue(line.unit_cost)} className="h-11 text-right sm:h-9" />
             </div>
             <Pending label="Güncelle" pendingLabel="…" variant="ghost" />
           </form>
@@ -155,17 +156,20 @@ function LineRow({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine 
 
 function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
   const [search, searchAction] = useActionState(searchVariantsAction, VARIANT_SEARCH_IDLE);
-  const [addState, addAction] = useActionState(upsertReceiptLineAction, IDLE);
+  const [addState, addAction] = useActionState(addReceiptLinesAction, IDLE);
 
-  const existing = new Set(receipt.lines.map((line) => line.variant_id));
+  // Rows already on the document are pre-filled, so the picker shows current state instead
+  // of an empty box the user has to re-type.
+  const current = new Map(receipt.lines.map((line) => [line.variant_id, line]));
 
   return (
     <div className="space-y-4 border border-line bg-panel/40 p-4">
       <div>
         <h4 className="text-xs font-medium text-ink-70">Satır ekle</h4>
-        <p className="mt-1 text-2xs text-muted">
+        <p className="mt-1 text-2xs leading-relaxed text-muted">
           Ürün adı, SKU veya barkod ile arayın. Ürün adı aratıldığında o ürünün tüm aktif
-          varyantları listelenir; beden serisini tek seferde girebilirsiniz.
+          varyantları listelenir; beden serisinin adetlerini doldurup tek seferde ekleyin.
+          Adet girmediğiniz satırlar atlanır.
         </p>
       </div>
 
@@ -174,7 +178,7 @@ function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
           <Label htmlFor="picker-term" className="sr-only">
             Varyant ara
           </Label>
-          <Input id="picker-term" name="term" defaultValue={search.term} placeholder="Ürün adı, SKU veya barkod" className="h-9" spellCheck={false} />
+          <Input id="picker-term" name="term" defaultValue={search.term} placeholder="Ürün adı, SKU veya barkod" className="h-11 sm:h-9" spellCheck={false} />
         </div>
         <Pending label="Ara" pendingLabel="Aranıyor…" />
       </form>
@@ -186,39 +190,59 @@ function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
       ) : null}
 
       {search.results.length > 0 ? (
-        <ul className="divide-y divide-line border-y border-line">
-          {search.results.map((variant) => (
-            <li key={variant.variant_id} className="py-2.5">
-              <form action={addAction} className="flex flex-wrap items-end gap-2">
-                <input type="hidden" name="receipt_id" value={receipt.id} />
-                <input type="hidden" name="variant_id" value={variant.variant_id} />
-                <div className="min-w-[14rem] flex-1">
-                  <span className="text-sm font-medium">{variant.product_name}</span>
-                  <span className="mt-0.5 block text-2xs text-muted">
-                    {variant.options} · <span data-numeric>{variant.sku}</span>
-                    {variant.primary_barcode ? <> · <span data-numeric>{variant.primary_barcode}</span></> : null}
-                  </span>
-                </div>
-                <div className="w-20">
-                  <Label htmlFor={`new-qty-${variant.variant_id}`} className="text-2xs">
-                    Adet
-                  </Label>
-                  <Input id={`new-qty-${variant.variant_id}`} name="quantity" inputMode="numeric" defaultValue="1" className="h-9 text-right" />
-                </div>
-                <div className="w-28">
-                  <Label htmlFor={`new-cost-${variant.variant_id}`} className="text-2xs">
-                    Birim maliyet
-                  </Label>
-                  <Input id={`new-cost-${variant.variant_id}`} name="unit_cost" inputMode="decimal" placeholder="0,00" className="h-9 text-right" />
-                </div>
-                <Pending label={existing.has(variant.variant_id) ? "Güncelle" : "Ekle"} pendingLabel="…" />
-              </form>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+        <form action={addAction} className="space-y-3">
+          <input type="hidden" name="receipt_id" value={receipt.id} />
 
-      <FormMessage state={addState} successText="Satır kaydedildi." />
+          <ul className="divide-y divide-line border-y border-line">
+            {search.results.map((variant) => {
+              const line = current.get(variant.variant_id);
+              return (
+                <li key={variant.variant_id} className="flex flex-wrap items-end gap-2 py-2.5">
+                  <div className="min-w-[13rem] flex-1">
+                    <span className="text-sm font-medium">{variant.product_name}</span>
+                    <span className="mt-0.5 block text-2xs text-muted">
+                      {variant.options} · <span data-numeric>{variant.sku}</span>
+                      {variant.primary_barcode ? <> · <span data-numeric>{variant.primary_barcode}</span></> : null}
+                      {line ? <span className="ml-1 text-accent">· belgede var</span> : null}
+                    </span>
+                  </div>
+                  <div className="w-20">
+                    <Label htmlFor={`qty-${variant.variant_id}`} className="text-2xs">
+                      Adet
+                    </Label>
+                    <Input
+                      id={`qty-${variant.variant_id}`}
+                      name={`qty_${variant.variant_id}`}
+                      inputMode="numeric"
+                      defaultValue={line ? String(line.quantity) : ""}
+                      placeholder="—"
+                      className="h-11 text-right sm:h-9"
+                    />
+                  </div>
+                  <div className="w-28">
+                    <Label htmlFor={`cost-${variant.variant_id}`} className="text-2xs">
+                      Birim maliyet
+                    </Label>
+                    <Input
+                      id={`cost-${variant.variant_id}`}
+                      name={`cost_${variant.variant_id}`}
+                      inputMode="decimal"
+                      defaultValue={line ? moneyInputValue(line.unit_cost) : ""}
+                      placeholder="0,00"
+                      className="h-11 text-right sm:h-9"
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          <FormMessage state={addState} successText="Satırlar kaydedildi." />
+          <Pending label="Satırları kaydet" pendingLabel="Kaydediliyor…" variant="solid" />
+        </form>
+      ) : (
+        <FormMessage state={addState} successText="Satırlar kaydedildi." />
+      )}
     </div>
   );
 }

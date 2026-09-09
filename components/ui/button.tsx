@@ -13,10 +13,12 @@ const buttonVariants = cva(
         outline: "border border-line-strong bg-transparent text-ink hover:bg-panel",
         ghost: "text-muted hover:bg-panel hover:text-ink",
       },
+      // Touch targets: roughly 44px on a phone, the original desktop density from sm up.
+      // min-h + auto height rather than a taller fixed height, so nothing shifts on desktop.
       size: {
-        sm: "h-8 px-3 text-xs",
-        md: "h-10 px-4 text-sm",
-        lg: "h-11 px-5 text-sm",
+        sm: "min-h-11 px-3 py-1.5 text-xs sm:h-8 sm:min-h-0 sm:py-0",
+        md: "min-h-11 px-4 py-2 text-sm sm:h-10 sm:min-h-0 sm:py-0",
+        lg: "min-h-11 px-5 py-2 text-sm sm:h-11 sm:min-h-0 sm:py-0",
       },
     },
     defaultVariants: { variant: "solid", size: "md" },

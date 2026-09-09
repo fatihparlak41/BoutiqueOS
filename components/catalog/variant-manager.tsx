@@ -88,7 +88,7 @@ function AddVariantForm({
               id={`option-${option.id}`}
               value={selection[option.id] ?? ""}
               onChange={(event) => handleOptionChange(option.id, event.target.value)}
-              className="h-9"
+              className="h-11 sm:h-9"
             >
               <option value="">Seçilmedi</option>
               {option.values.map((value) => (
@@ -116,7 +116,7 @@ function AddVariantForm({
               setSkuEdited(true);
             }}
             placeholder="Seçenekleri seçince önerilir"
-            className="h-9"
+            className="h-11 sm:h-9"
           />
         </div>
 
@@ -127,7 +127,7 @@ function AddVariantForm({
             name="sale_price_override"
             inputMode="decimal"
             placeholder="Boş bırakılırsa ürün fiyatı"
-            className="h-9"
+            className="h-11 sm:h-9"
           />
         </div>
       </div>
@@ -226,7 +226,7 @@ function VariantRowItem({
                           required
                           maxLength={64}
                           spellCheck={false}
-                          className="h-9"
+                          className="h-11 sm:h-9"
                         />
                       </div>
                       <div className="space-y-1.5">
@@ -241,7 +241,7 @@ function VariantRowItem({
                               : moneyValue(variant.sale_price_override)
                           }
                           placeholder="Boş bırakılırsa ürün fiyatı"
-                          className="h-9"
+                          className="h-11 sm:h-9"
                         />
                       </div>
                       <div className="space-y-1.5">
@@ -250,7 +250,7 @@ function VariantRowItem({
                           id={`status-${variant.id}`}
                           name="status"
                           defaultValue={variant.status}
-                          className="h-9"
+                          className="h-11 sm:h-9"
                         >
                           {Object.entries(VARIANT_STATUS_LABELS).map(([value, label]) => (
                             <option key={value} value={value}>

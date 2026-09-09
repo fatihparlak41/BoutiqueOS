@@ -56,7 +56,7 @@ function OptionRow({ option, canEdit }: { option: ProductOption; canEdit: boolea
             required
             maxLength={60}
             placeholder={`${option.name} değeri ekle`}
-            className="h-8 w-48 text-xs"
+            className="h-11 w-48 text-xs sm:h-8"
             aria-label={`${option.name} için yeni değer`}
           />
           <InlineSubmit label="Ekle" />
@@ -107,7 +107,7 @@ export function OptionManager({
             required
             maxLength={40}
             placeholder="Yeni seçenek (örn. Kalıp)"
-            className="h-8 w-56 text-xs"
+            className="h-11 w-56 text-xs sm:h-8"
             aria-label="Yeni seçenek adı"
           />
           <InlineSubmit label="Seçenek ekle" />

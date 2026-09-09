@@ -2,11 +2,11 @@ import Link from "next/link";
 import { listBranchOptions, listStock } from "@/lib/stock/queries";
 import { STOCK_STATE_LABELS, type StockState } from "@/lib/stock/model";
 import { listBrands, listCategories } from "@/lib/catalog/queries";
-import { formatQuantity } from "@/lib/receiving/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { StockCards, StockTable } from "@/components/stock/stock-rows";
 
 export const metadata = { title: "Stok · BoutiqueOS" };
 
@@ -128,53 +128,14 @@ export default async function StockPage({
           </p>
         </div>
       ) : (
-        <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[62rem] border-collapse text-sm">
-            <thead>
-              <tr className="border-y border-line text-left text-xs text-muted">
-                <th scope="col" className="py-2 pr-4 font-medium">Ürün / varyant</th>
-                <th scope="col" className="py-2 pr-4 font-medium">SKU / barkod</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Satılabilir</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Karantina</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Hasarlı</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Toplam</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Rezerve</th>
-                <th scope="col" className="py-2 text-right font-medium">Uygun</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {rows.map((row) => (
-                <tr key={row.variant_id} className="transition-colors hover:bg-panel/60">
-                  <td className="py-2.5 pr-4">
-                    <Link
-                      href={`/app/stok/${row.variant_id}`}
-                      className="font-medium text-ink underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      {row.product_name}
-                    </Link>
-                    <span className="mt-0.5 block text-2xs text-muted">{row.options}</span>
-                  </td>
-                  <td className="py-2.5 pr-4 text-ink-70" data-numeric>
-                    {row.sku}
-                    {row.primary_barcode ? (
-                      <span className="mt-0.5 block text-2xs text-muted">{row.primary_barcode}</span>
-                    ) : null}
-                  </td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>{formatQuantity(row.sellable)}</td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>{formatQuantity(row.quarantine)}</td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>{formatQuantity(row.damaged)}</td>
-                  <td className="py-2.5 pr-4 text-right font-medium" data-numeric>{formatQuantity(row.on_hand)}</td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>{formatQuantity(row.reserved)}</td>
-                  <td className="py-2.5 text-right font-medium" data-numeric>{formatQuantity(row.available)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-2xs text-muted">
+        <>
+          <StockCards rows={rows} />
+          <StockTable rows={rows} />
+          <p className="text-2xs leading-relaxed text-muted">
             {rows.length} varyant · şube: {activeBranch} · Toplam = satılabilir + karantina + hasarlı ·
             Uygun = satılabilir − rezerve
           </p>
-        </div>
+        </>
       )}
     </div>
   );

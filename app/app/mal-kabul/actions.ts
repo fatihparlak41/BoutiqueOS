@@ -256,6 +256,77 @@ export async function deleteReceiptLineAction(
   return DONE;
 }
 
+/**
+ * Adds or updates several lines in one submit, so a whole size run can be entered without
+ * a round trip per variant.
+ *
+ * Every row is parsed and validated BEFORE anything is written, so a typo in the third row
+ * cannot leave the first two applied. The writes themselves are still ordinary per-row
+ * upserts under the same RLS and the same UNIQUE (goods_receipt_id, variant_id) rule — no
+ * new posting path, no change to what a receipt means. Nothing is written until the user
+ * submits: there is no autosave.
+ */
+export async function addReceiptLinesAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, businessId, caps } = await loadReceivingContext();
+  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+
+  const receiptId = uuidOrNull(formData, "receipt_id");
+  if (!receiptId) return fail("Belge bulunamadı.");
+
+  const rows: Array<{ variantId: string; quantity: number; unitCost: number }> = [];
+
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("qty_") || typeof value !== "string") continue;
+    const variantId = key.slice(4);
+    if (!/^[0-9a-fA-F-]{36}$/.test(variantId)) continue;
+
+    const rawQty = value.trim();
+    if (!rawQty) continue; // adet girilmemis satir sessizce atlanir
+
+    const quantity = parseQuantity(rawQty);
+    if (quantity === null) return fail("Adet sıfırdan büyük bir tam sayı olmalı.");
+
+    const rawCost = formData.get(`cost_${variantId}`);
+    const unitCost = parseDecimal(typeof rawCost === "string" ? rawCost : "");
+    if (unitCost === null) return fail("Birim maliyet geçerli bir tutar olmalı (örn. 400,00).");
+
+    rows.push({ variantId, quantity, unitCost });
+  }
+
+  if (rows.length === 0) return fail("Adet girilmiş satır yok.");
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("goods_receipt_items")
+    .select("id, variant_id")
+    .eq("business_id", businessId)
+    .eq("goods_receipt_id", receiptId);
+
+  if (lookupError) return fail(reportDbError("lookupReceiptLines", lookupError));
+
+  for (const row of rows) {
+    const match = (existing ?? []).find((line) => line.variant_id === row.variantId);
+    if (match) {
+      const { error } = await supabase
+        .from("goods_receipt_items")
+        .update({ quantity: row.quantity, unit_cost: row.unitCost })
+        .eq("business_id", businessId)
+        .eq("id", match.id as string);
+      if (error) return fail(reportDbError("updateReceiptLines", error));
+    } else {
+      const { error } = await supabase
+        .from("goods_receipt_items")
+        .insert({ goods_receipt_id: receiptId, variant_id: row.variantId, quantity: row.quantity, unit_cost: row.unitCost });
+      if (error) return fail(reportDbError("insertReceiptLines", error));
+    }
+  }
+
+  revalidatePath(`/app/mal-kabul/${receiptId}`);
+  return DONE;
+}
+
 // ------------------------------------------------------------------ posting
 
 export async function postReceiptAction(
