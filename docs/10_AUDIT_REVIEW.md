@@ -226,7 +226,8 @@ R-1, R-3, R-4, R-5, R-6, R-7 üretim kodu defektleridir; R-2, R-8 test, R-9 tool
 | Gerçek cross-tenant manuel test | **DEFERRED** — ikinci işletme + kullanıcı gerekiyor |
 | GAP-1 `rpc_create_goods_receipt` (20260909062632) | **APPLIED** — remote'ta kayıtlı, local/remote eşleşiyor |
 | Faz 4+ (Kasa, Satış, Raporlar…) | **READY FOR PHASE 4 PLANNING** — kodlama başlamadı |
-| Deploy (Vercel) | yapılmadı |
+| Deploy (Vercel) | **PILOT DEPLOYED** (2026-09-09) — https://butikos.parlakmediatech.com.tr · özel alan adı geçerli · Supabase Auth Site/Redirect URL güncellendi |
+| Production Supabase projesi | **KURULMADI** — pilot dağıtım DEV projesine bağlı |
 
 Supabase-local ertelendiği için gerçek `auth.uid()` yolu DEV üzerindeki remote smoke ile doğrulandı;
 Docker kurulduğunda `.\scripts\db_fresh.ps1 -Mode Supabase` ikinci bir doğrulama katmanı olarak koşulabilir.
@@ -389,6 +390,24 @@ bırakılmıştır. Silme SQL'i veya cleanup script'i yazılmamıştır.
 - **`sales_staff` manuel rol smoke DEFERRED** — ikinci hesap yok. Owner oturumuyla gözlenen
   davranış yalnız frontend gizlemesidir; cross-role security PASS olarak adlandırılmamıştır.
 - **Gerçek cross-tenant manuel test DEFERRED** — ikinci işletme ve kullanıcı gerekiyor.
+
+### Pilot dağıtım notu (2026-09-09)
+
+BoutiqueOS **https://butikos.parlakmediatech.com.tr** adresinde yayında. Vercel deploy
+başarılı, özel alan adı geçerli, Supabase Auth'un Site URL ve Redirect URL ayarları bu alan
+adına göre güncellendi. Vercel'e yalnız `NEXT_PUBLIC_SUPABASE_URL` ve
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` tanımlandı; service-role anahtarı eklenmedi.
+
+**Kritik kapsam notu:** bu dağıtım **DEV Supabase projesine bağlı bir pilot / canlı test
+ortamıdır**. **Ayrı bir production Supabase projesi henüz kurulmamıştır.** Canlı adresten
+yapılan her yazma DEV verisine gider ve DEV'deki `TEST *` fixture kayıtları (bkz. yukarıdaki
+"DEV test kayıtları") bu adresten görünür. Gerçek production'a geçiş ayrı bir Supabase
+projesi, o projeye migration apply, yeni bir owner kullanıcısı ve ayrı ortam değişkeni seti
+gerektirir.
+
+Dağıtım anında açık kalan doğrulamalar değişmedi:
+**non-TRY FX manuel smoke DEFERRED** · **`sales_staff` manuel rol smoke DEFERRED** ·
+**gerçek cross-tenant manuel smoke DEFERRED**.
 
 ### Faz 3 açık teknik borçlar
 

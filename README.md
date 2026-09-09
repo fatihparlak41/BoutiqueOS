@@ -3,7 +3,7 @@
 Multi-tenant boutique retail SaaS. Pilot: **Things Like Crop** (Lefkoşa).
 Stack: Next.js / TypeScript / Tailwind / shadcn · Supabase (PostgreSQL, Auth, Storage, RLS) · Vercel.
 
-**Gate geçmişi:** Architecture → Rev 3 Schema → Fresh-DB verification (149/149) → DEV Supabase apply → seed → smoke → **Frontend Faz 1 (doğrulandı)** → **Faz 2 Ürün kataloğu (doğrulandı)** → **Faz 3 Tedarikçiler + Mal Kabul + Stok (TRY kapsamı doğrulandı)**.
+**Gate geçmişi:** Architecture → Rev 3 Schema → Fresh-DB verification (149/149) → DEV Supabase apply → seed → smoke → **Frontend Faz 1 (doğrulandı)** → **Faz 2 Ürün kataloğu (doğrulandı)** → **Faz 3 Tedarikçiler + Mal Kabul + Stok (TRY kapsamı doğrulandı)** → **Pilot dağıtım (Vercel + özel alan adı)**.
 
 **Durum:** Backend gate kapandı (Plain 149/149, concurrency PASS, DEV Supabase'e uygulandı).
 Frontend Faz 1 (Auth + tenant girişi) **doğrulandı** — bağımlılık + build zinciri ve manuel
@@ -13,6 +13,24 @@ Frontend Faz 2 (Ürün kataloğu — ürün / varyant / barkod) **doğrulandı**
 Frontend Faz 3 (Tedarikçiler + Mal Kabul + Stok Görünümü) **doğrulandı** — TRY manuel DEV
 smoke'u 2026-09-09'da geçti; **non-TRY FX ve rol smoke'u DEFERRED**. Sıradaki modüller
 (Kasa, Satış, Raporlar…) başlamadı.
+
+## Dağıtım (pilot, 2026-09-09)
+
+| Alan | Değer |
+|---|---|
+| Production URL | https://butikos.parlakmediatech.com.tr |
+| Platform | Vercel — deploy başarılı, özel alan adı geçerli |
+| Supabase Auth | Site URL / Redirect URL bu alan adına göre güncellendi |
+| Ortam değişkenleri | Yalnız `NEXT_PUBLIC_SUPABASE_URL` ve `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Service-role anahtarı **eklenmedi** |
+
+> **Bu dağıtım DEV Supabase projesine bağlı bir pilot / canlı test ortamıdır.**
+> **Ayrı bir production Supabase projesi henüz kurulmadı.** Canlı adresten yapılan her işlem
+> DEV verisine yazılır; DEV'deki `TEST *` fixture kayıtları da bu adresten görünür.
+> Gerçek production'a geçiş ayrı bir Supabase projesi, ayrı migration apply ve ayrı ortam
+> değişkeni seti gerektirir.
+
+Dağıtım anında açık kalan doğrulamalar: **non-TRY FX smoke DEFERRED**,
+**`sales_staff` rol smoke DEFERRED**, **gerçek cross-tenant smoke DEFERRED**.
 
 ## Yerleşim
 

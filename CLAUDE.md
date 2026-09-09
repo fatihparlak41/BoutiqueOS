@@ -24,6 +24,9 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Frontend Faz 3 — tedarikçiler + mal kabul + stok | **VERIFIED** (2026-09-09) — TRY manuel DEV smoke PASS |
 | Faz 3 — non-TRY FX manuel smoke | **DEFERRED** — DEV'de kullanılabilir FX kaydı yok |
 | Faz 3 — sales_staff rol smoke | **DEFERRED** — ikinci hesap yok; frontend gizleme cross-role PASS sayılmaz |
+| Pilot dağıtım (Vercel) | **DEPLOYED** (2026-09-09) — https://butikos.parlakmediatech.com.tr · **DEV Supabase'e bağlı pilot/canlı test ortamı** |
+| Production Supabase projesi | **KURULMADI** — canlı adresten yapılan her işlem DEV verisine yazılır |
+| Gerçek cross-tenant manuel smoke | **DEFERRED** — ikinci işletme + kullanıcı gerekiyor |
 | Faz 4+ (Kasa, Satış, Raporlar…) | **Başlamadı** — READY FOR PHASE 4 PLANNING |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
