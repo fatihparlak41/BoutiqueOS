@@ -20,7 +20,8 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Frontend Faz 1 — bağımlılık + build | **VERIFIED** (2026-09-08) — ls/audit/lint/build/typecheck PASS |
 | Frontend Faz 1 — auth + tenant girişi | **VERIFIED** (2026-09-08) — manuel smoke DEV'e karşı PASS |
 | Token refresh + cache-header yolu | **KOŞULMADI** — token süresi dolmadan tetiklenmiyor |
-| Faz 2+ (Ürünler, Stok, Kasa, Raporlar…) | **Başlamadı** — READY FOR PHASE 2 |
+| Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** (2026-09-09) — manuel DEV smoke PASS |
+| Faz 3+ (Stok, Kasa, Tedarikçi, Raporlar…) | **Başlamadı** — READY FOR PHASE 3 PLANNING |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
 

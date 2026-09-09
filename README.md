@@ -3,11 +3,13 @@
 Multi-tenant boutique retail SaaS. Pilot: **Things Like Crop** (Lefkoşa).
 Stack: Next.js / TypeScript / Tailwind / shadcn · Supabase (PostgreSQL, Auth, Storage, RLS) · Vercel.
 
-**Gate geçmişi:** Architecture → Rev 3 Schema → Fresh-DB verification (149/149) → DEV Supabase apply → seed → smoke → **Frontend Faz 1 (doğrulandi)**.
+**Gate geçmişi:** Architecture → Rev 3 Schema → Fresh-DB verification (149/149) → DEV Supabase apply → seed → smoke → **Frontend Faz 1 (doğrulandı)** → **Faz 2 Ürün kataloğu (doğrulandı)**.
 
 **Durum:** Backend gate kapandı (Plain 149/149, concurrency PASS, DEV Supabase'e uygulandı).
-Frontend Faz 1 (Auth + tenant girişi) **doğrulandi** — bağımlılık + build zinciri ve manuel
-login/tenant smoke'u DEV Supabase'e karşı geçti (2026-09-08). Faz 2 kodlaması başlamadı.
+Frontend Faz 1 (Auth + tenant girişi) **doğrulandı** — bağımlılık + build zinciri ve manuel
+login/tenant smoke'u DEV Supabase'e karşı geçti (2026-09-08).
+Frontend Faz 2 (Ürün kataloğu — ürün / varyant / barkod) **doğrulandı** — manuel DEV smoke
+2026-09-09'da geçti. Sıradaki modüller (Stok, Kasa, Raporlar…) başlamadı.
 
 ## Yerleşim
 
@@ -144,6 +146,64 @@ Tarayıcıdan owner hesabıyla koşuldu; her adım hem ekran gözlemi hem dev su
 `lib/supabase/{server,middleware}.ts` içinde uygulandı. Middleware sırası: request'e cookie yaz →
 `NextResponse.next({ request })` ile yanıtı yeniden kur → yanıta cookie yaz → dönen cache header'larını
 kopyala; bu cookie ve header'lar redirect yanıtlarına da taşınır.
+
+### Faz 2 — Ürün kataloğu (Ürün / Varyant / Barkod)
+
+```
+app/app/urunler/              liste · arama · kategori/marka/durum filtresi
+app/app/urunler/yeni/         1. adım: temel bilgiler + fiyat
+app/app/urunler/[id]/         2–5. adım: seçenekler · varyantlar · fiyat · barkodlar
+app/app/urunler/actions.ts    server action'lar (ürün, marka, seçenek, varyant, barkod)
+lib/catalog/model.ts          tipler, durum etiketleri, yetki kuralları (istemci-güvenli)
+lib/catalog/queries.ts        server-only okuma katmanı
+lib/catalog/errors.ts         PostgreSQL hata kodu → Türkçe mesaj
+lib/catalog/format.ts         para biçimleme / ayrıştırma, SKU önerisi
+components/catalog/           ürün formu, seçenek yöneticisi, varyant tablosu, barkod paneli
+```
+
+Kullanılan mevcut sözleşme: `products`, `product_variants`, `variant_option_values`,
+`product_options`, `option_values`, `barcodes`, `categories`, `brands` tabloları ve
+`rpc_create_variant`, `rpc_assign_internal_barcode` fonksiyonları.
+**Yeni migration, RPC, view, policy veya seed oluşturulmadı.**
+
+Stok miktarı bu modülde tutulmaz ve elle girilmez; mal kabul / stok hareketleriyle gelir.
+Maliyet kolonları hiçbir sorguda yer almaz.
+
+#### Manuel smoke (2026-09-09, DEV Supabase, owner oturumu)
+
+| Akış | Sonuç |
+|---|---|
+| Ürün listesi / arama / kategori · marka · durum filtresi | **PASS** |
+| Ürün oluşturma / düzenleme | **PASS** |
+| Marka oluşturma | **PASS** |
+| Dinamik seçenek ve değer oluşturma | **PASS** |
+| Varyant oluşturma (`rpc_create_variant`) | **PASS** |
+| Varyant düzenleme | **PASS** |
+| Dahili barkod (`rpc_assign_internal_barcode`) | **PASS** |
+| Harici barkod | **PASS** |
+| Yinelenen varyant kombinasyonu reddi | **PASS** |
+| Yinelenen (işletme kapsamlı) barkod reddi | **PASS** |
+| Tam sayfa yenileme sonrası persistence | **PASS** |
+| Elle stok miktarı alanı bulunmadığı | **PASS** |
+| RLS altında `authenticated` owner yazmaları | **PASS** |
+
+Maliyet sorgusu yok · service role kullanılmadı · migration / RLS / RPC / seed / backend
+değişikliği yok.
+
+#### Şeffaflık notları
+
+- **Marka ve ürün ilk denemede onaylanan test verisiyle oluşturulmadı.** İlk girişte farklı
+  değerler yazıldı, sonra UI üzerinden düzeltildi ve final durum doğrulandı. Bu sonuç
+  **"first-pass clean" değildir.**
+- **KDV oranı doğrulanmış değildir.** Ürün satırındaki `%0` mevcut veritabanı varsayılanıdır;
+  smoke sırasında hiçbir vergi değeri yazılmadı. Bu değer Things Like Crop'ın gerçek KDV
+  oranı olarak kabul edilmemelidir.
+- **Gerçek cross-tenant testi DEFERRED.** Rastgele UUID denemesi yalnızca nesne kapsamı ve
+  veri sızmaması kontrolüdür; gerçek test ikinci bir işletme ve kullanıcı gerektirir.
+- **Bulunamayan ürün ekranı içerik olarak doğru, ancak HTTP 200 döner.** Next akış yaptığı
+  için `notFound()` durum kodunu değiştiremiyor; bu **gerçek bir 404 PASS değildir.**
+
+Açık teknik borçlar: `docs/10_AUDIT_REVIEW.md` → "Faz 2 açık teknik borçlar".
 
 ### Kurallar
 

@@ -3,7 +3,8 @@
 **Sürüm:** Rev 3 · 2026-09-08
 **Kapsam:** `supabase/migrations/20260908000001..04`, `seeds/seed_things_like_crop.sql`, `tests/000_test_harness.sql`, `tests/005_verification_tests.sql`, `tests/concurrency/*`
 **Durum:** **BACKEND GATE KAPANDI** · DEV Supabase'e uygulandı · **Frontend Faz 1 DOĞRULANDI**
-(bağımlılık + build zinciri ve manuel login/tenant smoke, 2026-09-08) · Faz 2 kodlaması başlamadı
+(2026-09-08) · **Frontend Faz 2 ÜRÜN KATALOĞU DOĞRULANDI** (manuel DEV smoke, 2026-09-09) ·
+Sıradaki modüller başlamadı
 
 > Bu rapordaki her bulgu **statik incelemeye** dayanır (kod okuma + `tools/lint_sql.py` + audit betikleri).
 > Hiçbir SQL henüz bir PostgreSQL örneğinde çalıştırılmadı. "PASS" ifadesi bu belgede **yoktur**;
@@ -217,7 +218,8 @@ R-1, R-3, R-4, R-5, R-6, R-7 üretim kodu defektleridir; R-2, R-8 test, R-9 tool
 | İlk owner Auth kullanıcısı + üyelik | **CREATED** — Things Like Crop / Lefkoşa Mağaza / owner / aktif |
 | Frontend Faz 1 — bağımlılık + build | **VERIFIED** — `npm ls` / `audit` / `lint` / `build` / `typecheck` tümü PASS |
 | Frontend Faz 1 — auth + tenant girişi | **VERIFIED** — manuel smoke DEV Supabase'e karşı PASS |
-| Faz 2 (Ürünler, Stok, Kasa…) | **READY** — kodlama başlamadı |
+| Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** — manuel DEV smoke 2026-09-09'da PASS |
+| Faz 3+ (Stok, Kasa, Tedarikçi, Raporlar…) | **READY FOR PHASE 3 PLANNING** — kodlama başlamadı |
 | Deploy (Vercel) | yapılmadı |
 
 Supabase-local ertelendiği için gerçek `auth.uid()` yolu DEV üzerindeki remote smoke ile doğrulandı;
@@ -270,6 +272,71 @@ sonra hata dört ardışık smoke turunda tekrarlamadı.
 **Bu bir uygulama veya veritabanı defekti değildir; bu nedenle hiçbir kod, şema veya RLS değişikliği
 yapılmadı.** `w32time` başlangıç türü hâlâ `Manual`; makine yeniden başlatıldığında saat tekrar kayarsa aynı
 belirti dönebilir (kalıcı çözüm: yönetici olarak `Set-Service w32time -StartupType Automatic`).
+
+
+### Faz 2 manuel smoke (2026-09-09, DEV Supabase, owner oturumu)
+
+Ürün kataloğu modülü (ürün / varyant / barkod) tarayıcıdan sürüldü. Her adım hem DOM'dan
+okunarak hem dev sunucu logundan doğrulandı.
+
+| Akış | Sonuç |
+|---|---|
+| Ürün listesi / arama / kategori · marka · durum filtresi | **PASS** |
+| Ürün oluşturma / düzenleme | **PASS** |
+| Marka oluşturma | **PASS** |
+| Dinamik seçenek ve değer oluşturma | **PASS** |
+| Varyant oluşturma (`rpc_create_variant`) | **PASS** |
+| Varyant düzenleme | **PASS** |
+| Dahili barkod (`rpc_assign_internal_barcode`) | **PASS** |
+| Harici barkod | **PASS** |
+| Yinelenen varyant kombinasyonu reddi (`uix_variant_active_fingerprint`) | **PASS** |
+| Yinelenen işletme kapsamlı barkod reddi (`barcodes_business_id_barcode_key`) | **PASS** |
+| Tam sayfa yenileme sonrası persistence | **PASS** |
+| Elle stok miktarı alanı bulunmadığı | **PASS** |
+| RLS altında `authenticated` owner yazmaları | **PASS** |
+
+Maliyet sorgusu yok · service role kullanılmadı · `.env.local` okunmadı/yazılmadı ·
+migration / RLS / RPC / seed / Supabase remote değişikliği yok.
+
+Kullanılan DEV test verisi (silinmedi, olduğu gibi duruyor): `TEST TLC Studio` markası,
+`TEST Keten Crop Bluz` ürünü (`TEST-KETEN-CROP`, Crop Toplar, ₺1.250,00, Aktif),
+`TEST Beden` (S, M) ve `TEST Renk` (Siyah) seçenekleri, iki varyant, bir dahili
+(`TLC2026000001`) ve bir harici (`8690000000012`) barkod. İlk denemede yanlışlıkla eklenen
+`Sarıfatih` markası da kayıtta kalmıştır.
+
+#### Şeffaflık notları
+
+- **Marka ve ürün ilk denemede onaylanan test verisiyle oluşturulmadı.** İlk girişte farklı
+  değerler yazıldı, sonra UI üzerinden düzeltildi ve final durum doğrulandı. Bu sonuç
+  **"first-pass clean" değildir.**
+- **KDV oranı doğrulanmış değildir.** Ürün satırındaki `%0` mevcut `products.tax_rate`
+  varsayılanıdır; smoke sırasında hiçbir vergi değeri yazılmadı ve katalog ekranları vergi
+  yazmaz. Bu değer Things Like Crop'ın gerçek KDV oranı olarak kabul edilmemelidir.
+- **Gerçek cross-tenant testi DEFERRED.** Rastgele UUID denemesi yalnızca nesne kapsamı ve
+  veri sızmaması kontrolüdür; gerçek test ikinci bir işletme ve o işletmeye ait bir kullanıcı
+  gerektirir.
+- **Bulunamayan ürün ekranı içerik olarak doğru, ancak HTTP 200 döner.** Next akış yaptığı
+  için kabuk gönderildikten sonra `notFound()` durum kodunu değiştiremiyor; bu **gerçek bir
+  404 PASS değildir.**
+
+### Faz 2 açık teknik borçlar
+
+| # | Borç | Not |
+|---|---|---|
+| T-1 | Birincil barkod değişimi atomik değil | `uix_barcode_primary` kısmi unique index; temizle + işaretle iki ayrı çağrı. Atomik RPC migration gerektirir |
+| T-2 | Ürün listesi toplamları uygulamada hesaplanıyor | Varyant sayısı ve fiyat aralığı bellekte; liste 200 ürünle sınırlı |
+| T-3 | `rpc_create_variant` `status` parametresi almıyor | Varyant her zaman `active` doğar |
+| T-4 | Varyant seçenek kombinasyonu düzenlenemiyor | Güvenli yol yok; arşivle + yeniden oluştur |
+| T-5 | `products` / `product_variants` üzerinde `updated_at` trigger'ı yok | Server action'lar alanı açıkça yazıyor |
+| T-6 | İstek başına birden çok Supabase istemcisi kuruluyor | `loadCatalogContext()` tekrar tekrar `createClient()` çağırıyor |
+| T-7 | Token refresh + cache-header yolu doğrulanmadı | Faz 1'den devam; token süresi dolmadan tetiklenmiyor |
+| T-8 | `w32time` başlangıç türü `Manual` | Saat kayarsa `JWT issued at future` geri döner |
+| T-9 | `getUser()` üç yerde | `lib/tenant.ts:51`, `app/page.tsx:8`, `app/login/page.tsx:12` |
+| T-10 | Marka silme yok | Yanlış eklenen marka UI'dan temizlenemiyor |
+| T-11 | Bulunamayan ürün HTTP 200 döner | Streaming kaynaklı; içerik doğru |
+| T-12 | DEV test verisi duruyor | `TEST *` kayıtları ve `Sarıfatih` markası; temizlik ayrıca planlanmalı |
+| T-13 | Dev sunucusu bellek baskısında zombi bırakıyor | Port 3000 tutulu kalıp `Jest worker` / `EPIPE` ile 500 dönebiliyor; yeniden başlatmadan önce port kontrolü şart |
+| T-14 | Gerçek cross-tenant testi DEFERRED | İkinci işletme + kullanıcı gerekiyor |
 
 **Migration disiplini:** 001–04 remote'ta kayıtlı olduğu için artık yerinde düzenlenmez.
 Her şema/RPC değişikliği yeni timestamp'li migration ile gider (`20260908000005_*.sql`).
