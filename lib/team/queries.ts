@@ -17,15 +17,18 @@ import { teamCaps, type TeamAuditEntry, type TeamCaps, type TeamInvite, type Tea
 const AUDIT_LIMIT = 200;
 
 export async function loadTeamContext(): Promise<{ businessId: string; caps: TeamCaps }> {
-  const { active } = await requireTenant();
+  const { active, user } = await requireTenant();
   const supabase = await createClient();
 
-  // A manager's own ceiling bounds what they may grant. Their own row is always
-  // readable to them under pol_bm_select.
+  // The caller's OWN ceiling is what bounds a manager's grants, so this must filter by
+  // user_id. Phase 3.5C gives manager+ visibility of every member row, so without that
+  // filter the query returns the whole team and maybeSingle() fails — which is exactly
+  // the shape of caller who reaches this page.
   const { data, error } = await supabase
     .from("business_members")
     .select("max_discount_pct")
     .eq("business_id", active.business_id)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (error) throw new Error(reportDbError("loadTeamContext", error));
