@@ -51,12 +51,17 @@ export async function signOutAction() {
  * membership has been re-proved against PostgreSQL, and every protected page re-checks
  * it again — the cookie can never grant access on its own.
  */
-export async function selectBusinessAction(formData: FormData) {
+export type SelectBusinessState = { error: string | null };
+
+export async function selectBusinessAction(
+  _prev: SelectBusinessState,
+  formData: FormData,
+): Promise<SelectBusinessState> {
   const businessId = String(formData.get("business_id") ?? "");
   const { memberships } = await loadMemberships();
 
   if (!memberships.some((m) => m.business_id === businessId)) {
-    redirect("/select-business?error=not-a-member");
+    return { error: "Bu işletmede aktif bir üyeliğiniz yok." };
   }
 
   const cookieStore = await cookies();
