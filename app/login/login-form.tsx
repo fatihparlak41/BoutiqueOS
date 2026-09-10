@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,12 @@ export function LoginForm() {
       <SubmitButton />
 
       <p className="pt-2 text-xs leading-relaxed text-muted">
-        Parolanızı hatırlamıyorsanız işletme yöneticinizden sıfırlama isteyin.
+        <Link
+          href="/sifre-sifirla"
+          className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Şifremi unuttum
+        </Link>
       </p>
     </form>
   );

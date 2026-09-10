@@ -4,10 +4,11 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import type { UserRole } from "@/lib/roles";
 
 export const ACTIVE_BUSINESS_COOKIE = "bos_active_business";
 
-export type UserRole = "owner" | "manager" | "sales_staff" | "stock_staff";
+export type { UserRole } from "@/lib/roles";
 
 export type Branch = {
   id: string;
@@ -152,9 +153,4 @@ export async function requireTenant(): Promise<TenantContext> {
   return { user, profile, memberships, active, branch: resolveBranch(active) };
 }
 
-export const ROLE_LABELS: Record<UserRole, string> = {
-  owner: "Sahip",
-  manager: "Yönetici",
-  sales_staff: "Satış",
-  stock_staff: "Depo",
-};
+export { ROLE_LABELS } from "@/lib/roles";

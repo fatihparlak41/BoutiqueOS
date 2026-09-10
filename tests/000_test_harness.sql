@@ -27,13 +27,21 @@ CREATE SCHEMA IF NOT EXISTS auth;
 GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
 
 CREATE TABLE IF NOT EXISTS auth.users (
-  id          UUID PRIMARY KEY,
-  instance_id UUID,
-  aud         TEXT,
-  role        TEXT,
-  email       TEXT UNIQUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                UUID PRIMARY KEY,
+  instance_id       UUID,
+  aud               TEXT,
+  role              TEXT,
+  email             TEXT UNIQUE,
+  -- Phase 4B reads this: an unconfirmed address must not be able to claim a seat.
+  -- Defaults to confirmed so existing fixtures behave as before; tests that need an
+  -- unverified account set it to NULL explicitly.
+  email_confirmed_at TIMESTAMPTZ DEFAULT now(),
+  -- Supabase stores options.data of an admin invite here. Phase 4B deliberately puts
+  -- nothing of its own in it; T45 asserts that.
+  raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  raw_app_meta_data  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Same resolution order as Supabase: request.jwt.claim.sub, then request.jwt.claims->>'sub'

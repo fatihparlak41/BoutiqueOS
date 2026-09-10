@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:redirect": "node --experimental-strip-types tests/redirect/check_redirect.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.6",

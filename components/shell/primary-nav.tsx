@@ -33,7 +33,7 @@ const NAV: NavItem[] = [
   { label: "Müşteriler", icon: Users },
   { label: "Rezervasyonlar", icon: BookmarkCheck },
   { label: "Raporlar", icon: BarChart3 },
-  { label: "Ayarlar", icon: Settings },
+  { label: "Ayarlar", icon: Settings, href: "/app/ayarlar" },
 ];
 
 export function PrimaryNav() {

@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 49 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 49,
+SELECT t_check('T01 all 51 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 51,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -1400,6 +1400,430 @@ SELECT t_check('T43ae TLC left active for the remaining blocks',
 
 -- restore T41's fixture state
 UPDATE platform_admins SET is_active = false WHERE user_id = t_get('u8');
+
+-- ============================================================
+-- T44-T48  Phase 4  Team & Identity
+-- ============================================================
+-- text-valued fixture store (invite tokens are text, _tk only holds uuids)
+CREATE TABLE _tkt (k TEXT PRIMARY KEY, v TEXT);
+CREATE FUNCTION t_sett(p_k TEXT, p_v TEXT) RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN INSERT INTO _tkt (k, v) VALUES (p_k, p_v) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v; RETURN p_v; END $$;
+CREATE FUNCTION t_gett(p_k TEXT) RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT v FROM _tkt WHERE _tkt.k = p_k $$;
+
+-- ============================================================
+-- T44  team audit log  (4A)
+-- ============================================================
+SELECT t_check('T44a team_audit_log has RLS and no write policy',
+  (SELECT relrowsecurity FROM pg_class WHERE relname = 'team_audit_log')
+  AND (SELECT count(*) FROM pg_policies WHERE tablename = 'team_audit_log' AND cmd <> 'SELECT') = 0);
+SELECT t_check('T44b fn_team_audit stays internal',
+  NOT has_function_privilege('authenticated', 'fn_team_audit(uuid,team_audit_action,uuid,uuid,jsonb,jsonb)', 'EXECUTE'));
+
+-- single-field change -> specific action
+SELECT t_login('u1');
+UPDATE business_members SET max_discount_pct = 20 WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+SELECT t_logout();
+SELECT t_check('T44c single-field change records the specific action',
+  (SELECT count(*) FROM team_audit_log
+    WHERE business_id = t_get('biz') AND target_user_id = t_get('u3')
+      AND action = 'discount_limit_changed'
+      AND old_values ->> 'max_discount_pct' = '15.00'
+      AND new_values ->> 'max_discount_pct' = '20.00') = 1,
+  'earlier blocks also move this ceiling, so the assertion names this exact transition');
+-- occurred_at is now(), which is transaction-stable, so every row written by this test
+-- file shares one timestamp. The row is named by its transition, not by ordering.
+SELECT t_check('T44d the actor is the user who made the change',
+  (SELECT actor_user_id FROM team_audit_log
+    WHERE target_user_id = t_get('u3') AND action = 'discount_limit_changed'
+      AND old_values ->> 'max_discount_pct' = '15.00'
+      AND new_values ->> 'max_discount_pct' = '20.00') = t_get('u1'));
+
+-- multi-field change in ONE statement -> one row, nothing lost
+SELECT t_login('u1');
+UPDATE business_members
+SET role = 'stock_staff', branch_id = t_get('br1'), max_discount_pct = 5, is_active = false
+WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+SELECT t_logout();
+SELECT t_check('T44e a four-field update writes exactly one audit row',
+  (SELECT count(*) FROM team_audit_log
+    WHERE target_user_id = t_get('u3') AND action = 'member_updated') = 1);
+SELECT t_check('T44f that row keeps every changed field on both sides',
+  (SELECT old_values ?& ARRAY['role','branch_id','max_discount_pct','is_active']
+      AND new_values ?& ARRAY['role','branch_id','max_discount_pct','is_active']
+      AND old_values ->> 'role' = 'sales_staff' AND new_values ->> 'role' = 'stock_staff'
+      AND old_values ->> 'is_active' = 'true'  AND new_values ->> 'is_active' = 'false'
+      AND new_values ->> 'max_discount_pct' = '5.00'
+   FROM team_audit_log WHERE target_user_id = t_get('u3') AND action = 'member_updated'));
+
+-- restore u3 and check the reactivation verb
+SELECT t_login('u1');
+UPDATE business_members SET is_active = true WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+UPDATE business_members SET role = 'sales_staff', branch_id = NULL, max_discount_pct = 15
+WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+SELECT t_logout();
+SELECT t_check('T44g flipping is_active back records member_reactivated',
+  (SELECT count(*) FROM team_audit_log
+    WHERE target_user_id = t_get('u3') AND action = 'member_reactivated') = 1);
+SELECT t_sett('u3_audit_before', (SELECT count(*)::text FROM team_audit_log WHERE target_user_id = t_get('u3')));
+SELECT t_login('u1');
+UPDATE business_members SET role = role, is_active = is_active WHERE business_id = t_get('biz') AND user_id = t_get('u3');
+SELECT t_logout();
+SELECT t_check('T44h2 an update that changes nothing adds no audit row',
+  (SELECT count(*)::text FROM team_audit_log WHERE target_user_id = t_get('u3')) = t_gett('u3_audit_before'),
+  (SELECT count(*)::text FROM team_audit_log WHERE target_user_id = t_get('u3')) || ' vs ' || t_gett('u3_audit_before'));
+
+SELECT t_check('T44i no audit payload carries a secret-looking key',
+  (SELECT count(*) FROM team_audit_log
+    WHERE (old_values || new_values) ?| ARRAY['password','token','token_hash','encrypted_password']) = 0);
+
+-- who may read it
+SELECT t_login('u3');
+SELECT t_check('T44j sales_staff cannot read the team audit log',
+  t_count($q$ SELECT count(*) FROM team_audit_log $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_check('T44k stock_staff cannot read the team audit log',
+  t_count($q$ SELECT count(*) FROM team_audit_log $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T44l manager reads the team audit log',
+  t_count($q$ SELECT count(*) FROM team_audit_log WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T44m tenant B sees no TLC team audit row',
+  t_count($q$ SELECT count(*) FROM team_audit_log WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_logout();
+
+-- ============================================================
+-- T45  invitation creation  (4B)
+-- ============================================================
+SELECT t_check('T45a business_invites has RLS and no write policy',
+  (SELECT relrowsecurity FROM pg_class WHERE relname = 'business_invites')
+  AND (SELECT count(*) FROM pg_policies WHERE tablename = 'business_invites' AND cmd <> 'SELECT') = 0);
+SELECT t_check('T45b invite_status has no stored expired value (expiry is derived)',
+  (SELECT string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) FROM pg_enum e
+    JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'invite_status') = 'pending,accepted,revoked');
+-- there is no separate invite secret at all: the row id is the identifier and the
+-- confirmed-address match is the authorisation
+SELECT t_check('T45b2 business_invites stores no token or secret column',
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'business_invites'
+      AND (column_name LIKE '%token%' OR column_name LIKE '%secret%' OR column_name LIKE '%hash%')) = 0,
+  (SELECT COALESCE(string_agg(column_name, ', '), 'none') FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'business_invites'
+      AND (column_name LIKE '%token%' OR column_name LIKE '%secret%' OR column_name LIKE '%hash%')));
+SELECT t_check('T45b3 no invite token generator survives anywhere in the schema',
+  (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname IN ('fn_new_invite_token','fn_invite_token_hash')) = 0);
+
+-- explicit business context: a TLC manager may not invite into tenant B
+SELECT t_login('u2');
+SELECT t_err('T45c manager cannot invite into a business they do not belong to',
+  $q$ SELECT rpc_create_invite(t_get('bizB'), 'x@tlc.test', 'X', 'sales_staff') $q$, 'FORBIDDEN');
+SELECT t_err('T45d manager cannot create an owner invitation',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'owner.try@tlc.test', 'X', 'owner') $q$, 'FORBIDDEN');
+SELECT t_err('T45e manager cannot create a manager invitation',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'mgr.try@tlc.test', 'X', 'manager') $q$, 'FORBIDDEN');
+SELECT t_err('T45f manager cannot grant a ceiling above their own',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'high@tlc.test', 'X', 'sales_staff', NULL, 41) $q$, 'FORBIDDEN');
+SELECT t_err('T45g rejects a malformed address',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'not-an-email', 'X', 'sales_staff') $q$, 'INVALID_EMAIL');
+SELECT t_err('T45h rejects a branch from another tenant',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'br@tlc.test', 'X', 'sales_staff', t_get('brB')) $q$, 'INVALID_BRANCH');
+-- what the manager MAY do
+SELECT t_set('inv_stock', rpc_create_invite(t_get('biz'), 'NEW.Stock@TLC.test', 'Yeni Depo', 'stock_staff', t_get('br1'), 0));
+SELECT t_check('T45i manager creates a stock_staff invitation', t_get('inv_stock') IS NOT NULL);
+SELECT t_check('T45j the address is normalised in the database',
+  (SELECT count(*) FROM business_invites WHERE business_id = t_get('biz') AND email_normalized = 'new.stock@tlc.test') = 1);
+SELECT t_err('T45k a second pending invitation for the same address is refused',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'new.stock@tlc.test', 'X', 'sales_staff') $q$, 'INVITE_ALREADY_PENDING');
+-- the delivery address is resolved by the database, never supplied by the client
+SELECT t_check('T45k2 delivery target is server-resolved from the invitation row',
+  (SELECT email FROM rpc_invite_delivery_target(t_get('inv_stock'))) = 'new.stock@tlc.test');
+SELECT t_logout();
+
+-- sales_staff has no invitation power at all
+SELECT t_login('u3');
+SELECT t_err('T45l sales_staff cannot invite',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'nope@tlc.test', 'X', 'sales_staff') $q$, 'FORBIDDEN');
+SELECT t_err('T45l2 sales_staff cannot resolve a delivery address',
+  $q$ SELECT email FROM rpc_invite_delivery_target(t_get('inv_stock')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- owner may invite every role
+SELECT t_login('u1');
+SELECT t_set('inv_sales', rpc_create_invite(t_get('biz'), 'new.sales@tlc.test', 'Yeni Satis', 'sales_staff', NULL, 10));
+SELECT t_ok('T45m owner may create a manager invitation',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'mgr@tlc.test', 'Yeni Yonetici', 'manager') $q$);
+SELECT t_set('inv_owner', rpc_create_invite(t_get('biz'), 'owner2@tlc.test', 'Ikinci Sahip', 'owner'));
+SELECT t_check('T45n owner may create an owner invitation', t_get('inv_owner') IS NOT NULL);
+-- an invitation is never a second way onto an existing member
+SELECT t_err('T45o inviting an active member is refused',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'sales@tlc.test', 'X', 'owner') $q$, 'ALREADY_MEMBER');
+SELECT t_logout();
+
+-- a manager may not touch an invitation they could not have created
+SELECT t_login('u2');
+SELECT t_err('T45o2 manager cannot resolve the delivery address of an owner invitation',
+  $q$ SELECT email FROM rpc_invite_delivery_target(t_get('inv_owner')) $q$, 'FORBIDDEN');
+SELECT t_err('T45o3 manager cannot revoke an owner invitation',
+  $q$ SELECT rpc_revoke_invite(t_get('inv_owner')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- an inactive member must be reactivated, not re-invited
+SELECT t_login('u1');
+UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u4');
+SELECT t_err('T45p inviting an inactive member points to reactivation',
+  $q$ SELECT rpc_create_invite(t_get('biz'), 'stock@tlc.test', 'X', 'stock_staff') $q$, 'MEMBER_INACTIVE_USE_REACTIVATE');
+UPDATE business_members SET is_active = true WHERE business_id = t_get('biz') AND user_id = t_get('u4');
+SELECT t_logout();
+
+-- the same address may be invited by a different tenant at the same time
+SELECT t_login('u5');
+SELECT t_set('inv_b_stock', rpc_create_invite(t_get('bizB'), 'new.stock@tlc.test', 'X', 'sales_staff'));
+SELECT t_check('T45q another tenant may invite the same address', t_get('inv_b_stock') IS NOT NULL);
+SELECT t_logout();
+
+-- a suspended tenant cannot invite
+UPDATE businesses SET status = 'suspended' WHERE id = t_get('bizC');
+SELECT t_login('u9');
+SELECT t_err('T45r a suspended tenant cannot invite',
+  $q$ SELECT rpc_create_invite(t_get('bizC'), 'x@onb.test', 'X', 'sales_staff') $q$, 'BUSINESS_SUSPENDED');
+SELECT t_logout();
+UPDATE businesses SET status = 'active' WHERE id = t_get('bizC');
+
+-- nothing about the invitation leaks into the Auth account's metadata
+SELECT t_check('T45s no invite secret reaches auth user metadata',
+  (SELECT count(*) FROM auth.users
+    WHERE raw_user_meta_data::text ILIKE '%invite%' OR raw_app_meta_data::text ILIKE '%invite%') = 0);
+SELECT t_check('T45s2 no invitation id was copied into auth user metadata',
+  (SELECT count(*) FROM auth.users u JOIN business_invites i ON true
+    WHERE u.raw_user_meta_data::text LIKE '%' || i.id::text || '%') = 0);
+SELECT t_check('T45t creating an invitation writes an audit row without the address',
+  (SELECT count(*) FROM team_audit_log
+    WHERE action = 'invite_created' AND target_invite_id = t_get('inv_sales')
+      AND NOT ((old_values || new_values) ?| ARRAY['email','email_normalized','token'])) = 1);
+
+-- ============================================================
+-- T46  invitation acceptance  (4B)
+-- ============================================================
+-- u6 is new.sales@tlc.test and is not a member of TLC
+SELECT t_check('T46a the invited person is not a member yet',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u6')) = 0);
+
+-- knowing the id is not enough: the confirmed address has to match
+SELECT t_login('u7');
+SELECT t_err('T46b the invitation id alone does not let another account claim it',
+  $q$ SELECT * FROM rpc_accept_invite(t_get('inv_sales')) $q$, 'INVITE_EMAIL_MISMATCH');
+SELECT t_logout();
+
+SELECT t_login('u6');
+SELECT t_err('T46c an unknown invitation id is rejected',
+  $q$ SELECT * FROM rpc_accept_invite(gen_random_uuid()) $q$, 'INVITE_NOT_FOUND');
+SELECT t_check('T46d the right person accepts',
+  (SELECT already_member FROM rpc_accept_invite(t_get('inv_sales'))) = false);
+SELECT t_logout();
+SELECT t_check('T46e membership was created from the invitation, not from the client',
+  (SELECT role = 'sales_staff' AND max_discount_pct = 10 AND is_active
+   FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u6')));
+SELECT t_check('T46f the invitation is now accepted and attributed',
+  (SELECT status = 'accepted' AND accepted_by = t_get('u6') AND accepted_at IS NOT NULL
+   FROM business_invites WHERE id = t_get('inv_sales')));
+SELECT t_check('T46g a blank display name was filled from the invitation',
+  (SELECT full_name FROM profiles WHERE id = t_get('u6')) = 'Yeni Satis');
+SELECT t_check('T46h acceptance was audited',
+  (SELECT count(*) FROM team_audit_log WHERE action = 'invite_accepted' AND target_invite_id = t_get('inv_sales')) = 1);
+
+-- true idempotency: the same link, the same person, twice
+SELECT t_login('u6');
+SELECT t_check('T46i opening the same link again succeeds as a no-op',
+  (SELECT already_member FROM rpc_accept_invite(t_get('inv_sales'))) = true);
+SELECT t_logout();
+SELECT t_check('T46j and produces no second membership',
+  (SELECT count(*) FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u6')) = 1);
+SELECT t_check('T46k and no second acceptance audit row',
+  (SELECT count(*) FROM team_audit_log WHERE action = 'invite_accepted' AND target_invite_id = t_get('inv_sales')) = 1);
+
+-- somebody else cannot reuse an accepted invitation
+SELECT t_login('u7');
+SELECT t_err('T46l a different person cannot reuse an accepted invitation',
+  $q$ SELECT * FROM rpc_accept_invite(t_get('inv_sales')) $q$, 'INVITE_EMAIL_MISMATCH');
+SELECT t_logout();
+
+-- revoked
+SELECT t_login('u2');
+SELECT t_ok('T46m manager revokes the invitation they created',
+  $q$ SELECT rpc_revoke_invite(t_get('inv_stock')) $q$);
+SELECT t_logout();
+SELECT t_login('u7');
+SELECT t_err('T46n a revoked invitation cannot be accepted',
+  $q$ SELECT * FROM rpc_accept_invite(t_get('inv_stock')) $q$, 'INVITE_REVOKED');
+SELECT t_logout();
+
+-- expired
+SELECT t_login('u1');
+SELECT t_set('inv_exp', rpc_create_invite(t_get('biz'), 'expired@tlc.test', 'Suresi Dolan', 'sales_staff'));
+SELECT t_logout();
+UPDATE business_invites SET expires_at = now() - interval '1 day' WHERE id = t_get('inv_exp');
+SELECT t_check('T46o an out-of-date pending invitation reads as expired',
+  (SELECT fn_invite_effective_status(status, expires_at) FROM business_invites WHERE id = t_get('inv_exp')) = 'expired');
+SELECT t_check('T46p but is still stored as pending (no scheduler needed)',
+  (SELECT status FROM business_invites WHERE id = t_get('inv_exp')) = 'pending');
+
+-- unconfirmed address cannot claim a seat
+UPDATE auth.users SET email_confirmed_at = NULL WHERE id = t_get('u7');
+SELECT t_login('u1');
+SELECT t_set('inv_u7', rpc_create_invite(t_get('biz'), 'new.stock@tlc.test', 'Depo', 'stock_staff'));
+SELECT t_logout();
+SELECT t_login('u7');
+SELECT t_err('T46q an unconfirmed address cannot accept',
+  $q$ SELECT * FROM rpc_accept_invite(t_get('inv_u7')) $q$, 'EMAIL_NOT_CONFIRMED');
+SELECT t_logout();
+UPDATE auth.users SET email_confirmed_at = now() WHERE id = t_get('u7');
+
+-- an existing Auth user joining a SECOND tenant
+SELECT t_login('u5');
+SELECT t_set('inv_second', rpc_create_invite(t_get('bizB'), 'new.sales@tlc.test', 'Ikinci Tenant', 'manager'));
+SELECT t_logout();
+SELECT t_login('u6');
+SELECT t_check('T46r an existing account joins a second tenant',
+  (SELECT business_id FROM rpc_accept_invite(t_get('inv_second'))) = t_get('bizB'));
+SELECT t_logout();
+SELECT t_check('T46s the person now holds two memberships',
+  (SELECT count(*) FROM business_members WHERE user_id = t_get('u6')) = 2);
+SELECT t_check('T46t the existing display name was not overwritten',
+  (SELECT full_name FROM profiles WHERE id = t_get('u6')) = 'Yeni Satis');
+
+-- accepting into a suspended tenant is refused
+UPDATE businesses SET status = 'suspended' WHERE id = t_get('bizB');
+SELECT t_login('u7');
+SELECT t_err('T46u a suspended tenant cannot take on a new member',
+  $q$ SELECT * FROM rpc_accept_invite(t_get('inv_b_stock')) $q$, 'BUSINESS_SUSPENDED');
+SELECT t_logout();
+UPDATE businesses SET status = 'active' WHERE id = t_get('bizB');
+SELECT t_login('u7');
+SELECT t_check('T46v and works once the tenant is active again',
+  (SELECT business_id FROM rpc_accept_invite(t_get('inv_b_stock'))) = t_get('bizB'));
+SELECT t_logout();
+
+-- ============================================================
+-- T47  deactivation removes access  (4A/3.5 interaction)
+-- ============================================================
+SELECT t_login('u6');
+SELECT t_check('T47a the new member can read the catalogue',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) > 0);
+SELECT t_logout();
+
+SELECT t_login('u1');
+UPDATE business_members SET is_active = false WHERE business_id = t_get('biz') AND user_id = t_get('u6');
+SELECT t_logout();
+
+SELECT t_login('u6');
+SELECT t_check('T47b a deactivated member is no longer a member',
+  NOT (SELECT fn_is_member(t_get('biz'))));
+SELECT t_check('T47c a deactivated member reads no tenant data',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_check('T47d and the tenant is gone from their business list',
+  NOT (t_get('biz') = ANY(SELECT unnest(fn_my_business_ids()))));
+SELECT t_err('T47e a deactivated member cannot use a tenant RPC',
+  $q$ SELECT rpc_create_goods_receipt(t_get('br1'), t_get('sup1')) $q$, 'FORBIDDEN');
+SELECT t_check('T47f but their other tenant still works',
+  (SELECT fn_is_member(t_get('bizB'))));
+SELECT t_logout();
+
+SELECT t_login('u1');
+UPDATE business_members SET is_active = true WHERE business_id = t_get('biz') AND user_id = t_get('u6');
+SELECT t_logout();
+SELECT t_login('u6');
+SELECT t_check('T47g reactivation restores access', (SELECT fn_is_member(t_get('biz'))));
+SELECT t_logout();
+
+-- 3.5 invariants still hold after the Phase 4 trigger was added
+SELECT t_err_deferred('T47h the last-owner rule still holds',
+  $q$ DELETE FROM business_members WHERE business_id = t_get('biz') AND user_id = t_get('u1') $q$, 'LAST_OWNER');
+SELECT t_login('u2');
+SELECT t_check('T47i manager still cannot escalate themselves',
+  t_count($q$ WITH u AS (UPDATE business_members SET role = 'owner' WHERE business_id = t_get('biz') AND user_id = t_get('u2') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+
+-- ============================================================
+-- T48  team directory and manage-authority  (4C)
+-- ============================================================
+SELECT t_login('u1');
+SELECT t_check('T48a owner reads the directory with addresses',
+  t_count($q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) WHERE email IS NOT NULL $q$) =
+  t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$));
+SELECT t_check('T48b the directory returns only this tenant',
+  t_count($q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) d
+             WHERE NOT EXISTS (SELECT 1 FROM business_members m
+                               WHERE m.business_id = t_get('biz') AND m.user_id = d.user_id) $q$) = 0);
+SELECT t_check('T48c the caller is flagged in their own row',
+  t_count($q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) WHERE is_self $q$) = 1);
+SELECT t_check('T48d the invitation list resolves derived status',
+  t_count($q$ SELECT count(*) FROM rpc_list_invites(t_get('biz')) WHERE status = 'expired' $q$) = 1);
+SELECT t_logout();
+
+SELECT t_login('u2');
+SELECT t_check('T48e manager reads the directory',
+  t_count($q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) $q$) > 0);
+SELECT t_check('T48f manager sees an owner invitation but gets no actions on it',
+  t_count($q$ SELECT count(*) FROM rpc_list_invites(t_get('biz')) WHERE role = 'owner' AND NOT can_manage $q$) = 1);
+SELECT t_logout();
+
+SELECT t_login('u3');
+SELECT t_err('T48g sales_staff cannot read the team directory',
+  $q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_err('T48h sales_staff cannot read the invitation list',
+  $q$ SELECT count(*) FROM rpc_list_invites(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T48i stock_staff cannot read the team directory',
+  $q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+SELECT t_login('u5');
+SELECT t_err('T48j another tenant cannot read this directory',
+  $q$ SELECT count(*) FROM rpc_list_team(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- manage authority (drives the password-reset action, not UI hiding)
+SELECT t_login('u1');
+SELECT t_check('T48k owner may act on a sales_staff member', (SELECT fn_can_manage_member(t_get('biz'), t_get('u3'))));
+SELECT t_check('T48l owner may act on a manager', (SELECT fn_can_manage_member(t_get('biz'), t_get('u2'))));
+SELECT t_check('T48m owner may not act on a non-member', NOT (SELECT fn_can_manage_member(t_get('biz'), t_get('u5'))));
+SELECT t_check('T48n owner may not act across tenants', NOT (SELECT fn_can_manage_member(t_get('bizB'), t_get('u5'))));
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T48o manager may act on a sales_staff member', (SELECT fn_can_manage_member(t_get('biz'), t_get('u3'))));
+SELECT t_check('T48p manager may act on a stock_staff member', (SELECT fn_can_manage_member(t_get('biz'), t_get('u4'))));
+SELECT t_check('T48q manager may NOT act on the owner', NOT (SELECT fn_can_manage_member(t_get('biz'), t_get('u1'))));
+SELECT t_check('T48r manager may NOT act on another manager', NOT (SELECT fn_can_manage_member(t_get('biz'), t_get('u2'))));
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T48s sales_staff may act on nobody', NOT (SELECT fn_can_manage_member(t_get('biz'), t_get('u4'))));
+SELECT t_logout();
+
+-- the reset action resolves its target address in the database, never from the client
+SELECT t_login('u1');
+SELECT t_check('T48t owner resolves a reset address for their own member',
+  (SELECT rpc_reset_target_email(t_get('biz'), t_get('u3'))) = 'sales@tlc.test');
+SELECT t_err('T48u owner cannot resolve an address across tenants',
+  $q$ SELECT rpc_reset_target_email(t_get('bizB'), t_get('u5')) $q$, 'FORBIDDEN');
+SELECT t_err('T48v owner cannot resolve an address for a non-member',
+  $q$ SELECT rpc_reset_target_email(t_get('biz'), t_get('u5')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T48w manager resolves a subordinate address',
+  (SELECT rpc_reset_target_email(t_get('biz'), t_get('u3'))) = 'sales@tlc.test');
+SELECT t_err('T48x manager cannot resolve the owner address',
+  $q$ SELECT rpc_reset_target_email(t_get('biz'), t_get('u1')) $q$, 'FORBIDDEN');
+SELECT t_err('T48y manager cannot resolve another manager address',
+  $q$ SELECT rpc_reset_target_email(t_get('biz'), t_get('u2')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T48z sales_staff cannot resolve any reset address',
+  $q$ SELECT rpc_reset_target_email(t_get('biz'), t_get('u4')) $q$, 'FORBIDDEN');
+SELECT t_logout();
 
 -- ============================================================
 -- SUMMARY

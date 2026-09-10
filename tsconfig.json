@@ -6,6 +6,9 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // tests/redirect runs under plain Node with type stripping, which requires the
+    // explicit .ts extension in its import. Safe here because we only ever type-check.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
