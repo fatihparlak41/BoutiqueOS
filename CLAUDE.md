@@ -30,7 +30,9 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Faz 3.5 — tenant/platform sertleştirme (`phase35a–g`) | **APPLIED** — DEV'de kayıtlı |
 | Faz 4 — Ekip & Kimlik (`phase4a–d`, davet / magic link / parola kurtarma / ekip dizini / audit) | **DEPLOYED TO DEV** (2026-09-14) — Case A/B/C e-posta E2E PASS, sales_staff + stock_staff yetki smoke PASS, fixture'lar `cancelled` |
 | Faz 4 — bilinen upstream olay | Supabase `POST /auth/v1/recover` aralıklı **525** ve taze JWT'de PostgREST **PGRST303** "JWT issued at future" — uygulama tarafında tek 525 retry + `/auth/session-ready` bekleme odası; **upstream'de düzeltilmiş değil**, `docs/13` support notu gönderilmedi |
-| Faz 5+ (Kasa, Satış, Raporlar…) | **Başlamadı** — READY FOR DESIGN SYSTEM |
+| Faz 5A/5B — tasarım sistemi + auth deneyimi | **DEPLOYED** (2026-09-14) — token katmanı, shell, auth shell |
+| Faz 6A — moda ürün ana verisi (`20260914130000_phase6a_product_master`) | **DEPLOYED TO DEV** (2026-09-14) — style_code, seçenek türü/renk metadata, matris RPC, barkod çözümleme, görsel rolleri + özel bucket + storage RLS; fresh-DB 576/0, canlı API/RPC/Storage smoke PASS (fixture C cancelled); **UI tıklama smoke'u ve 390/768/1440 görsel QA tarayıcı otomasyonu düştüğü için yapılmadı** |
+| Faz 6B+ (gerçek fatura satırı içe aktarma, landed cost, PO, POS) | **Başlamadı** — 6A incelemesi bekliyor |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
 Auth e-posta/dashboard sözleşmesi: `docs/12_AUTH_DELIVERY_CONFIG.md`. Supabase olay notu: `docs/13_SUPABASE_525_INCIDENT_NOTE.md`.
@@ -39,8 +41,8 @@ Auth e-posta/dashboard sözleşmesi: `docs/12_AUTH_DELIVERY_CONFIG.md`. Supabase
 
 ## Değiştirilmesi YASAK olanlar
 
-1. **Uygulanmış migration'lar.** `supabase/migrations/20260908000001–04` remote'ta kayıtlı; yerinde
-   düzenlenmez. Her şema/RPC değişikliği yeni timestamp'li dosyayla gider (`20260908000005_*.sql`).
+1. **Uygulanmış migration'lar.** `supabase/migrations/20260908000001` … `20260914130000` remote'ta kayıtlı; yerinde
+   düzenlenmez. Her şema/RPC değişikliği yeni timestamp'li dosyayla gider.
 2. **RLS politikaları ve SECURITY DEFINER fonksiyonları.** Frontend'i kolaylaştırmak için gevşetilmez.
    Frontend/backend uyumsuzluğu bulursan **dur ve raporla**, RLS'i baypas eden bir yol yazma.
 3. **Service-role anahtarı.** Frontend'e, `.env.local`'e, repoya asla girmez. Yalnız `NEXT_PUBLIC_SUPABASE_URL`
@@ -73,7 +75,8 @@ Statik ön kontrol (hızlı): `python tools\lint_sql.py .` → INSERT kolonları
 fonksiyon imzaları, `RAISE` placeholder/argüman sayısı.
 
 Yerel PostgreSQL: port 5433, `.pgdata`, DB `boutiqueos_test`. Cluster kapalıysa
-`.\scripts\db_fresh.ps1 -Init`.
+`.\scripts\db_fresh.ps1 -Init`. Harness `auth` ve `storage` (buckets/objects/foldername) şemalarını shim'ler;
+storage RLS politikaları yerelde de test edilir. Beklenen sayım: **576**.
 
 ## Frontend gate'i (her bağımlılık/kod değişikliğinde)
 
@@ -101,6 +104,7 @@ ardından `npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next pos
 - Taze JWT: `loadMemberships` PGRST303 / "JWT issued at future" alırsa **fırlatmaz**, `/auth/session-ready?next=…` (allowlist: `/app`, `/select-business`)
   bekleme odasına yönlendirir; oda salt-okuma probe'u 0/1/2/4/8 s çizelgesiyle yoklar. Başka hiçbir hata yeniden denenmez.
 - `/sifre-sifirla` sonucu operatöre `[auth] password reset delivery failed|recovered …` server logu olarak gider; ziyaretçi her durumda aynı generic metni görür; yalnız HTTP 525 bir kez yeniden denenir.
+- Ürün ana verisi (Faz 6A): `sku` DB'de zorunlu kalır (POS/mal kabul/stok ona dayanır), UI ön ek + değer kodlarından türetir. `style_code` tekil **değildir** (uyarı). Seçenekler işletme geneli; `kind` yalnız UX ipucu. `color_hex` görünüm içindir, kimlik değildir. Matris `rpc_generate_variants` ile tek transaction (idempotent). Görseller özel `product-images` bucket'ında `business/<id>/products/<pid>/<uuid>.<ext>`; okuma yalnız imzalı URL (60 dk), yazma manager+; storage RLS `fn_storage_business_id` ile yol segmentini okur. Ürün/varyant **silinmez**, arşivlenir (history FK'ları RESTRICT).
 - Tenant çözümlemesi yalnız sunucuda (`lib/tenant.ts`): `business_members` (aktif) → `businesses` →
   `branches`. 0 üyelik → `/no-access`, 1 → otomatik, çok → `/select-business`. Cookie yalnız *tercih*
   taşır ve her istekte PostgreSQL'e karşı yeniden doğrulanır.

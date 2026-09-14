@@ -60,3 +60,12 @@ endpoint.
 
 **Ask:** please inspect edge ↔ origin TLS handshake failures for this project in the two
 windows above (±2 minutes).
+
+## Addendum — 2026-09-14 ~13:35–13:40 UTC
+
+Right after a magic-link session was established (`POST /auth/v1/verify`), the first
+requests to `/app` and `/app/urunler` returned 500 twice within a few minutes, then the same
+session returned 200 for every page. One `POST /auth/v1/verify` round trip exceeded 30 s in
+the same window. Consistent with the fresh-token / Auth latency pattern above; not reproduced
+afterwards.
+

@@ -297,6 +297,38 @@ item 0), cost pool 8 adet / 3.260 TRY, tedarikçi borcu 3.260 TRY, son `updated_
 
 redirect 25 · reset 108 · jwt-skew 27 · recovery 30 · session-ready 62 — tümü PASS. SQL tarafı `db_fresh` 508/508.
 
+## 13. Faz 6A — Moda ürün ana verisi (2026-09-14)
+
+### Şema denetimi → karar
+
+| Alan | CURRENT | REQUIRED | Uygulanan |
+|---|---|---|---|
+| Ürün | `sku_prefix` zorunlu, model kodu yok | isteğe bağlı model/stil kodu, tekil değil | `products.style_code` (index, uyarı; constraint yok) |
+| Seçenekler | tenant-geneli `product_options`/`option_values`, metadata yok | renk/beden türü, sıralama, kısa kod, swatch | `product_options.kind`, `option_values.code/color_hex`; `sort_order` zaten vardı |
+| Varyant | `sku` zorunlu, aktif kombinasyon tekilliği (fingerprint) | matris üretimi, tekrar üretmede tekrarsızlık | `rpc_generate_variants` (atomik, idempotent, 500 üst sınır); `sku` DB'de zorunlu kalır, UI türetir |
+| Barkod | `(business_id, barcode)` tekil, internal/supplier, primary | çoklu kod, tenant-güvenli çözümleme | `rpc_resolve_barcode` (üyelik zorunlu, barkod → SKU fallback) |
+| Görsel | `product_images.url` zorunlu, rol/depolama yok, bucket yok | roller, özel bucket, tenant RLS, tür/boyut doğrulama | rol enum, `storage_path/mime/byte_size/…`, `product-images` bucket (5 MB, jpeg/png/webp), `storage.objects` politikaları, tek ana görsel (partial unique), `rpc_set_main_image` |
+| Silme | envanter/satış FK'ları RESTRICT | history'li kayıt asla silinmez | doğrulandı (T60bj/bk); UI arşivler; history'siz ürünü owner API'den silebilir (RLS `FOR ALL`, UI'da silme yok) |
+
+Migration eklemelidir; geri alma: politikalar, RPC'ler, index'ler, kolonlar, enum'lar, bucket satırı ters sırayla düşürülür; önceki veri etkilenmez.
+
+### Testler
+`tests/005` T60a–T60bp (**68** yeni; toplam **576/0**), concurrency PASS. Harness'a `storage` shim'i eklendi.
+Kapsam: seçenek metadata (geçersiz hex red), style_code çoğaltma (uyarı), matris 2×3 / idempotent / aynı seçenekten iki değer red / yabancı değer red / tek beden / boş matris, barkod (alternatif kod, SKU fallback, bilinmeyen, başka tenant red, aynı kod iki tenant'ta), görsel kısıtları ve RLS (sales_staff ve diğer tenant red), storage RLS (kendi yol OK, başka tenant yolu / gevşek yol red, çapraz okuma/silme 0 satır, staff yükleyemez), `business_id` yeniden yazma nötr, arşiv semantiği, tenant izolasyonu.
+
+### Canlı DEV smoke (fixture tenant `ZZ E2E PRODUCT TEST C`, alias hesabı owner; sonra audited RPC ile `cancelled`)
+API/RPC/Storage düzeyi (gerçek alias JWT, RLS altında): ürün + model kodu, çoğaltma uyarısı, seçenekler/değerler, 2×3 matris → 6, yeniden çalıştırma → 0, tek beden → 1, yalnız renk → 2, EAN + eski etiket + iç barkod (`ZZE2EC2026000001`) çözümleme, TLC'de çözümleme red, storage yükleme + imzalı URL + dosya servisi, varyant görseli, ikinci ana görsel red, ana görsel takası, GIF red, XL ekleme → 2 yeni/1 mevcut, arşivli kombinasyonun yeniden açılması, ürün arşivi, çapraz tenant (TLC ürün/görsel görünmez, TLC yoluna yükleme/imzalama red, yabancı varyant bağlama red) — **46/46**. Sayfa render'ları (cookie'li HTTP): liste (thumbnail, model kodu, barkod arama), ürün sayfası (matris, özet, görseller, benzer ürün uyarısı, maliyet yok), TLC ürünü 404, yeni ürün stepper — **8/8**.
+
+**Yapılamayan:** tarayıcı otomasyonu (claude-in-chrome) bu turda navigasyonu uygulamadığı için UI formlarına tıklama smoke'u ve 390/768/1440 görsel QA **yapılmadı**; bileşenler 5A'da doğrulanan responsive primitives (TableShell/Card/FilterBar) üzerine kurulu. Manuel tur önerilir.
+
+**Gözlem:** taze oturumun ilk saniyelerinde `/app*` iki kez 500 döndü, ardından aynı oturumla 200 (upstream taze-JWT/Auth gecikmesiyle uyumlu; `/auth/confirm` bir kez 30 sn'yi aştı). Vercel loglarında 13:3x UTC penceresi incelenmeli; `docs/13` notuna eklendi.
+
+### TLC
+Dokunulmadı: 3 owner, 1 ürün / 2 varyant / 0 görsel, mal kabul 1 posted / 5 cancelled / 9 draft, draft item 0, pool 8 / 3.260, borç 3.260, son güncelleme 2026-09-09.
+
+### Ertelenen
+Tek başına çoklu ürün tablosu için stok özeti (liste), etiket görselinin mal kabul akışıyla bağlanması (`receiving_proof` modellendi, UI yok), stock_staff görsel yükleme (manager+ tutuldu), görsel boyut/oran otomatik okuma (`width/height` kolonları boş), fuzzy ad benzerliği (yalnız ön ek ilike), varyant başına stok özeti çok şubede.
+
 ### Frontend bağımlılık taban çizgisi (Faz 1)
 
 Next 15.5.25 · React 19.0.0 · Tailwind 3.4.17 · `@supabase/supabase-js ^2.116.0` · `@supabase/ssr 0.12.6` ·
