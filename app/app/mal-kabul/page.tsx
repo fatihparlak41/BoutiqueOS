@@ -138,9 +138,9 @@ export default async function ReceiptsPage({
                     </Link>
                   </CellTitle>
                 </TD>
-                <TD muted numeric>{formatDate(receipt.received_at)}</TD>
+                <TD muted numeric nowrap>{formatDate(receipt.received_at)}</TD>
                 <TD muted>{receipt.supplier_name}</TD>
-                <TD muted>{receipt.branch_name}</TD>
+                <TD muted nowrap>{receipt.branch_name}</TD>
                 <TD muted numeric align="right">{receipt.line_count}</TD>
                 <TD muted numeric align="right">{formatQuantity(receipt.total_quantity)}</TD>
                 <TD muted numeric align="right">{formatMoney(receipt.total_original, receipt.invoice_currency)}</TD>

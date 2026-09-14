@@ -129,7 +129,7 @@ export default async function ProductsPage({
         )
       ) : (
         <TableShell
-          minWidth="46rem"
+          minWidth="42rem"
           footer={`${products.length} ürün listeleniyor${products.length === 200 ? " (ilk 200)" : ""}.`}
         >
           <THead>

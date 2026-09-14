@@ -44,7 +44,7 @@ export function Sheet({
       }}
       className={cn(
         "m-0 h-dvh max-h-dvh w-[min(20rem,88vw)] max-w-none bg-surface p-0 text-text-primary shadow-md",
-        "border-border backdrop:bg-transparent",
+        "border-border",
         side === "left" ? "mr-auto border-r" : "ml-auto border-l",
         className,
       )}

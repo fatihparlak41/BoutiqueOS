@@ -72,12 +72,15 @@ export function TD({
   align = "left",
   numeric = false,
   muted = false,
+  nowrap = false,
   className,
 }: {
   children?: React.ReactNode;
   align?: "left" | "right";
   numeric?: boolean;
   muted?: boolean;
+  /** Dates, codes and short names that must not break into two lines. */
+  nowrap?: boolean;
   className?: string;
 }) {
   return (
@@ -85,6 +88,7 @@ export function TD({
       className={cn(
         "py-2.5 pr-4 last:pr-0",
         align === "right" && "text-right",
+        nowrap && "whitespace-nowrap",
         muted ? "text-text-secondary" : "text-text-primary",
         className,
       )}

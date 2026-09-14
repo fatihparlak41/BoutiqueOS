@@ -130,7 +130,7 @@ export default async function AppHomePage() {
                       {receipt.receipt_number}
                     </Link>
                   </TD>
-                  <TD muted numeric>{formatDate(receipt.received_at)}</TD>
+                  <TD muted numeric nowrap>{formatDate(receipt.received_at)}</TD>
                   <TD muted>{receipt.supplier_name}</TD>
                   <TD muted numeric align="right">{formatQuantity(receipt.total_quantity)}</TD>
                   <TD><ReceiptStatusPill status={receipt.status} /></TD>

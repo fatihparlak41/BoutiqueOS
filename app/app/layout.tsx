@@ -29,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* desktop rail */}
       <aside className="hidden border-r border-border bg-background lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col">
         <div className="px-5 pb-5 pt-6">
-          <Wordmark className="text-lg" />
+          <Wordmark className="text-xl" />
         </div>
         <div className="px-5 pb-6">{plate}</div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
