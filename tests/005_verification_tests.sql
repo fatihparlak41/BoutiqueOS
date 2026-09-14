@@ -2040,6 +2040,74 @@ SELECT t_check('T60bp tenant B sees none of tenant A products / variants / value
 SELECT t_logout();
 
 -- ============================================================
+-- T61 — archive-only lifecycle: tenant roles cannot DELETE products / variants
+-- ============================================================
+-- fresh, history-less fixtures in tenant A
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Silinemez Elbise', 'SLN', 900, 'active') RETURNING id)
+  SELECT t_set('p61', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p61'), 'SLN-STD') RETURNING id) SELECT t_set('v61', id) FROM x;
+
+SELECT t_check('T61 privilege: authenticated has no DELETE on products / product_variants',
+  NOT has_table_privilege('authenticated', 'products', 'DELETE') AND NOT has_table_privilege('authenticated', 'product_variants', 'DELETE')
+  AND NOT has_table_privilege('anon', 'products', 'DELETE'));
+SELECT t_check('T61 no DELETE policy exists on products / product_variants',
+  t_count($q$ SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('products','product_variants') AND cmd IN ('DELETE','ALL') $q$) = 0);
+
+SELECT t_login('u1');
+SELECT t_err('T61a owner cannot DELETE a history-less product', $q$ DELETE FROM products WHERE id = t_get('p61') $q$, '42501');
+SELECT t_err('T61e owner cannot DELETE a history-less variant', $q$ DELETE FROM product_variants WHERE id = t_get('v61') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_err('T61b manager cannot DELETE a history-less product', $q$ DELETE FROM products WHERE id = t_get('p61') $q$, '42501');
+SELECT t_err('T61f manager cannot DELETE a variant', $q$ DELETE FROM product_variants WHERE id = t_get('v61') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T61c stock_staff cannot DELETE a product', $q$ DELETE FROM products WHERE id = t_get('p61') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T61d sales_staff cannot DELETE a product', $q$ DELETE FROM products WHERE id = t_get('p61') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T61 other tenant cannot DELETE either', $q$ DELETE FROM products WHERE id = t_get('p61') $q$, '42501');
+SELECT t_check('T61 other tenant still cannot read it', t_count($q$ SELECT count(*) FROM products WHERE id = t_get('p61') $q$) = 0);
+SELECT t_logout();
+SELECT t_check('T61 rows survived every attempt',
+  t_count($q$ SELECT count(*) FROM products WHERE id = t_get('p61') $q$) = 1 AND t_count($q$ SELECT count(*) FROM product_variants WHERE id = t_get('v61') $q$) = 1);
+
+-- lifecycle still works
+SELECT t_login('u1');
+SELECT t_ok('T61g archive product', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p61') $q$);
+SELECT t_check('T61g archived', (SELECT status::text FROM products WHERE id = t_get('p61')) = 'archived');
+SELECT t_ok('T61h restore archived product', $q$ UPDATE products SET status = 'active' WHERE id = t_get('p61') $q$);
+SELECT t_check('T61h active again', (SELECT status::text FROM products WHERE id = t_get('p61')) = 'active');
+SELECT t_ok('T61i deactivate (archive) variant', $q$ UPDATE product_variants SET status = 'archived' WHERE id = t_get('v61') $q$);
+SELECT t_check('T61i variant archived', (SELECT status::text FROM product_variants WHERE id = t_get('v61')) = 'archived');
+SELECT t_ok('T61 manager+ can still insert products', $q$ INSERT INTO products (business_id, name, sku_prefix, default_sale_price) VALUES (t_get('biz'), 'Yeni Model', 'YNM', 100) $q$);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T61 sales_staff still cannot update a product (0 rows)',
+  t_count($q$ WITH u AS (UPDATE products SET name = 'x' WHERE id = t_get('p61') RETURNING id) SELECT count(*) FROM u $q$) = 0
+  AND (SELECT name FROM products WHERE id = t_get('p61')) = 'Silinemez Elbise');
+SELECT t_logout();
+
+-- child objects keep their intended semantics
+SELECT t_login('u4');
+SELECT t_ok('T61 stock_staff may still remove a wrong barcode label', $q$ INSERT INTO barcodes (variant_id, barcode) VALUES (t_get('v61'), 'WRONG-LABEL-61') $q$);
+SELECT t_check('T61 …and the delete actually removes it',
+  t_count($q$ WITH d AS (DELETE FROM barcodes WHERE barcode = 'WRONG-LABEL-61' RETURNING id) SELECT count(*) FROM d $q$) = 1);
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_ok('T61 manager may still remove a product image', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p61'), 'product_gallery', 'business/' || t_get('biz') || '/products/' || t_get('p61') || '/g.jpg') $q$);
+SELECT t_check('T61 …and the image delete removes it',
+  t_count($q$ WITH d AS (DELETE FROM product_images WHERE product_id = t_get('p61') RETURNING id) SELECT count(*) FROM d $q$) = 1);
+SELECT t_logout();
+
+-- J) history protections intact (FK RESTRICT still guards maintenance deletes too)
+SELECT t_err('T61j history-bearing variant still undeletable even for maintenance', $q$ DELETE FROM product_variants WHERE id = t_get('v1') $q$, '23503');
+SELECT t_err('T61j history-bearing product still undeletable even for maintenance', $q$ DELETE FROM products WHERE id = t_get('p1') $q$, '23503');
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$
