@@ -222,15 +222,80 @@ R-1, R-3, R-4, R-5, R-6, R-7 üretim kodu defektleridir; R-2, R-8 test, R-9 tool
 | Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** — manuel DEV smoke 2026-09-09'da PASS |
 | Frontend Faz 3 — tedarikçiler + mal kabul + stok | **VERIFIED** — TRY manuel DEV smoke 2026-09-09'da PASS |
 | Faz 3 — non-TRY FX manuel smoke | **DEFERRED** — DEV'de kullanılabilir FX kaydı yok |
-| Faz 3 — sales_staff manuel rol smoke | **DEFERRED** — ikinci hesap yok |
-| Gerçek cross-tenant manuel test | **DEFERRED** — ikinci işletme + kullanıcı gerekiyor |
+| Faz 3 — sales_staff rol smoke | **VERIFIED** (2026-09-14) — bkz. §12 |
+| Gerçek cross-tenant test | **VERIFIED** (2026-09-14) — bkz. §12 |
 | GAP-1 `rpc_create_goods_receipt` (20260909062632) | **APPLIED** — remote'ta kayıtlı, local/remote eşleşiyor |
-| Faz 4+ (Kasa, Satış, Raporlar…) | **READY FOR PHASE 4 PLANNING** — kodlama başlamadı |
+| Faz 3.5 tenant/platform sertleştirme (`20260909102950`–`105530`) | **APPLIED** — DEV'de kayıtlı |
+| Faz 4 Ekip & Kimlik (`20260909132840`–`134539`) | **DEPLOYED TO DEV** (2026-09-14) — bkz. §12 |
+| Faz 5+ (Kasa, Satış, Raporlar…) | **READY FOR DESIGN SYSTEM** — kodlama başlamadı |
 | Deploy (Vercel) | **PILOT DEPLOYED** (2026-09-09) — https://butikos.parlakmediatech.com.tr · özel alan adı geçerli · Supabase Auth Site/Redirect URL güncellendi |
 | Production Supabase projesi | **KURULMADI** — pilot dağıtım DEV projesine bağlı |
 
 Supabase-local ertelendiği için gerçek `auth.uid()` yolu DEV üzerindeki remote smoke ile doğrulandı;
 Docker kurulduğunda `.\scripts\db_fresh.ps1 -Mode Supabase` ikinci bir doğrulama katmanı olarak koşulabilir.
+
+## 12. Faz 4 — Ekip & Kimlik: canlı E2E ve yetki denetimi (2026-09-14)
+
+Tümü **canlı adres** (Vercel Production → DEV Supabase) üzerinde, gerçek Gmail teslimatıyla.
+Fixture tenant'lar: `ZZ E2E TEAM TEST A` (`7ce74377-…`) ve `ZZ E2E TEAM TEST B` (`6f79372f-…`);
+test hesabı `fatihparlak1+butikos-e2e@gmail.com` (`64cfef13-…`). Gerçek TLC verisine hiçbir yazma yapılmadı.
+
+### E-posta akışları
+
+| Case | Akış | Sonuç |
+|---|---|---|
+| A | Yeni kullanıcı daveti (`inviteUserByEmail`) → Gmail → `/auth/confirm` → parola → `/davet/<id>` kabul → A'da `sales_staff` | **PASS** — `invite_created` → `invite_resent` → `invite_accepted` + `member_added` tek transaction; OTT tüketildi |
+| B | Mevcut kullanıcıya ikinci tenant daveti → `signInWithOtp(shouldCreateUser:false)` magic link → resend → kabul → B'de `stock_staff`, A üyeliği korunarak | **PASS** — yeni auth user yok, aynı `user_id`; ilk resend 60 sn GoTrue aralığına takıldı (429, ürün hatası değil), ikincisi geçti ve OTT yenilendi |
+| C | `/sifre-sifirla` → Reset Password maili → `/auth/confirm` → `/sifre-belirle` → parola → `/auth/session-ready` → `/app` | **PASS** (üç turda) — bkz. aşağıdaki bulgular; son turda parola 10:50:58 UTC'de güncellendi, sunucu hatası yok |
+
+Gmail'de doğrulanan gönderici `BoutiqueOS <noreply@parlakmediatech.com.tr>` (custom SMTP); ilk Case A denemesi
+SMTP düzeltilmeden önce FAIL almıştı (`inviteUserByEmail` rollback, kullanıcı yaratılmadı).
+
+### Case C'de bulunan ve kapatılan defektler
+
+| # | Bulgu | Düzeltme |
+|---|---|---|
+| C-1 | `requestPasswordResetAction` `resetPasswordForEmail` sonucunu okumuyordu; taşıma/gateway hatası hiçbir yerde iz bırakmıyordu | `c0ba4e2` — `settleResetRequest`: operatöre metadata-only server log, ziyaretçiye değişmeyen generic yanıt |
+| C-2 | Supabase `POST /auth/v1/recover` aralıklı **HTTP 525** (edge↔origin TLS; istek GoTrue'ya varmıyor) — 08:55 ve 10:20 UTC | `3a8c613` — yalnız 525'te, 1,7 s sonra tek retry; başarılı retry `warn`, ikinci hata `error` logu |
+| C-3 | Parola güncellemesinden hemen sonra PostgREST **PGRST303 "JWT issued at future"** → `/app` bootstrap'ında Next server exception (digest 711079145) — 09:29 ve 10:37 UTC | `ba52575` tek 1,2 s retry (yetersiz kaldı) → `38759e5` — `/auth/session-ready` bekleme odası: tenant verisi okumaz, salt-okuma probe'u 0/1/2/4/8 s yoklar, `next` allowlist; `setPasswordAction` artık doğrudan `/app`'e değil odaya yönlendirir |
+| C-4 | `/sifre-belirle` herhangi bir oturumla (owner parola girişi dahil) parola formunu gösteriyordu | `ba52575` — recovery gate; `setPasswordAction` da gate'i Auth'a dokunmadan önce değerlendirir |
+
+**Gate'in dayandığı gerçek:** `auth.mfa_amr_claims` ve supabase/auth `verify.go` — GoTrue her e-posta linkine
+`amr=otp` yazar, `recovery` AMR yöntemi e-posta kurtarmada yoktur. Gate = `otp` + bekleyen `recovery_sent_at` +
+oturum (`amr.timestamp`) istekten sonra doğmuş. Bilinen ve kabul edilen sınır: magic link de `recovery_sent_at`
+yazdığı için magic-link oturumu da gate'i geçer (aynı posta kutusu kanıtı); parola girişi her durumda reddedilir.
+
+**Upstream olaylar düzeltilmiş değildir.** Uygulama tarafındaki önlemler geçici toleranstır; `docs/13` support notu hazır, gönderilmedi.
+
+### Canlı yetki smoke'u (gerçek alias oturumu, RLS altında; service-role yalnız test hesabına giriş linki üretmek için kullanıldı)
+
+Sayfa katmanı (cookie'li HTTP, kullanıcı tarayıcısına dokunmadan) + doğrudan PostgREST/RPC: **77 doğrudan + 21 sayfa iddiası PASS**.
+Not: server-component `redirect()` streaming sonrasında **HTTP 200 + `<meta http-equiv="refresh">` + `NEXT_REDIRECT`** döner (T-11 ile aynı davranış);
+reddedilen sayfalarda gövdeye yalnız `<title>` ve yükleme iskeleti gider, veri gitmez.
+
+| Rol / tenant | İzinli | Reddedilen |
+|---|---|---|
+| `sales_staff` @ A | `/app`, `/app/urunler`, `/app/stok`, `/app/ayarlar` (maliyet/marj işareti yok) | `/app/ayarlar/ekip`, `/ekip/gecmis`, `/app/tedarikciler(/yeni)`, `/app/mal-kabul(/yeni)`, `/app/urunler/yeni` |
+| `stock_staff` @ B | `/app`, `/app/stok`, `/app/mal-kabul`, `/app/tedarikciler` (TLC/A verisi yok) | `/app/ayarlar/ekip`, `/ekip/gecmis` |
+| Cookie `bos_active_business = TLC` | — | TLC bağlamına girilmedi (`/select-business`) |
+
+Doğrudan RLS/RPC (alias JWT): `rpc_list_team` / `rpc_list_invites` / `rpc_create_invite` / `rpc_resend_invite` / `rpc_revoke_invite` /
+`rpc_invite_delivery_target` / `rpc_platform_set_business_status` → **FORBIDDEN** (A, B ve TLC için); `team_audit_log`, `business_invites`,
+`suppliers`, `goods_receipts(_items)`, `variant_cost_pools`, `supplier_account_entries`, `inventory_movement_costs`, `product_price_history`,
+`products`, `product_variants`, `inventory_movements`, `platform_*` → **0 satır** (TLC'de veri olmasına rağmen); `business_members` yalnız
+kendi satırları; `businesses`/`branches` yalnız A ve B; `profiles` yalnız kendi; kendi rolünü yükseltme, owner'ı pasifleştirme/silme,
+indirim değiştirme, işletme adı değiştirme, kabul edilmiş daveti açma, TLC'ye kendini ekleme → **0 satır / reddedildi**; üyelikler değişmedi.
+
+### Fixture temizliği
+
+`rpc_platform_set_business_status` (platform admin = owner, `platform_audit_log`'a yazıldı) ile A ve B `cancelled` (11:09:33 UTC).
+Silinmedi: işletmeler, 7 üyelik, 11 ekip audit kaydı, alias Auth kullanıcısı (gelecek regresyonlar için). Alias'ın aktif işletmede
+üyeliği kalmadı → picker'da görünmez. TLC sonrası: 3 aktif owner, ekip audit 0, mal kabul 1 posted / 5 cancelled / **9 draft** (draft
+item 0), cost pool 8 adet / 3.260 TRY, tedarikçi borcu 3.260 TRY, son `updated_at` 2026-09-09 — değişmedi.
+
+### Faz 4 test envanteri (plain Node, `npm run test:auth`)
+
+redirect 25 · reset 108 · jwt-skew 27 · recovery 30 · session-ready 62 — tümü PASS. SQL tarafı `db_fresh` 508/508.
 
 ### Frontend bağımlılık taban çizgisi (Faz 1)
 

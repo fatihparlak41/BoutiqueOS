@@ -157,8 +157,9 @@ verified 2026-09-14 against `auth.mfa_amr_claims` and supabase/auth `internal/ap
 
 Gate = `otp` session **and** pending `recovery_sent_at` **and** session born after it. A
 password login is refused; after the password is set the same session stops qualifying.
-Accepted edge: a magic-link session opened while a recovery is pending also passes (same
-mailbox proof). Covered by `npm run test:recovery`.
+Accepted edge: GoTrue writes `recovery_sent_at` for magic links as well (same token fields), so
+a magic-link session passes the gate too until the next password update — same mailbox
+proof; a password login never passes. Covered by `npm run test:recovery`.
 
 A token minted by Auth can be a second ahead of PostgREST's clock ("JWT issued at
 future", seen live right after a password update). The tenant bootstrap retries that one

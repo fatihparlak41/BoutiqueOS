@@ -19,8 +19,10 @@
  * sent. A password login is refused. Once the password is set the same session stops
  * qualifying on its own, because (2) no longer holds.
  *
- * Known, accepted edge: with a recovery pending, a magic-link session opened after the
- * request also passes. Both links land in the same mailbox and prove the same thing.
+ * Known, accepted edge: GoTrue writes `recovery_sent_at` for magic links as well (it reuses
+ * the recovery token fields), so a magic-link session passes this gate too until the
+ * password is next updated. Both links land in the same mailbox and prove the same
+ * thing; a password login never passes.
  *
  * Nothing here trusts query strings, client-made cookies, user_metadata or the email.
  * Inputs come from getClaims() (signature-verified) and getUser() (Auth-server-verified).

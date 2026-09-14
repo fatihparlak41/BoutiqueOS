@@ -23,13 +23,17 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Frontend Faz 2 — ürün kataloğu (ürün / varyant / barkod) | **VERIFIED** (2026-09-09) — manuel DEV smoke PASS |
 | Frontend Faz 3 — tedarikçiler + mal kabul + stok | **VERIFIED** (2026-09-09) — TRY manuel DEV smoke PASS |
 | Faz 3 — non-TRY FX manuel smoke | **DEFERRED** — DEV'de kullanılabilir FX kaydı yok |
-| Faz 3 — sales_staff rol smoke | **DEFERRED** — ikinci hesap yok; frontend gizleme cross-role PASS sayılmaz |
+| Faz 3 — sales_staff rol smoke | **VERIFIED** (2026-09-14) — gerçek sales_staff / stock_staff oturumuyla canlı sayfa + RLS/RPC smoke PASS (bkz. Faz 4) |
 | Pilot dağıtım (Vercel) | **DEPLOYED** (2026-09-09) — https://butikos.parlakmediatech.com.tr · **DEV Supabase'e bağlı pilot/canlı test ortamı** |
 | Production Supabase projesi | **KURULMADI** — canlı adresten yapılan her işlem DEV verisine yazılır |
-| Gerçek cross-tenant manuel smoke | **DEFERRED** — ikinci işletme + kullanıcı gerekiyor |
-| Faz 4+ (Kasa, Satış, Raporlar…) | **Başlamadı** — READY FOR PHASE 4 PLANNING |
+| Gerçek cross-tenant smoke | **VERIFIED** (2026-09-14) — iki fixture tenant + gerçek ikinci kullanıcı; TLC verisi hiçbir sorguda görünmedi |
+| Faz 3.5 — tenant/platform sertleştirme (`phase35a–g`) | **APPLIED** — DEV'de kayıtlı |
+| Faz 4 — Ekip & Kimlik (`phase4a–d`, davet / magic link / parola kurtarma / ekip dizini / audit) | **DEPLOYED TO DEV** (2026-09-14) — Case A/B/C e-posta E2E PASS, sales_staff + stock_staff yetki smoke PASS, fixture'lar `cancelled` |
+| Faz 4 — bilinen upstream olay | Supabase `POST /auth/v1/recover` aralıklı **525** ve taze JWT'de PostgREST **PGRST303** "JWT issued at future" — uygulama tarafında tek 525 retry + `/auth/session-ready` bekleme odası; **upstream'de düzeltilmiş değil**, `docs/13` support notu gönderilmedi |
+| Faz 5+ (Kasa, Satış, Raporlar…) | **Başlamadı** — READY FOR DESIGN SYSTEM |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
+Auth e-posta/dashboard sözleşmesi: `docs/12_AUTH_DELIVERY_CONFIG.md`. Supabase olay notu: `docs/13_SUPABASE_525_INCIDENT_NOTE.md`.
 
 ---
 
@@ -77,6 +81,7 @@ Yerel PostgreSQL: port 5433, `.pgdata`, DB `boutiqueos_test`. Cluster kapalıysa
 npm run lint
 npm run build
 npm run typecheck
+npm run test:auth     # redirect + reset + jwt-skew + recovery + session-ready (plain Node, framework yok)
 ```
 
 Bağımlılık değiştiyse önce temiz kurulum: `node_modules` ve `package-lock.json` silinir, `npm install`,
@@ -90,6 +95,12 @@ ardından `npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next pos
   Middleware sırayla: request'e cookie yaz → `NextResponse.next({ request })` → yanıta cookie yaz →
   dönen cache header'larını yanıta kopyala. Yönlendirmelerde bu cookie'ler redirect yanıtına taşınır.
 - Yetkilendirme `supabase.auth.getClaims()` ile. `getSession()` yetki kararı için **kullanılmaz**.
+- Parola kurtarma oturumu: GoTrue her e-posta linkine (`invite`/`magiclink`/`recovery`) `amr=otp` yazar; `/sifre-belirle`
+  ve `setPasswordAction` yalnız `lib/auth/recovery-session.ts` gate'iyle (otp + bekleyen `recovery_sent_at` + oturum sonra doğmuş)
+  açılır. Parola girişi reddedilir. Not: magic link de `recovery_sent_at` yazar; magic-link oturumu da gate'i geçer (aynı posta kutusu kanıtı).
+- Taze JWT: `loadMemberships` PGRST303 / "JWT issued at future" alırsa **fırlatmaz**, `/auth/session-ready?next=…` (allowlist: `/app`, `/select-business`)
+  bekleme odasına yönlendirir; oda salt-okuma probe'u 0/1/2/4/8 s çizelgesiyle yoklar. Başka hiçbir hata yeniden denenmez.
+- `/sifre-sifirla` sonucu operatöre `[auth] password reset delivery failed|recovered …` server logu olarak gider; ziyaretçi her durumda aynı generic metni görür; yalnız HTTP 525 bir kez yeniden denenir.
 - Tenant çözümlemesi yalnız sunucuda (`lib/tenant.ts`): `business_members` (aktif) → `businesses` →
   `branches`. 0 üyelik → `/no-access`, 1 → otomatik, çok → `/select-business`. Cookie yalnız *tercih*
   taşır ve her istekte PostgreSQL'e karşı yeniden doğrulanır.
