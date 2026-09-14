@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { Wordmark } from "@/components/brand";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { buttonVariants } from "@/components/ui/button";
 import { AcceptInviteForm } from "./accept-invite-form";
 
 export const metadata = { title: "Davet · BoutiqueOS" };
@@ -28,37 +29,33 @@ export default async function AcceptInvitePage({ params }: { params: Promise<{ i
     data: { user },
   } = await supabase.auth.getUser();
 
-  return (
-    <main className="flex min-h-dvh flex-col justify-center px-6 py-16 sm:px-12">
-      <div className="w-full max-w-sm sm:mx-auto">
-        <Wordmark className="mb-10 block text-lg" />
-        <h1 className="text-xl font-medium tracking-tightish">Ekibe katılın</h1>
+  if (user) {
+    return (
+      <AuthShell
+        title="Ekibe katılın"
+        description={
+          <>
+            <span className="text-text-primary">{user.email}</span> hesabıyla oturum açtınız. Davet bu adrese
+            gönderildiyse aşağıdan kabul edebilirsiniz; işletme ve rolünüz kabulden sonra görünür.
+          </>
+        }
+      >
+        <AcceptInviteForm inviteId={id} />
+      </AuthShell>
+    );
+  }
 
-        {user ? (
-          <>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              <span className="text-ink">{user.email}</span> hesabıyla giriş yaptınız. Davet bu adrese
-              gönderildiyse aşağıdan kabul edebilirsiniz.
-            </p>
-            <AcceptInviteForm inviteId={id} />
-          </>
-        ) : (
-          <>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              Daveti kabul etmek için önce davetin gönderildiği e-posta adresiyle oturum açın.
-            </p>
-            <Link
-              href="/login"
-              className="mt-8 inline-flex min-h-11 w-full items-center justify-center rounded border border-line-strong bg-ink px-5 text-sm text-paper transition-colors hover:bg-ink/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              Oturum aç
-            </Link>
-            <p className="mt-4 text-xs leading-relaxed text-muted">
-              Parolanızı henüz belirlemediyseniz davet e-postasındaki bağlantıyı kullanın.
-            </p>
-          </>
-        )}
+  return (
+    <AuthShell
+      title="Ekibe katılın"
+      description="Daveti kabul etmek için önce davetin gönderildiği e-posta adresiyle oturum açın."
+      footer="Parolanızı henüz belirlemediyseniz davet e-postasındaki bağlantıyı kullanın."
+    >
+      <div className="mt-8">
+        <Link href="/login" className={buttonVariants({ size: "lg", className: "w-full" })}>
+          Oturum aç
+        </Link>
       </div>
-    </main>
+    </AuthShell>
   );
 }

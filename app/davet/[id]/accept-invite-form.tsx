@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { AuthStatus, FormAlert } from "@/components/auth/auth-status";
 import { TEAM_IDLE } from "@/lib/team/action-state";
 import { acceptInviteAction } from "@/app/davet/actions";
 
@@ -21,20 +22,18 @@ export function AcceptInviteForm({ inviteId }: { inviteId: string }) {
 
   if (state.ok) {
     return (
-      <div className="mt-8 space-y-5">
-        <p
-          role="status"
-          className="border-l-2 border-accent bg-accent-soft px-3 py-3 text-sm leading-relaxed text-accent"
-        >
-          Ekibe katıldınız.
-        </p>
-        <Link
-          href="/app"
-          className="inline-flex min-h-11 w-full items-center justify-center rounded border border-line-strong bg-ink px-5 text-sm text-paper transition-colors hover:bg-ink/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Panele git
-        </Link>
-      </div>
+      <AuthStatus
+        live
+        tone="success"
+        className="mt-8"
+        title="Ekibe katıldınız"
+        description="İşletmeniz ve rolünüz panelde hazır."
+        action={
+          <Link href="/app" className={buttonVariants({ size: "lg", className: "w-full" })}>
+            Panele git
+          </Link>
+        }
+      />
     );
   }
 
@@ -42,15 +41,11 @@ export function AcceptInviteForm({ inviteId }: { inviteId: string }) {
     <form action={formAction} className="mt-8 space-y-5">
       <input type="hidden" name="invite_id" value={inviteId} />
 
-      {state.error ? (
-        <p role="alert" className="border-l-2 border-danger bg-panel px-3 py-2 text-sm leading-relaxed text-danger">
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <FormAlert>{state.error}</FormAlert> : null}
 
       <SubmitButton />
 
-      <p className="text-xs leading-relaxed text-muted">
+      <p className="text-xs leading-relaxed text-text-muted">
         Davet başka bir adrese gönderildiyse o adresle oturum açmanız gerekir.
       </p>
     </form>

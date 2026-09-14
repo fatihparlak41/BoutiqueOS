@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AuthStatus } from "@/components/auth/auth-status";
 import { runReadiness, type ReadinessOutcome, type SessionReadyNext } from "@/lib/auth/session-ready";
 import { probeSessionReadyAction } from "./actions";
 
@@ -59,22 +61,33 @@ export function SessionReadyClient({ next }: { next: SessionReadyNext }) {
 
   if (phase.kind === "waiting") {
     return (
-      <p role="status" aria-live="polite" className="mt-6 text-sm text-muted">
-        Oturum hazırlanıyor…
-      </p>
+      <div className="mt-8" role="status" aria-live="polite">
+        <p className="text-sm text-text-secondary">Oturumunuz hazırlanıyor…</p>
+        <div className="mt-4 space-y-2" aria-hidden>
+          <Skeleton className="h-3 w-4/5" />
+          <Skeleton className="h-3 w-3/5" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      </div>
     );
   }
 
   return (
-    <div className="mt-6 space-y-4">
-      <p role="status" aria-live="polite" className="text-sm leading-relaxed text-ink-70">
-        {phase.kind === "delayed"
-          ? "Oturumunuz hazırlanırken gecikme oluştu. Tekrar deneyebilirsiniz."
-          : "Oturum doğrulanamadı. Tekrar deneyebilir ya da yeniden giriş yapabilirsiniz."}
-      </p>
-      <Button type="button" size="lg" className="w-full" onClick={retry}>
-        Tekrar dene
-      </Button>
-    </div>
+    <AuthStatus
+      live
+      tone={phase.kind === "delayed" ? "warning" : "danger"}
+      className="mt-8"
+      title={phase.kind === "delayed" ? "Oturumunuz hazırlanırken gecikme oluştu" : "Oturum doğrulanamadı"}
+      description={
+        phase.kind === "delayed"
+          ? "Bağlantı bir an için hazır değildi. Tekrar deneyebilirsiniz; genellikle ikinci denemede açılır."
+          : "Tekrar deneyebilir ya da yeniden giriş yapabilirsiniz."
+      }
+      action={
+        <Button type="button" size="lg" className="w-full" onClick={retry}>
+          Tekrar dene
+        </Button>
+      }
+    />
   );
 }

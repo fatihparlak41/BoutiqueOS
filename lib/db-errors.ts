@@ -35,8 +35,22 @@ const UNIQUE_MESSAGES: Record<string, string> = {
     "Bu varyant belgede zaten var. Yeni satır yerine mevcut satırın adedini güncelleyin.",
 };
 
-/** RAISE EXCEPTION prefixes used by the SECURITY DEFINER RPCs (…0004 and …062632). */
+/**
+ * RAISE EXCEPTION prefixes used by the SECURITY DEFINER RPCs (…0004, …062632 and the
+ * phase 4 invitation RPCs). Order matters: the invitation prefixes contain the generic
+ * NOT_FOUND / FORBIDDEN words and are matched first. None of these sentences says
+ * whether an account exists.
+ */
 const RPC_MESSAGES: Array<[string, string]> = [
+  ["INVITE_NOT_FOUND", "Bu davet bulunamadı. Bağlantıyı e-postadan yeniden açmayı deneyin."],
+  ["INVITE_EMAIL_MISMATCH", "Bu davet başka bir e-posta adresi için gönderilmiş. Davetin gönderildiği adresle oturum açın."],
+  ["INVITE_REVOKED", "Bu davet geri çekilmiş. Yeni bir davet için işletme yöneticinize başvurun."],
+  ["INVITE_ALREADY_USED", "Bu davet daha önce kullanılmış."],
+  ["INVITE_EXPIRED", "Bu davetin süresi dolmuş. İşletme yöneticinizden yeni bir davet isteyin."],
+  ["INVITE_ALREADY_PENDING", "Bu adres için zaten bekleyen bir davet var."],
+  ["MEMBER_INACTIVE_USE_REACTIVATE", "Bu işletmedeki üyeliğiniz kapatılmış. İşletme sahibi yeniden açabilir."],
+  ["EMAIL_NOT_CONFIRMED", "Önce e-posta adresinizi doğrulayın; davet e-postasındaki bağlantı bunu yapar."],
+  ["ALREADY_MEMBER", "Bu adres zaten bu işletmenin aktif üyesi."],
   ["INVALID_PRODUCT", "Ürün bulunamadı."],
   ["INVALID_OPTION_VALUE", "Seçilen seçenek değerlerinden biri bu işletmeye ait değil."],
   ["INVALID_VARIANT", "Varyant bulunamadı."],
@@ -64,7 +78,14 @@ export function toUserMessage(error: DbError | null | undefined): string {
   const code = error.code ?? "";
   const raw = `${error.message ?? ""} ${error.details ?? ""}`;
 
-  // RLS rejection and the explicit role guards inside SECURITY DEFINER RPCs.
+  // Named RPC exceptions first: several of them are raised with the 42501 code (an
+  // invitation for another address, an unconfirmed account) and deserve their own
+  // sentence rather than the generic "no permission".
+  for (const [needle, message] of RPC_MESSAGES) {
+    if (raw.includes(needle)) return message;
+  }
+
+  // Plain RLS rejection ("permission denied", "row-level security") carries no prefix.
   if (code === "42501") return FORBIDDEN;
 
   if (code === "23505") {
@@ -76,10 +97,6 @@ export function toUserMessage(error: DbError | null | undefined): string {
 
   if (code === "23503") return "Seçilen kayıt artık mevcut değil. Sayfayı yenileyip tekrar deneyin.";
   if (code === "23514") return "Girilen değer kabul edilen aralığın dışında.";
-
-  for (const [needle, message] of RPC_MESSAGES) {
-    if (raw.includes(needle)) return message;
-  }
 
   return GENERIC;
 }

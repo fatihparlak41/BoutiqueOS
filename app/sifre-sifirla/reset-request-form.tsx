@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AuthStatus, FormAlert } from "@/components/auth/auth-status";
 import { requestPasswordResetAction, type ResetRequestState } from "@/app/auth/actions";
 
 const initialState: ResetRequestState = { done: false, error: null };
@@ -25,14 +26,17 @@ export function ResetRequestForm() {
   // else would turn this form into a staff-list oracle.
   if (state.done) {
     return (
-      <p
-        role="status"
-        className="mt-8 border-l-2 border-accent bg-accent-soft px-3 py-3 text-sm leading-relaxed text-accent"
-      >
-        Bu adres kayıtlıysa sıfırlama bağlantısı gönderildi. Gelen kutunuzu kontrol edin.
-      </p>
+      <AuthStatus
+        live
+        tone="success"
+        className="mt-8"
+        title="İsteğiniz alındı"
+        description="Eğer bu adresle kayıtlı bir hesap varsa, parola sıfırlama bağlantısını gönderdik. Gelen kutunuzu ve gereksiz posta klasörünü kontrol edin."
+      />
     );
   }
+
+  const errorId = state.error ? "reset-error" : undefined;
 
   return (
     <form action={formAction} className="mt-8 space-y-5" noValidate>
@@ -42,23 +46,18 @@ export function ResetRequestForm() {
           id="email"
           name="email"
           type="email"
+          inputMode="email"
           autoComplete="email"
+          autoCapitalize="none"
           autoFocus
           required
           spellCheck={false}
-          aria-describedby={state.error ? "reset-error" : undefined}
+          aria-describedby={errorId}
+          aria-invalid={state.error ? true : undefined}
         />
       </div>
 
-      {state.error ? (
-        <p
-          id="reset-error"
-          role="alert"
-          className="border-l-2 border-danger bg-panel px-3 py-2 text-sm text-danger"
-        >
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <FormAlert id="reset-error">{state.error}</FormAlert> : null}
 
       <SubmitButton />
     </form>

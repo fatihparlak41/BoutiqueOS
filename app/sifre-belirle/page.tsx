@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { loadRecoveryGate } from "@/lib/auth/recovery-session-server";
-import { Wordmark } from "@/components/brand";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { SetPasswordForm } from "./set-password-form";
 
 export const metadata = { title: "Yeni parola · BoutiqueOS" };
@@ -23,20 +23,16 @@ export default async function SetPasswordPage() {
   }
 
   return (
-    <main className="flex min-h-dvh flex-col justify-center px-6 py-16 sm:px-12">
-      <div className="w-full max-w-sm sm:mx-auto">
-        <Wordmark className="mb-10 block text-lg" />
-
-        <h1 className="text-xl font-medium tracking-tightish">Yeni parolanızı belirleyin</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted">
-          {email} hesabı için geçerli olacak. Parolanızı yalnız siz belirlersiniz; işletme
-          yöneticiniz de göremez.
-        </p>
-
-        <p className="mt-4 text-xs text-muted">En az {PASSWORD_MIN_LENGTH} karakter.</p>
-
-        <SetPasswordForm />
-      </div>
-    </main>
+    <AuthShell
+      title="Yeni parolanızı belirleyin"
+      description={
+        <>
+          <span className="text-text-primary">{email}</span> hesabı için geçerli olacak. Parolanızı yalnız
+          siz belirlersiniz; işletme yöneticiniz de göremez.
+        </>
+      }
+    >
+      <SetPasswordForm minLength={PASSWORD_MIN_LENGTH} />
+    </AuthShell>
   );
 }

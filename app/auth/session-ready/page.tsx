@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { Wordmark } from "@/components/brand";
+import { AuthShell, BackToLogin } from "@/components/auth/auth-shell";
 import { safeSessionReadyNext } from "@/lib/auth/session-ready";
 import { SessionReadyClient } from "./session-ready-client";
 
@@ -23,23 +22,12 @@ export default async function SessionReadyPage({
   const destination = safeSessionReadyNext(next);
 
   return (
-    <main className="flex min-h-dvh flex-col justify-center px-6 py-16 sm:px-12">
-      <div className="w-full max-w-sm sm:mx-auto">
-        <Wordmark className="mb-10 block text-lg" />
-
-        <h1 className="text-xl font-medium tracking-tightish">Bir saniye</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted">
-          Oturumunuz doğrulanıyor; hazır olunca otomatik olarak devam edeceksiniz.
-        </p>
-
-        <SessionReadyClient next={destination} />
-
-        <p className="mt-8 text-xs text-muted">
-          <Link href="/login" className="underline-offset-2 hover:underline">
-            ← Girişe dön
-          </Link>
-        </p>
-      </div>
-    </main>
+    <AuthShell
+      title="Bir saniye"
+      description="Oturumunuz doğrulanıyor; hazır olunca otomatik olarak devam edeceksiniz."
+      footer={<BackToLogin />}
+    >
+      <SessionReadyClient next={destination} />
+    </AuthShell>
   );
 }

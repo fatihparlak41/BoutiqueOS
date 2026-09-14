@@ -1,11 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
+import { PasswordInput } from "@/components/ui/password-input";
+import { FormAlert } from "@/components/auth/auth-status";
 import { setPasswordAction, type SetPasswordState } from "@/app/auth/actions";
 
 const initialState: SetPasswordState = { error: null };
@@ -19,47 +19,69 @@ function SubmitButton() {
   );
 }
 
-export function SetPasswordForm() {
+/**
+ * The requirement is stated before anything is typed and echoed live as a hint; the
+ * server action remains the authority (length, match, recovery gate) and its messages
+ * are what the alert shows.
+ */
+export function SetPasswordForm({ minLength }: { minLength: number }) {
   const [state, formAction] = useActionState(setPasswordAction, initialState);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const errorId = state.error ? "password-error" : undefined;
+  const longEnough = password.length >= minLength;
+  const matches = confirm.length > 0 && confirm === password;
 
   return (
     <form action={formAction} className="mt-8 space-y-5" noValidate>
       <div className="space-y-2">
         <Label htmlFor="password">Yeni parola</Label>
-        <Input
+        <PasswordInput
           id="password"
           name="password"
-          type="password"
           autoComplete="new-password"
-          minLength={PASSWORD_MIN_LENGTH}
+          minLength={minLength}
           autoFocus
           required
-          aria-describedby={state.error ? "password-error" : undefined}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          aria-describedby={["password-hint", errorId].filter(Boolean).join(" ")}
+          aria-invalid={state.error ? true : undefined}
         />
+        <p id="password-hint" className="text-2xs leading-relaxed text-text-muted">
+          En az {minLength} karakter.
+          {password.length > 0 ? (
+            <span className={longEnough ? "ml-1 text-success" : "ml-1"}>
+              {longEnough ? "Uzunluk uygun." : `${minLength - password.length} karakter daha.`}
+            </span>
+          ) : null}
+        </p>
       </div>
 
       <div className="space-y-2">
         <Label htmlFor="password_confirm">Yeni parola (tekrar)</Label>
-        <Input
+        <PasswordInput
           id="password_confirm"
           name="password_confirm"
-          type="password"
           autoComplete="new-password"
-          minLength={PASSWORD_MIN_LENGTH}
+          minLength={minLength}
           required
-          aria-describedby={state.error ? "password-error" : undefined}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          aria-describedby={["confirm-hint", errorId].filter(Boolean).join(" ")}
+          aria-invalid={state.error ? true : undefined}
         />
+        <p id="confirm-hint" className="text-2xs leading-relaxed text-text-muted">
+          {confirm.length === 0 ? "Aynı parolayı bir kez daha yazın." : matches ? (
+            <span className="text-success">Parolalar eşleşiyor.</span>
+          ) : (
+            "Parolalar henüz eşleşmiyor."
+          )}
+        </p>
       </div>
 
-      {state.error ? (
-        <p
-          id="password-error"
-          role="alert"
-          className="border-l-2 border-danger bg-panel px-3 py-2 text-sm text-danger"
-        >
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <FormAlert id="password-error">{state.error}</FormAlert> : null}
 
       <SubmitButton />
     </form>

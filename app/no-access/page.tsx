@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { loadMemberships } from "@/lib/tenant";
 import { signOutAction } from "@/app/auth/actions";
-import { Wordmark } from "@/components/brand";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthStatus } from "@/components/auth/auth-status";
 import { Button } from "@/components/ui/button";
 
 export const metadata = { title: "Erişim yok · BoutiqueOS" };
@@ -13,21 +14,28 @@ export default async function NoAccessPage() {
   if (memberships.length > 0) redirect("/app");
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-6 py-16">
-      <Wordmark className="text-base" />
-      <h1 className="mt-10 text-xl font-medium tracking-tightish">Bağlı bir işletme yok</h1>
-      <p className="mt-3 text-sm leading-relaxed text-muted">
-        Oturumunuz açık, ancak {user.email ?? "bu hesap"} henüz hiçbir işletmeye aktif üye olarak
-        tanımlanmamış. İşletme sahibi sizi ekledikten sonra bu sayfayı yenilemeniz yeterli.
-      </p>
-
-      <div className="mt-8 flex gap-2">
-        <form action={signOutAction}>
-          <Button type="submit" variant="outline" size="sm">
-            Çıkış yap
-          </Button>
-        </form>
-      </div>
-    </main>
+    <AuthShell
+      title="Bağlı bir işletme yok"
+      description={
+        <>
+          Oturumunuz açık, ancak <span className="text-text-primary">{user.email ?? "bu hesap"}</span> henüz
+          hiçbir işletmeye aktif üye olarak tanımlanmamış.
+        </>
+      }
+      wide
+    >
+      <AuthStatus
+        className="mt-8"
+        title="Bir davet bekliyor olabilirsiniz"
+        description="İşletme sahibi sizi eklediğinde ya da bir davet gönderdiğinde bu sayfayı yenilemeniz yeterli."
+        action={
+          <form action={signOutAction}>
+            <Button type="submit" variant="outline" size="md">
+              Çıkış yap
+            </Button>
+          </form>
+        }
+      />
+    </AuthShell>
   );
 }
