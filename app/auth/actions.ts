@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { authDestinationUrl } from "@/lib/url";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
-import { settleResetRequest, type ResetRequestState } from "@/lib/auth/reset-request";
+import { deliverResetRequest, type ResetRequestState } from "@/lib/auth/reset-request";
 import { planSetPassword } from "@/lib/auth/recovery-session";
 import { loadRecoveryGate } from "@/lib/auth/recovery-session-server";
 import { ACTIVE_BUSINESS_COOKIE, loadMemberships } from "@/lib/tenant";
@@ -108,14 +108,17 @@ export async function requestPasswordResetAction(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: authDestinationUrl("/sifre-belirle", await currentOrigin()),
-  });
+  const redirectTo = authDestinationUrl("/sifre-belirle", await currentOrigin());
 
   // resetPasswordForEmail never throws: a transport failure or a gateway rejection
   // comes back as `error` exactly like an Auth error. The visitor's answer stays
   // generic either way; the operator gets a server log (metadata only, no address).
-  return settleResetRequest({ error }, console.error);
+  // A transient 525 (edge/origin TLS handshake, request never processed by Auth) is
+  // retried exactly once inside deliverResetRequest; nothing else is.
+  return deliverResetRequest(
+    () => supabase.auth.resetPasswordForEmail(email, { redirectTo }),
+    console,
+  );
 }
 
 /**
