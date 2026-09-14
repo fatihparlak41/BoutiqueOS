@@ -2,27 +2,20 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
+import { ChevronRight } from "lucide-react";
 import { ROLE_LABELS, type UserRole } from "@/lib/roles";
 import { selectBusinessAction, type SelectBusinessState } from "@/app/auth/actions";
 
 /**
- * Business picker.
- *
- * This was a plain <form action={selectBusinessAction}> inside the Server Component.
- * That form never worked in production: React parked its pre-hydration guard on it
- * (action="javascript:throw …"), the page carried no client component to hydrate it,
- * and no progressive-enhancement fields were emitted either — so clicking the button
- * produced no request at all. The screen only appears for an account with more than one
- * membership, which is why it went unnoticed until Phase 4 created the first one.
- *
- * Every other form in this app uses useActionState from a client component and works.
- * This now matches them, and a rejected selection reports inline instead of bouncing
- * through a query parameter.
+ * Business picker: one form, one submit button per option, the clicked button carries
+ * the id. A rejected selection reports inline. Every value shown was proven server-side
+ * by loadMemberships; the click only expresses a preference the server re-checks.
  */
 
 type Option = {
   business_id: string;
   business_name: string;
+  business_code: string;
   role: UserRole;
   branch_count: number;
 };
@@ -37,21 +30,26 @@ function Choice({ option }: { option: Option }) {
       name="business_id"
       value={option.business_id}
       disabled={pending}
-      className="flex w-full items-center justify-between gap-4 px-1 py-4 text-left transition-colors hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+      className="group flex w-full items-center justify-between gap-4 rounded border border-border bg-surface px-4 py-4 text-left transition-colors hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
     >
       <span className="min-w-0">
-        <span className="block truncate font-serif text-base tracking-tightish">
+        <span className="block truncate font-serif text-2xl font-semibold leading-tight tracking-tightish text-text-primary">
           {option.business_name}
         </span>
-        <span className="mt-0.5 block text-xs text-muted">
+        <span className="mt-1 block text-xs text-text-muted">
           {ROLE_LABELS[option.role]}
-          <span className="mx-1.5 text-line-strong">/</span>
-          {option.branch_count} şube
+          {" — "}
+          {option.branch_count === 1 ? "1 şube" : `${option.branch_count} şube`}
+          <span className="ml-2 text-text-muted/70" data-numeric>
+            {option.business_code}
+          </span>
         </span>
       </span>
-      <span aria-hidden className="text-muted">
-        {pending ? "…" : "›"}
-      </span>
+      <ChevronRight
+        aria-hidden
+        className="h-4 w-4 shrink-0 stroke-[1.5] text-text-muted transition-colors group-hover:text-text-primary"
+      />
+      {pending ? <span className="sr-only">Açılıyor…</span> : null}
     </button>
   );
 }
@@ -60,23 +58,19 @@ export function BusinessPicker({ options }: { options: Option[] }) {
   const [state, formAction] = useActionState(selectBusinessAction, initialState);
 
   return (
-    <>
+    <form action={formAction}>
       {state.error ? (
-        <p role="alert" className="mt-6 border-l-2 border-danger bg-panel px-3 py-2 text-sm text-danger">
+        <p role="alert" className="mb-4 rounded border border-danger/30 bg-danger-muted/50 px-3 py-2 text-sm text-danger">
           {state.error}
         </p>
       ) : null}
-
-      {/* One form, one submit button per option: the clicked button carries the id. */}
-      <form action={formAction}>
-        <ul className="mt-8 divide-y divide-line border-y border-line">
-          {options.map((option) => (
-            <li key={option.business_id}>
-              <Choice option={option} />
-            </li>
-          ))}
-        </ul>
-      </form>
-    </>
+      <ul className="space-y-2">
+        {options.map((option) => (
+          <li key={option.business_id}>
+            <Choice option={option} />
+          </li>
+        ))}
+      </ul>
+    </form>
   );
 }

@@ -10,37 +10,53 @@ export const metadata = { title: "İşletme seçin · BoutiqueOS" };
 /**
  * Tenant chooser for an account that belongs to more than one business.
  *
- * The list is rendered by a client component on purpose. This page previously had no
- * client component anywhere in its tree, so React never hydrated it and the server
- * action forms stayed parked on their pre-hydration guard — the buttons produced no
- * request at all. That also silently disabled "Çıkış yap" below.
+ * Suspended and cancelled businesses never reach this list: loadMemberships keeps only
+ * active ones. The list is rendered by a client component so the server-action forms
+ * hydrate (the page once had no client component and its buttons produced no request).
  */
 export default async function SelectBusinessPage() {
-  const { memberships } = await loadMemberships();
+  const { memberships, user, profile } = await loadMemberships();
 
   if (memberships.length === 0) redirect("/no-access");
   if (memberships.length === 1) redirect("/app");
 
+  const who = profile.full_name?.trim() || user.email || "";
+
   return (
-    <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-6 py-16">
-      <Wordmark className="text-base" />
-      <h1 className="mt-10 text-xl font-medium tracking-tightish">Hangi işletmede çalışacaksınız?</h1>
-      <p className="mt-2 text-sm text-muted">Seçiminizi daha sonra üst çubuktan değiştirebilirsiniz.</p>
+    <main className="min-h-dvh bg-background">
+      <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-6 py-10 sm:px-8 sm:py-14">
+        <div className="flex items-center justify-between gap-4">
+          <Wordmark className="text-lg" />
+          <form action={signOutAction}>
+            <Button type="submit" variant="ghost" size="sm">
+              Çıkış yap
+            </Button>
+          </form>
+        </div>
 
-      <BusinessPicker
-        options={memberships.map((m) => ({
-          business_id: m.business_id,
-          business_name: m.business_name,
-          role: m.role,
-          branch_count: m.branches.length,
-        }))}
-      />
+        <div className="mt-14 sm:mt-20">
+          <p className="text-sm text-text-muted">{who}</p>
+          <h1 className="mt-2 font-serif text-4xl font-medium leading-none tracking-tightish text-text-primary">
+            Hangi işletmede çalışacaksınız?
+          </h1>
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-text-muted">
+            Bu hesap {memberships.length} işletmeye üye. Seçiminizi daha sonra kenar çubuğundaki işletme
+            plakasından değiştirebilirsiniz.
+          </p>
+        </div>
 
-      <form action={signOutAction} className="mt-8">
-        <Button type="submit" variant="ghost" size="sm">
-          Çıkış yap
-        </Button>
-      </form>
+        <div className="mt-8">
+          <BusinessPicker
+            options={memberships.map((m) => ({
+              business_id: m.business_id,
+              business_name: m.business_name,
+              business_code: m.business_code,
+              role: m.role,
+              branch_count: m.branches.length,
+            }))}
+          />
+        </div>
+      </div>
     </main>
   );
 }

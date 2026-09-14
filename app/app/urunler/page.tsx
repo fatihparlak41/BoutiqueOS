@@ -12,6 +12,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { PageHeader } from "@/components/ui/page-header";
+import { FilterBar, FilterField } from "@/components/ui/filter-bar";
+import { EmptyState } from "@/components/ui/empty-state";
+import { CellTitle, TBody, TD, TH, THead, TR, TableShell, rowLinkClass } from "@/components/ui/table";
 import { StatusPill } from "@/components/catalog/status-pill";
 
 export const metadata = { title: "Ürünler · BoutiqueOS" };
@@ -50,27 +54,24 @@ export default async function ProductsPage({
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="font-serif text-xl leading-tight tracking-tightish">Ürünler</h2>
-          <p className="mt-1 text-xs text-muted">
-            Ürün modelleri ve satılabilir varyantları. Stok miktarı bu ekranda tutulmaz; mal kabulle gelir.
-          </p>
-        </div>
-        {caps.canEditCatalog ? (
-          <Link href="/app/urunler/yeni">
-            <Button size="sm">Yeni ürün</Button>
-          </Link>
-        ) : null}
-      </header>
+      <PageHeader
+        title="Ürünler"
+        description="Ürün modelleri ve satılabilir varyantları. Stok miktarı bu ekranda tutulmaz; mal kabulle gelir."
+        actions={
+          caps.canEditCatalog ? (
+            <Link href="/app/urunler/yeni">
+              <Button size="sm">Yeni ürün</Button>
+            </Link>
+          ) : undefined
+        }
+      />
 
-      <form method="get" className="grid grid-cols-2 gap-3 border-y border-line py-4 lg:grid-cols-5">
-        <div className="col-span-2 space-y-1.5">
+      <FilterBar clearHref="/app/urunler" hasFilter={hasFilter}>
+        <FilterField wide>
           <Label htmlFor="q">Ara</Label>
           <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı veya SKU ön eki" spellCheck={false} />
-        </div>
-
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="kategori">Kategori</Label>
           <Select id="kategori" name="kategori" defaultValue={categoryId}>
             <option value="">Tümü</option>
@@ -80,9 +81,8 @@ export default async function ProductsPage({
               </option>
             ))}
           </Select>
-        </div>
-
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="marka">Marka</Label>
           <Select id="marka" name="marka" defaultValue={brandId}>
             <option value="">Tümü</option>
@@ -92,9 +92,8 @@ export default async function ProductsPage({
               </option>
             ))}
           </Select>
-        </div>
-
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="durum">Durum</Label>
           <Select id="durum" name="durum" defaultValue={status ?? ""}>
             <option value="">Tümü</option>
@@ -104,79 +103,68 @@ export default async function ProductsPage({
               </option>
             ))}
           </Select>
-        </div>
-
-        <div className="col-span-2 flex items-center gap-3 lg:col-span-5">
-          <Button type="submit" size="sm" variant="outline">
-            Filtrele
-          </Button>
-          {hasFilter ? (
-            <Link href="/app/urunler" className="text-xs text-muted underline underline-offset-2 hover:text-ink">
-              Filtreleri temizle
-            </Link>
-          ) : null}
-        </div>
-      </form>
+        </FilterField>
+      </FilterBar>
 
       {products.length === 0 ? (
-        <div className="border border-dashed border-line-strong px-6 py-12 text-center">
-          <p className="text-sm text-ink-70">
-            {hasFilter ? "Bu filtrelere uyan ürün yok." : "Henüz ürün eklenmemiş."}
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            {hasFilter
-              ? "Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
-              : "İlk ürünü ekleyerek başlayın; varyantları ürün eklendikten sonra tanımlarsınız."}
-          </p>
-        </div>
+        hasFilter ? (
+          <EmptyState
+            compact
+            title="Bu filtrelere uyan ürün yok"
+            description="Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
+          />
+        ) : (
+          <EmptyState
+            editorial
+            title="Henüz ürün yok"
+            description="İlk ürünü ekleyerek başlayın; varyantları ürün eklendikten sonra tanımlarsınız."
+            action={
+              caps.canEditCatalog ? (
+                <Link href="/app/urunler/yeni">
+                  <Button>İlk ürünü ekle</Button>
+                </Link>
+              ) : undefined
+            }
+          />
+        )
       ) : (
-        <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[46rem] border-collapse text-sm">
-            <thead>
-              <tr className="border-y border-line text-left text-xs text-muted">
-                <th scope="col" className="py-2 pr-4 font-medium">Ürün</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Kategori</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Marka</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Varyant</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Fiyat</th>
-                <th scope="col" className="py-2 font-medium">Durum</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {products.map((product) => (
-                <tr key={product.id} className="transition-colors hover:bg-panel/60">
-                  <td className="py-2.5 pr-4">
-                    <Link
-                      href={`/app/urunler/${product.id}`}
-                      className="font-medium text-ink underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
+        <TableShell
+          minWidth="46rem"
+          footer={`${products.length} ürün listeleniyor${products.length === 200 ? " (ilk 200)" : ""}.`}
+        >
+          <THead>
+            <TH>Ürün</TH>
+            <TH>Kategori</TH>
+            <TH>Marka</TH>
+            <TH align="right">Varyant</TH>
+            <TH align="right">Fiyat</TH>
+            <TH>Durum</TH>
+          </THead>
+          <TBody>
+            {products.map((product) => (
+              <TR key={product.id}>
+                <TD>
+                  <CellTitle sub={product.sku_prefix} subNumeric>
+                    <Link href={`/app/urunler/${product.id}`} className={rowLinkClass}>
                       {product.name}
                     </Link>
-                    <span className="mt-0.5 block text-2xs text-muted" data-numeric>
-                      {product.sku_prefix}
-                    </span>
-                  </td>
-                  <td className="py-2.5 pr-4 text-ink-70">{product.category?.name ?? "—"}</td>
-                  <td className="py-2.5 pr-4 text-ink-70">{product.brand?.name ?? "—"}</td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
-                    {product.variant_count}
-                  </td>
-                  <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
-                    {product.variant_count === 0
-                      ? formatPrice(product.default_sale_price)
-                      : formatPriceRange(product.price_min, product.price_max)}
-                  </td>
-                  <td className="py-2.5">
-                    <StatusPill status={product.status} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-2xs text-muted">
-            {products.length} ürün listeleniyor{products.length === 200 ? " (ilk 200)" : ""}.
-          </p>
-        </div>
+                  </CellTitle>
+                </TD>
+                <TD muted>{product.category?.name ?? "—"}</TD>
+                <TD muted>{product.brand?.name ?? "—"}</TD>
+                <TD muted numeric align="right">{product.variant_count}</TD>
+                <TD muted numeric align="right">
+                  {product.variant_count === 0
+                    ? formatPrice(product.default_sale_price)
+                    : formatPriceRange(product.price_min, product.price_max)}
+                </TD>
+                <TD>
+                  <StatusPill status={product.status} />
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </TableShell>
       )}
     </div>
   );

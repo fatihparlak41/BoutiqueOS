@@ -1,5 +1,8 @@
 import { ROLE_LABELS } from "@/lib/roles";
 import { INVITE_STATUS_LABELS, canManage, type TeamInvite, type TeamMember, type UserRole } from "@/lib/team/model";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Card, CardBody } from "@/components/ui/card";
+import { CellTitle, TBody, TD, TH, THead, TR, TableShell } from "@/components/ui/table";
 import { MemberActions } from "./member-actions";
 import { InviteActions } from "./invite-actions";
 
@@ -13,44 +16,26 @@ import { InviteActions } from "./invite-actions";
  */
 
 function StatusPill({ active }: { active: boolean }) {
-  return (
-    <span
-      className={
-        active
-          ? "inline-block rounded-sm border border-accent/30 bg-accent-soft px-1.5 py-0.5 text-2xs text-accent"
-          : "inline-block rounded-sm border border-line-strong bg-panel px-1.5 py-0.5 text-2xs text-ink-70"
-      }
-    >
-      {active ? "Aktif" : "Pasif"}
-    </span>
-  );
+  return <Badge tone={active ? "success" : "neutral"}>{active ? "Aktif" : "Pasif"}</Badge>;
 }
 
+const INVITE_TONE: Record<TeamInvite["status"], BadgeProps["tone"]> = {
+  pending: "accent",
+  expired: "warning",
+  accepted: "success",
+  revoked: "quiet",
+};
+
 function InvitePill({ status }: { status: TeamInvite["status"] }) {
-  const tone =
-    status === "pending"
-      ? "border-accent/30 bg-accent-soft text-accent"
-      : status === "expired"
-        ? "border-danger/30 bg-panel text-danger"
-        : "border-line-strong bg-panel text-ink-70";
-  return (
-    <span className={`inline-block rounded-sm border px-1.5 py-0.5 text-2xs ${tone}`}>
-      {INVITE_STATUS_LABELS[status]}
-    </span>
-  );
+  return <Badge tone={INVITE_TONE[status] ?? "neutral"}>{INVITE_STATUS_LABELS[status]}</Badge>;
 }
 
 function Identity({ member }: { member: TeamMember }) {
   return (
-    <>
-      <span className="font-medium text-ink">
-        {member.full_name?.trim() || member.email}
-        {member.is_self ? <span className="ml-1.5 text-2xs text-muted">(siz)</span> : null}
-      </span>
-      <span className="mt-0.5 block text-2xs text-muted" data-numeric>
-        {member.email}
-      </span>
-    </>
+    <CellTitle sub={member.email} subNumeric>
+      {member.full_name?.trim() || member.email}
+      {member.is_self ? <span className="ml-1.5 text-2xs font-normal text-text-muted">(siz)</span> : null}
+    </CellTitle>
   );
 }
 
@@ -64,31 +49,39 @@ type Shared = {
 
 export function TeamCards({ members, actorRole, branches, grantableRoles, maxGrantableDiscount }: Shared) {
   return (
-    <ul className="space-y-3 lg:hidden">
+    <ul className="space-y-2 lg:hidden">
       {members.map((member) => (
-        <li key={member.user_id} className="border border-line p-4">
-          <Identity member={member} />
-          <p className="mt-2 flex flex-wrap items-center gap-2 text-2xs text-muted">
-            <span className="text-ink-70">{ROLE_LABELS[member.role]}</span>
-            <span aria-hidden>·</span>
-            <span>{member.branch_name ?? "Şube atanmadı"}</span>
-            <StatusPill active={member.is_active} />
-          </p>
-          {member.role === "sales_staff" ? (
-            <p className="mt-1 text-2xs text-muted">
-              İndirim yetkisi: <span data-numeric>%{member.max_discount_pct}</span>
-            </p>
-          ) : null}
-          {canManage(actorRole, member.role) ? (
-            <div className="mt-3 border-t border-line pt-3">
-              <MemberActions
-                member={member}
-                branches={branches}
-                grantableRoles={grantableRoles}
-                maxGrantableDiscount={maxGrantableDiscount}
-              />
-            </div>
-          ) : null}
+        <li key={member.user_id}>
+          <Card>
+            <CardBody>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Identity member={member} />
+                </div>
+                <StatusPill active={member.is_active} />
+              </div>
+              <p className="mt-2 text-xs text-text-secondary">
+                {ROLE_LABELS[member.role]}
+                {", "}
+                <span className="text-text-muted">{member.branch_name ?? "şube atanmadı"}</span>
+              </p>
+              {member.role === "sales_staff" ? (
+                <p className="mt-1 text-2xs text-text-muted">
+                  İndirim yetkisi <span data-numeric>%{member.max_discount_pct}</span>
+                </p>
+              ) : null}
+              {canManage(actorRole, member.role) ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <MemberActions
+                    member={member}
+                    branches={branches}
+                    grantableRoles={grantableRoles}
+                    maxGrantableDiscount={maxGrantableDiscount}
+                  />
+                </div>
+              ) : null}
+            </CardBody>
+          </Card>
         </li>
       ))}
     </ul>
@@ -97,33 +90,31 @@ export function TeamCards({ members, actorRole, branches, grantableRoles, maxGra
 
 export function TeamTable({ members, actorRole, branches, grantableRoles, maxGrantableDiscount }: Shared) {
   return (
-    <div className="relative hidden overflow-x-auto lg:block">
-      <table className="w-full min-w-[56rem] border-collapse text-sm">
-        <thead>
-          <tr className="border-y border-line text-left text-xs text-muted">
-            <th scope="col" className="py-2 pr-4 font-medium">Ad / e-posta</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Rol</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Şube</th>
-            <th scope="col" className="py-2 pr-4 text-right font-medium">İndirim</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Durum</th>
-            <th scope="col" className="py-2 font-medium">İşlem</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">
+    <div className="hidden lg:block">
+      <TableShell minWidth="56rem">
+        <THead>
+          <TH>Ad / e-posta</TH>
+          <TH>Rol</TH>
+          <TH>Şube</TH>
+          <TH align="right">İndirim</TH>
+          <TH>Durum</TH>
+          <TH>İşlem</TH>
+        </THead>
+        <TBody>
           {members.map((member) => (
-            <tr key={member.user_id} className="align-top transition-colors hover:bg-panel/60">
-              <td className="py-2.5 pr-4">
+            <TR key={member.user_id}>
+              <TD>
                 <Identity member={member} />
-              </td>
-              <td className="py-2.5 pr-4 text-ink-70">{ROLE_LABELS[member.role]}</td>
-              <td className="py-2.5 pr-4 text-ink-70">{member.branch_name ?? "—"}</td>
-              <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
+              </TD>
+              <TD muted>{ROLE_LABELS[member.role]}</TD>
+              <TD muted>{member.branch_name ?? "—"}</TD>
+              <TD muted numeric align="right">
                 {member.role === "sales_staff" ? `%${member.max_discount_pct}` : "—"}
-              </td>
-              <td className="py-2.5 pr-4">
+              </TD>
+              <TD>
                 <StatusPill active={member.is_active} />
-              </td>
-              <td className="py-2.5">
+              </TD>
+              <TD>
                 {canManage(actorRole, member.role) ? (
                   <MemberActions
                     member={member}
@@ -132,13 +123,13 @@ export function TeamTable({ members, actorRole, branches, grantableRoles, maxGra
                     maxGrantableDiscount={maxGrantableDiscount}
                   />
                 ) : (
-                  <span className="text-2xs text-muted">—</span>
+                  <span className="text-2xs text-text-muted">—</span>
                 )}
-              </td>
-            </tr>
+              </TD>
+            </TR>
           ))}
-        </tbody>
-      </table>
+        </TBody>
+      </TableShell>
     </div>
   );
 }
@@ -147,18 +138,19 @@ export function InviteList({ invites }: { invites: TeamInvite[] }) {
   if (invites.length === 0) return null;
 
   return (
-    <ul className="divide-y divide-line border-y border-line">
+    <ul className="divide-y divide-border border-y border-border">
       {invites.map((invite) => (
         <li key={invite.invite_id} className="flex flex-wrap items-start justify-between gap-3 py-3">
           <div className="min-w-[14rem] flex-1">
-            <span className="text-sm font-medium">{invite.display_name?.trim() || invite.email}</span>
-            <span className="mt-0.5 block text-2xs text-muted" data-numeric>
-              {invite.email}
-            </span>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-muted">
-              <span className="text-ink-70">{ROLE_LABELS[invite.role]}</span>
-              <span aria-hidden>·</span>
-              <span>{invite.branch_name ?? "Şube atanmadı"}</span>
+            <CellTitle sub={invite.email} subNumeric>
+              {invite.display_name?.trim() || invite.email}
+            </CellTitle>
+            <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+              <span>
+                {ROLE_LABELS[invite.role]}
+                {", "}
+                <span className="text-text-muted">{invite.branch_name ?? "şube atanmadı"}</span>
+              </span>
               <InvitePill status={invite.status} />
             </p>
           </div>

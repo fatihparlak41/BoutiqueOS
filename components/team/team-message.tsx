@@ -12,7 +12,7 @@ export function TeamMessage({ state, successText }: { state: TeamActionState; su
   if (state.error) {
     return (
       <div className="space-y-2">
-        <p role="alert" className="border-l-2 border-danger bg-panel px-3 py-2 text-sm leading-relaxed text-danger">
+        <p role="alert" className="rounded border border-danger/30 bg-danger-muted/50 px-3 py-2 text-sm leading-relaxed text-danger">
           {state.error}
         </p>
         {state.inviteUrl ? <InviteLink url={state.inviteUrl} /> : null}
@@ -25,7 +25,7 @@ export function TeamMessage({ state, successText }: { state: TeamActionState; su
       <div className="space-y-2">
         <p
           role="status"
-          className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs leading-relaxed text-ink-70"
+          className="rounded border border-warning/30 bg-warning-muted/60 px-3 py-2 text-xs leading-relaxed text-text-secondary"
         >
           <span className="font-medium text-ink">CONFIGURATION_REQUIRED</span> — davet oluşturuldu, ancak
           bu ortamda e-posta gönderimi yapılandırılmamış. Aşağıdaki bağlantıyı çalışana kendiniz
@@ -38,7 +38,7 @@ export function TeamMessage({ state, successText }: { state: TeamActionState; su
 
   if (state.ok && successText) {
     return (
-      <p role="status" className="border-l-2 border-accent bg-accent-soft px-3 py-2 text-sm text-accent">
+      <p role="status" className="rounded border border-success/25 bg-success-muted px-3 py-2 text-sm text-success">
         {successText}
       </p>
     );
@@ -49,7 +49,7 @@ export function TeamMessage({ state, successText }: { state: TeamActionState; su
 
 function InviteLink({ url }: { url: string }) {
   return (
-    <p className="break-all border border-line bg-paper px-3 py-2 text-2xs text-ink-70" data-numeric>
+    <p className="break-all rounded border border-border bg-surface px-3 py-2 text-2xs text-text-secondary" data-numeric>
       {url}
     </p>
   );

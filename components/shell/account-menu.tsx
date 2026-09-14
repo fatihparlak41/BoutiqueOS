@@ -1,36 +1,28 @@
-import Link from "next/link";
+import { LogOut } from "lucide-react";
 import { signOutAction } from "@/app/auth/actions";
-import { Button } from "@/components/ui/button";
 
-export function AccountMenu({
-  email,
-  fullName,
-  canSwitchBusiness,
-}: {
-  email: string | null;
-  fullName: string | null;
-  canSwitchBusiness: boolean;
-}) {
+/**
+ * Account block at the foot of the rail: who is signed in and the one action that
+ * belongs to the account rather than the business. Switching business lives on the
+ * plate above, next to the business it switches.
+ */
+export function AccountMenu({ email, fullName }: { email: string | null; fullName: string | null }) {
+  const name = fullName?.trim() || email || "Kullanıcı";
   return (
-    <div className="flex items-center gap-3">
-      <div className="hidden text-right sm:block">
-        <p className="text-sm leading-tight">{fullName ?? email ?? "Kullanıcı"}</p>
-        {fullName && email ? <p className="text-xs text-muted">{email}</p> : null}
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm leading-tight text-text-primary">{name}</p>
+        {fullName && email ? <p className="mt-0.5 truncate text-2xs text-text-muted">{email}</p> : null}
       </div>
-
-      {canSwitchBusiness ? (
-        <Link
-          href="/select-business"
-          className="rounded px-2 py-1 text-xs text-muted underline-offset-4 hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          İşletme değiştir
-        </Link>
-      ) : null}
-
       <form action={signOutAction}>
-        <Button type="submit" variant="outline" size="sm">
-          Çıkış
-        </Button>
+        <button
+          type="submit"
+          title="Çıkış"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <LogOut aria-hidden className="h-4 w-4 stroke-[1.5]" />
+          <span className="sr-only">Çıkış</span>
+        </button>
       </form>
     </div>
   );

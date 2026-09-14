@@ -50,9 +50,9 @@ export function InviteForm({
   }
 
   return (
-    <form action={formAction} className="space-y-4 border border-line bg-panel/40 p-4" noValidate>
+    <form action={formAction} className="space-y-4 rounded border border-border bg-background/60 p-4 sm:min-w-[28rem]" noValidate>
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium tracking-tightish">Kullanıcı ekle</h3>
+        <h2 className="text-sm font-medium tracking-tightish">Kullanıcı ekle</h2>
         <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
           Kapat
         </Button>

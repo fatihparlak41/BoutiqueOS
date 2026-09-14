@@ -2,6 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireTenant } from "@/lib/tenant";
 import { listBranches, listInvites, listTeam, loadTeamContext } from "@/lib/team/queries";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { InviteForm } from "@/components/team/invite-form";
 import { InviteList, TeamCards, TeamTable } from "@/components/team/team-rows";
 
@@ -24,50 +27,45 @@ export default async function TeamPage() {
   const openInvites = invites.filter((i) => i.status === "pending" || i.status === "expired");
 
   return (
-    <div className="max-w-5xl space-y-8">
-      <header>
-        <Link href="/app/ayarlar" className="text-xs text-muted underline-offset-2 hover:underline">
-          ← Ayarlar
-        </Link>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="font-serif text-xl leading-tight tracking-tightish">Ekip</h2>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              {active.business_name} · çalışanları davet edin, rol ve şube atayın, erişimi açıp kapatın.
-            </p>
-          </div>
-          {caps.canInvite ? (
+    <div className="space-y-10">
+      <PageHeader
+        eyebrow={{ href: "/app/ayarlar", label: "Ayarlar" }}
+        title="Ekip"
+        description={`${active.business_name} için çalışanları davet edin, rol ve şube atayın, erişimi açıp kapatın.`}
+        actions={
+          caps.canInvite ? (
             <InviteForm
               branches={branches}
               grantableRoles={caps.grantableRoles}
               maxGrantableDiscount={caps.maxGrantableDiscount}
             />
-          ) : null}
-        </div>
-      </header>
+          ) : undefined
+        }
+      />
 
       {openInvites.length > 0 ? (
         <section className="space-y-3">
-          <h3 className="text-sm font-medium tracking-tightish">Bekleyen davetler</h3>
+          <SectionHeader title="Bekleyen davetler" meta={openInvites.length} />
           <InviteList invites={openInvites} />
         </section>
       ) : null}
 
       <section className="space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-sm font-medium tracking-tightish">Üyeler</h3>
-          <Link
-            href="/app/ayarlar/ekip/gecmis"
-            className="text-xs text-muted underline-offset-2 hover:underline"
-          >
-            Ekip geçmişi →
-          </Link>
-        </div>
+        <SectionHeader
+          title="Üyeler"
+          meta={members.length}
+          action={
+            <Link
+              href="/app/ayarlar/ekip/gecmis"
+              className="text-text-muted underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Ekip geçmişi
+            </Link>
+          }
+        />
 
         {members.length === 0 ? (
-          <p className="border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">
-            Henüz üye yok.
-          </p>
+          <EmptyState compact title="Henüz üye yok" description="Davet ettiğiniz çalışanlar kabul ettiklerinde burada görünür." />
         ) : (
           <>
             <TeamTable
@@ -84,9 +82,6 @@ export default async function TeamPage() {
               grantableRoles={caps.grantableRoles}
               maxGrantableDiscount={caps.maxGrantableDiscount}
             />
-            <p className="text-2xs text-muted" data-numeric>
-              {members.length} üye listeleniyor.
-            </p>
           </>
         )}
       </section>

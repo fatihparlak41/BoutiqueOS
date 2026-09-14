@@ -2,13 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * BoutiqueOS design tokens — light mode only for now.
+ *
+ * Every colour the UI uses is one of these variables; Tailwind's palette maps onto them
+ * (tailwind.config.ts), so components speak in semantic names (surface, border-strong,
+ * accent-muted, text-secondary) and never in hex. Warm linen ground, deep charcoal type,
+ * one plum accent spent sparingly, olive only for supportive states.
+ */
 @layer base {
+  :root {
+    /* ground and surfaces */
+    --background: #f5f2eb;
+    --surface: #fcfbf8;
+    --surface-elevated: #ffffff;
+    --surface-muted: #ece8df;
+
+    /* lines */
+    --border: #e3ded4;
+    --border-strong: #cbc4b8;
+
+    /* text */
+    --foreground: #26231f;
+    --text-primary: #26231f;
+    --text-secondary: #57524b;
+    --text-muted: #7d776e;
+
+    /* primary = the charcoal action colour, not the accent */
+    --primary: #2b2724;
+    --primary-hover: #3d3833;
+    --primary-foreground: #fbfaf7;
+
+    /* accent = deep plum, for focus, the active navigation state and a few chips */
+    --accent: #56304a;
+    --accent-hover: #472639;
+    --accent-muted: #f0e7ec;
+    --accent-foreground: #fbfaf7;
+
+    /* secondary accent = muted olive, supportive states only (drafts, hints) */
+    --olive: #6b7050;
+    --olive-muted: #ebece1;
+
+    /* feedback */
+    --success: #3e6b49;
+    --success-muted: #e5eee6;
+    --warning: #9b6b1f;
+    --warning-muted: #f6ecd9;
+    --danger: #98392f;
+    --danger-muted: #f5e6e2;
+
+    /* focus ring */
+    --ring: rgb(86 48 74 / 0.45);
+
+    /* radius scale: hairline-first product, radii stay small; large only on overlays */
+    --radius-sm: 2px;
+    --radius: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+
+    /* shadow scale: almost none on surfaces, one soft lift for overlays */
+    --shadow-sm: 0 1px 2px rgb(38 35 31 / 0.05);
+    --shadow-md: 0 12px 32px -16px rgb(38 35 31 / 0.35);
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-paper text-ink antialiased;
+    @apply bg-background text-text-primary antialiased;
     font-feature-settings: "cv05" 1;
   }
 
@@ -19,7 +81,12 @@
   }
 
   ::selection {
-    @apply bg-accent-soft text-ink;
+    @apply bg-accent-muted text-text-primary;
+  }
+
+  /* Native dialog backdrop for the mobile navigation sheet. */
+  dialog::backdrop {
+    background: rgb(38 35 31 / 0.4);
   }
 }
 

@@ -1,11 +1,12 @@
-import Link from "next/link";
 import { listBranchOptions, listStock } from "@/lib/stock/queries";
 import { STOCK_STATE_LABELS, type StockState } from "@/lib/stock/model";
 import { listBrands, listCategories } from "@/lib/catalog/queries";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { PageHeader } from "@/components/ui/page-header";
+import { FilterBar, FilterField } from "@/components/ui/filter-bar";
+import { EmptyState } from "@/components/ui/empty-state";
 import { StockCards, StockTable } from "@/components/stock/stock-rows";
 
 export const metadata = { title: "Stok · BoutiqueOS" };
@@ -49,19 +50,17 @@ export default async function StockPage({
 
   return (
     <div className="space-y-6">
-      <header>
-        <h2 className="font-serif text-xl leading-tight tracking-tightish">Stok</h2>
-        <p className="mt-1 text-xs text-muted">
-          Miktarlar değişmez stok defterinden gelir. Bu ekranda elle stok girişi yoktur.
-        </p>
-      </header>
+      <PageHeader
+        title="Stok"
+        description="Miktarlar değişmez stok defterinden gelir. Bu ekranda elle stok girişi yoktur."
+      />
 
-      <form method="get" className="grid grid-cols-2 gap-3 border-y border-line py-4 lg:grid-cols-5">
-        <div className="col-span-2 space-y-1.5">
+      <FilterBar clearHref="/app/stok" hasFilter={hasFilter}>
+        <FilterField wide>
           <Label htmlFor="q">Ara</Label>
           <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı, SKU veya barkod" spellCheck={false} />
-        </div>
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="kategori">Kategori</Label>
           <Select id="kategori" name="kategori" defaultValue={categoryId}>
             <option value="">Tümü</option>
@@ -71,8 +70,8 @@ export default async function StockPage({
               </option>
             ))}
           </Select>
-        </div>
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="marka">Marka</Label>
           <Select id="marka" name="marka" defaultValue={brandId}>
             <option value="">Tümü</option>
@@ -82,8 +81,8 @@ export default async function StockPage({
               </option>
             ))}
           </Select>
-        </div>
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="sube">Şube</Label>
           <Select id="sube" name="sube" defaultValue={branchId}>
             {branches.map((branch) => (
@@ -92,8 +91,8 @@ export default async function StockPage({
               </option>
             ))}
           </Select>
-        </div>
-        <div className="space-y-1.5">
+        </FilterField>
+        <FilterField>
           <Label htmlFor="durum">Stok durumu</Label>
           <Select id="durum" name="durum" defaultValue={state ?? ""}>
             <option value="">Tümü</option>
@@ -103,37 +102,30 @@ export default async function StockPage({
               </option>
             ))}
           </Select>
-        </div>
-        <div className="col-span-2 flex items-center gap-3 lg:col-span-5">
-          <Button type="submit" size="sm" variant="outline">
-            Filtrele
-          </Button>
-          {hasFilter ? (
-            <Link href="/app/stok" className="text-xs text-muted underline underline-offset-2 hover:text-ink">
-              Filtreleri temizle
-            </Link>
-          ) : null}
-        </div>
-      </form>
+        </FilterField>
+      </FilterBar>
 
       {rows.length === 0 ? (
-        <div className="border border-dashed border-line-strong px-6 py-12 text-center">
-          <p className="text-sm text-ink-70">
-            {hasFilter ? "Bu filtrelere uyan varyant yok." : "Gösterilecek varyant yok."}
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            {hasFilter
-              ? "Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
-              : "Önce ürün ve varyant tanımlayın, sonra mal kabulle stoğa alın."}
-          </p>
-        </div>
+        hasFilter ? (
+          <EmptyState
+            compact
+            title="Bu filtrelere uyan varyant yok"
+            description="Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
+          />
+        ) : (
+          <EmptyState
+            editorial
+            title="Stokta henüz bir şey yok"
+            description="Önce ürün ve varyant tanımlayın, sonra mal kabulle stoğa alın. Miktarlar burada kendiliğinden görünür."
+          />
+        )
       ) : (
         <>
           <StockCards rows={rows} />
           <StockTable rows={rows} />
-          <p className="text-2xs leading-relaxed text-muted">
-            {rows.length} varyant · şube: {activeBranch} · Toplam = satılabilir + karantina + hasarlı ·
-            Uygun = satılabilir − rezerve
+          <p className="text-2xs leading-relaxed text-text-muted" data-numeric>
+            {rows.length} varyant, şube: {activeBranch}. Toplam = satılabilir + karantina + hasarlı; uygun =
+            satılabilir − rezerve.
           </p>
         </>
       )}
