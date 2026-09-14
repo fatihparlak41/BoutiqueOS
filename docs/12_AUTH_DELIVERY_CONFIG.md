@@ -142,6 +142,31 @@ Read by exactly one module, `lib/supabase/admin.ts`, whose first line is
 
 ---
 
+## Recovery session gate
+
+`/sifre-belirle` and `setPasswordAction` accept only a session the gate in
+`lib/auth/recovery-session.ts` recognises as password recovery. Facts the gate is built on,
+verified 2026-09-14 against `auth.mfa_amr_claims` and supabase/auth `internal/api/verify.go`:
+
+* Every emailed link — invite, magic link, recovery — is verified through `/verify` and
+  GoTrue records `amr: [{ method: "otp" }]` for all of them. There is **no** `recovery`
+  AMR method for email recovery; the claim alone cannot separate recovery from a magic link.
+* `users.recovery_sent_at` is set when the recovery email is sent and cleared by GoTrue
+  when the password is updated; GET /user exposes it.
+* `amr[].timestamp` is the session's birth and survives token refreshes; `iat` does not.
+
+Gate = `otp` session **and** pending `recovery_sent_at` **and** session born after it. A
+password login is refused; after the password is set the same session stops qualifying.
+Accepted edge: a magic-link session opened while a recovery is pending also passes (same
+mailbox proof). Covered by `npm run test:recovery`.
+
+A token minted by Auth can be a second ahead of PostgREST's clock ("JWT issued at
+future", seen live right after a password update). The tenant bootstrap retries that one
+read once after ~1.2 s (`lib/auth/jwt-skew.ts`, `npm run test:jwt-skew`); nothing else is
+retried.
+
+---
+
 ## Known operational limits
 
 * Supabase's built-in SMTP is rate limited (`over_email_send_rate_limit`, HTTP 429). Fine

@@ -4,6 +4,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { withFreshJwtRetry } from "@/lib/auth/jwt-skew";
 import type { UserRole } from "@/lib/roles";
 
 export const ACTIVE_BUSINESS_COOKIE = "bos_active_business";
@@ -53,14 +54,24 @@ export const loadMemberships = cache(async () => {
 
   if (!user) redirect("/login");
 
-  const [{ data: profileRow }, { data: memberRows, error: memberError }] = await Promise.all([
-    supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
-    supabase
-      .from("business_members")
-      .select("business_id, role, branch_id")
-      .eq("user_id", user.id)
-      .eq("is_active", true),
-  ]);
+  // First read with a possibly seconds-old token. A token minted by Auth in the same
+  // second can be "issued at future" for PostgREST's clock; that one condition is
+  // retried once after a short pause (lib/auth/jwt-skew.ts). Every other error goes
+  // straight through.
+  const {
+    profile: { data: profileRow },
+    members: { data: memberRows, error: memberError },
+  } = await withFreshJwtRetry(async () => {
+    const [profile, members] = await Promise.all([
+      supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
+      supabase
+        .from("business_members")
+        .select("business_id, role, branch_id")
+        .eq("user_id", user.id)
+        .eq("is_active", true),
+    ]);
+    return { profile, members, error: members.error ?? profile.error };
+  });
 
   if (memberError) throw new Error(`Üyelikler okunamadı: ${memberError.message}`);
 

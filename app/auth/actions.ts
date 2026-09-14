@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/server";
 import { authDestinationUrl } from "@/lib/url";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 import { settleResetRequest, type ResetRequestState } from "@/lib/auth/reset-request";
+import { planSetPassword } from "@/lib/auth/recovery-session";
+import { loadRecoveryGate } from "@/lib/auth/recovery-session-server";
 import { ACTIVE_BUSINESS_COOKIE, loadMemberships } from "@/lib/tenant";
 
 export type SignInState = { error: string | null };
@@ -117,8 +119,12 @@ export async function requestPasswordResetAction(
 }
 
 /**
- * Sets a new password for whoever holds the recovery session. The old password is not
+ * Sets a new password for whoever holds a recovery session. The old password is not
  * required because the mailbox proved possession; no administrator ever sees either.
+ *
+ * The recovery gate is evaluated here, on server-validated claims and user data, not
+ * on the page having rendered: calling this action directly from any other session
+ * is refused before Auth is touched.
  */
 export async function setPasswordAction(
   _prev: SetPasswordState,
@@ -127,26 +133,22 @@ export async function setPasswordAction(
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("password_confirm") ?? "");
 
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    return { error: `Parola en az ${PASSWORD_MIN_LENGTH} karakter olmalı.` };
-  }
-  if (password !== confirm) {
-    return { error: "Parolalar eşleşmiyor." };
-  }
+  const plan = planSetPassword({
+    password,
+    confirm,
+    minLength: PASSWORD_MIN_LENGTH,
+    gate: (await loadRecoveryGate()).gate,
+  });
+  if (plan.kind === "reject") return { error: plan.error };
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { error: "Bağlantının süresi dolmuş. Yeni bir sıfırlama bağlantısı isteyin." };
-  }
-
   const { error } = await supabase.auth.updateUser({ password });
   if (error) {
     return { error: "Parola güncellenemedi. Farklı bir parola deneyin." };
   }
 
+  // The token Auth just issued can be a moment ahead of PostgREST's clock; the tenant
+  // bootstrap behind /app tolerates that once (lib/auth/jwt-skew.ts).
   revalidatePath("/", "layout");
   redirect("/app");
 }
