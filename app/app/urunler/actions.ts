@@ -6,6 +6,8 @@ import { loadCatalogContext, type ProductStatus, type VariantStatus } from "@/li
 import { parseMoney } from "@/lib/catalog/format";
 import { reportDbError } from "@/lib/catalog/errors";
 import type { ActionState } from "@/lib/catalog/action-state";
+import type { ImageRole, OptionKind } from "@/lib/catalog/model";
+import { IMAGE_BUCKET, productImagePath, validateImageFile } from "@/lib/catalog/images";
 
 /**
  * Write side of the product catalogue.
@@ -47,6 +49,19 @@ function isVariantStatus(value: string): value is VariantStatus {
   return value === "active" || value === "archived";
 }
 
+function isOptionKind(value: string): value is OptionKind {
+  return value === "color" || value === "size" || value === "other";
+}
+
+/** Optional model / style code: trimmed, at most 64 characters, never a uniqueness rule. */
+function styleCode(formData: FormData): string | null | undefined {
+  const raw = formData.get("style_code");
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  if (value.length > 64) return undefined;
+  return value.length > 0 ? value : null;
+}
+
 // ------------------------------------------------------------------ products
 
 export async function createProductAction(
@@ -83,6 +98,7 @@ export async function createProductAction(
       brand_id: uuidOrNull(formData, "brand_id"),
       collection: optionalText(formData, "collection"),
       description: optionalText(formData, "description"),
+      style_code: styleCode(formData) ?? null,
     })
     .select("id")
     .single();
@@ -127,6 +143,7 @@ export async function updateProductAction(
       brand_id: uuidOrNull(formData, "brand_id"),
       collection: optionalText(formData, "collection"),
       description: optionalText(formData, "description"),
+      style_code: styleCode(formData) ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("business_id", businessId)
@@ -169,10 +186,12 @@ export async function createOptionAction(
 
   const name = text(formData, "option_name");
   if (name.length < 1) return fail("Seçenek adı zorunlu.");
+  const kindInput = text(formData, "option_kind");
+  const kind: OptionKind = isOptionKind(kindInput) ? kindInput : "other";
 
   const { error } = await supabase
     .from("product_options")
-    .insert({ business_id: businessId, name, sort_order: 100 });
+    .insert({ business_id: businessId, name, kind, sort_order: kind === "color" ? 10 : kind === "size" ? 20 : 100 });
 
   if (error) return fail(reportDbError("createOption", error));
 
@@ -194,10 +213,18 @@ export async function createOptionValueAction(
   if (!value) return fail("Değer zorunlu.");
   if (value.length > 60) return fail("Değer en fazla 60 karakter olabilir.");
 
+  const code = optionalText(formData, "option_code");
+  if (code && code.length > 16) return fail("Kısa kod en fazla 16 karakter olabilir.");
+  const hexRaw = optionalText(formData, "color_hex");
+  const colorHex = hexRaw ? (/^#[0-9a-fA-F]{6}$/.test(hexRaw) ? hexRaw.toLowerCase() : undefined) : null;
+  if (colorHex === undefined) return fail("Renk kodu #RRGGBB biçiminde olmalı.");
+  const sortRaw = text(formData, "sort_order");
+  const sortOrder = /^\d{1,5}$/.test(sortRaw) ? Number(sortRaw) : 100;
+
   // business_id is filled by trg_bid_option_values from the parent option.
   const { error } = await supabase
     .from("option_values")
-    .insert({ product_option_id: optionId, value, sort_order: 100 });
+    .insert({ product_option_id: optionId, value, sort_order: sortOrder, code, color_hex: colorHex });
 
   if (error) return fail(reportDbError("createOptionValue", error));
 
@@ -417,3 +444,221 @@ export async function deleteBarcodeAction(
   revalidatePath(`/app/urunler/${productId}`);
   return DONE;
 }
+
+// ------------------------------------------------------------------ variant matrix
+
+export type MatrixCombo = { sku: string; option_value_ids: string[]; enabled: boolean };
+
+/**
+ * Generates every enabled combination of a matrix in one transaction through
+ * rpc_generate_variants: duplicates of an existing active combination are reported, not
+ * created; nothing is written when any combination is invalid.
+ */
+export async function generateVariantsAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, caps } = await loadCatalogContext();
+  if (!caps.canEditCatalog) return fail(NO_PERMISSION);
+
+  const productId = uuidOrNull(formData, "product_id");
+  if (!productId) return fail("Ürün bulunamadı.");
+
+  let combos: MatrixCombo[];
+  try {
+    const parsed: unknown = JSON.parse(text(formData, "combos") || "[]");
+    if (!Array.isArray(parsed)) return fail("Matris okunamadı.");
+    combos = parsed
+      .filter((c): c is MatrixCombo => typeof c === "object" && c !== null && typeof (c as MatrixCombo).sku === "string")
+      .filter((c) => c.enabled !== false);
+  } catch {
+    return fail("Matris okunamadı.");
+  }
+
+  if (combos.length === 0) return fail("En az bir kombinasyon seçin.");
+  if (combos.length > 500) return fail("Tek seferde en fazla 500 kombinasyon oluşturulabilir.");
+  for (const c of combos) {
+    if (!c.sku.trim() || c.sku.length > 64) return fail("Her kombinasyonun 64 karakteri geçmeyen bir SKU'su olmalı.");
+    if (!Array.isArray(c.option_value_ids) || c.option_value_ids.some((id) => !/^[0-9a-fA-F-]{36}$/.test(id))) {
+      return fail("Matris okunamadı.");
+    }
+  }
+
+  const { data, error } = await supabase.rpc("rpc_generate_variants", {
+    p_product_id: productId,
+    p_combos: combos.map((c) => ({ sku: c.sku.trim(), option_value_ids: c.option_value_ids })),
+  });
+  if (error) return fail(reportDbError("generateVariants", error));
+
+  const rows = (data ?? []) as Array<{ created: boolean }>;
+  const created = rows.filter((r) => r.created).length;
+  const skipped = rows.length - created;
+
+  revalidatePath(`/app/urunler/${productId}`);
+  revalidatePath("/app/urunler");
+  return {
+    error: null,
+    ok: true,
+    message: `${created} varyant oluşturuldu${skipped > 0 ? `, ${skipped} kombinasyon zaten vardı` : ""}.`,
+  };
+}
+
+// ------------------------------------------------------------------ product lifecycle
+
+/** Archive, never delete: sales, receipts and stock history point at the variants. */
+export async function archiveProductAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, businessId, caps } = await loadCatalogContext();
+  if (!caps.canEditCatalog) return fail(NO_PERMISSION);
+
+  const productId = uuidOrNull(formData, "product_id");
+  if (!productId) return fail("Ürün bulunamadı.");
+  const next = text(formData, "status") === "active" ? "active" : "archived";
+
+  const { error } = await supabase
+    .from("products")
+    .update({ status: next, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("id", productId);
+  if (error) return fail(reportDbError("archiveProduct", error));
+
+  revalidatePath(`/app/urunler/${productId}`);
+  revalidatePath("/app/urunler");
+  return DONE;
+}
+
+// ------------------------------------------------------------------ images
+
+function isUploadRole(value: string): value is Extract<ImageRole, "product_main" | "product_gallery" | "variant" | "label_tag"> {
+  return value === "product_main" || value === "product_gallery" || value === "variant" || value === "label_tag";
+}
+
+/**
+ * Uploads one image for a product. The file is validated (type, size) before anything
+ * is written; the object path is generated server-side under this business's prefix and
+ * the storage policies re-check the tenant on the write. The row is inserted only after
+ * the object exists; if the row is refused the object is removed again.
+ */
+export async function uploadImageAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, businessId, caps } = await loadCatalogContext();
+  if (!caps.canEditCatalog) return fail(NO_PERMISSION);
+
+  const productId = uuidOrNull(formData, "product_id");
+  if (!productId) return fail("Ürün bulunamadı.");
+  const roleInput = text(formData, "role");
+  if (!isUploadRole(roleInput)) return fail("Geçersiz görsel türü.");
+  const variantId = uuidOrNull(formData, "variant_id");
+  if (roleInput === "variant" && !variantId) return fail("Varyant görseli için bir varyant seçin.");
+
+  const fileEntry = formData.get("file");
+  const file = fileEntry instanceof File ? fileEntry : null;
+  const check = validateImageFile(file);
+  if (!check.ok) return fail(check.error);
+
+  const path = productImagePath(businessId, productId, check.ext);
+  const bytes = new Uint8Array(await file!.arrayBuffer());
+
+  const upload = await supabase.storage.from(IMAGE_BUCKET).upload(path, bytes, { contentType: check.mime, upsert: false });
+  if (upload.error) {
+    console.error("[catalog] image upload refused:", upload.error.message);
+    return fail("Görsel yüklenemedi. Yetkinizi ve dosyayı kontrol edin.");
+  }
+
+  // A first main image is simply the main image; a later one goes through rpc_set_main_image.
+  const { data: existingMain } = await supabase
+    .from("product_images")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("product_id", productId)
+    .eq("role", "product_main")
+    .maybeSingle();
+  const role: ImageRole = roleInput === "product_main" && existingMain ? "product_gallery" : roleInput;
+
+  const { data: row, error } = await supabase
+    .from("product_images")
+    .insert({
+      product_id: productId,
+      variant_id: roleInput === "variant" ? variantId : null,
+      role,
+      storage_path: path,
+      mime_type: check.mime,
+      byte_size: file!.size,
+      alt_text: optionalText(formData, "alt_text"),
+      sort_order: 100,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    await supabase.storage.from(IMAGE_BUCKET).remove([path]);
+    return fail(reportDbError("uploadImage", error));
+  }
+
+  if (roleInput === "product_main" && existingMain) {
+    const { error: mainError } = await supabase.rpc("rpc_set_main_image", { p_image_id: row.id as string });
+    if (mainError) return fail(reportDbError("setMainImage", mainError));
+  }
+
+  revalidatePath(`/app/urunler/${productId}`);
+  revalidatePath("/app/urunler");
+  return { error: null, ok: true, message: "Görsel yüklendi." };
+}
+
+export async function setMainImageAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, caps } = await loadCatalogContext();
+  if (!caps.canEditCatalog) return fail(NO_PERMISSION);
+
+  const imageId = uuidOrNull(formData, "image_id");
+  const productId = uuidOrNull(formData, "product_id");
+  if (!imageId || !productId) return fail("Görsel bulunamadı.");
+
+  const { error } = await supabase.rpc("rpc_set_main_image", { p_image_id: imageId });
+  if (error) return fail(reportDbError("setMainImage", error));
+
+  revalidatePath(`/app/urunler/${productId}`);
+  revalidatePath("/app/urunler");
+  return DONE;
+}
+
+/** Removes the row, then the object. Both writes are tenant-checked by RLS. */
+export async function deleteImageAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase, businessId, caps } = await loadCatalogContext();
+  if (!caps.canEditCatalog) return fail(NO_PERMISSION);
+
+  const imageId = uuidOrNull(formData, "image_id");
+  const productId = uuidOrNull(formData, "product_id");
+  if (!imageId || !productId) return fail("Görsel bulunamadı.");
+
+  const { data: row, error: readError } = await supabase
+    .from("product_images")
+    .select("storage_path")
+    .eq("business_id", businessId)
+    .eq("id", imageId)
+    .maybeSingle();
+  if (readError) return fail(reportDbError("deleteImage", readError));
+  if (!row) return fail("Görsel bulunamadı.");
+
+  const { error } = await supabase.from("product_images").delete().eq("business_id", businessId).eq("id", imageId);
+  if (error) return fail(reportDbError("deleteImage", error));
+
+  if (row.storage_path) {
+    const removed = await supabase.storage.from(IMAGE_BUCKET).remove([row.storage_path as string]);
+    if (removed.error) console.error("[catalog] image object not removed:", removed.error.message);
+  }
+
+  revalidatePath(`/app/urunler/${productId}`);
+  revalidatePath("/app/urunler");
+  return DONE;
+}
+

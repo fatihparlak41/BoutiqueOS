@@ -63,6 +63,21 @@ export function ProductForm({
         </div>
 
         <div className="space-y-1.5">
+          <Label htmlFor="style_code">Model / stil kodu</Label>
+          <Input
+            id="style_code"
+            name="style_code"
+            defaultValue={product?.style_code ?? ""}
+            maxLength={64}
+            spellCheck={false}
+            placeholder="Örn. SS26-041 (isteğe bağlı)"
+          />
+          <p className="text-2xs text-muted">
+            Tedarikçi ya da koleksiyon kodu. Aynı kod tekrar kullanılırsa engellenmez, uyarılırsınız.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
           <Label htmlFor="sku_prefix">SKU ön eki</Label>
           <Input
             id="sku_prefix"

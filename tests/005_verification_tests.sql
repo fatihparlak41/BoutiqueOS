@@ -1826,6 +1826,220 @@ SELECT t_err('T48z sales_staff cannot resolve any reset address',
 SELECT t_logout();
 
 -- ============================================================
+-- T60 — Phase 6A: product master, variant matrix, images, storage RLS
+-- ============================================================
+-- Fixtures: biz (owner u1, manager u2, sales u3, stock u4), bizB (owner u5),
+-- p1 'Keten Elbise' with v1 (S) / v2 (M) that carry sales + receipt history, pB in bizB.
+
+-- ---------- options: kind + colour metadata
+SELECT t_logout();
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('biz'), 'Renk', 'color', 5) RETURNING id)
+  SELECT t_set('opt_color', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, color_hex, sort_order) VALUES (t_get('opt_color'), 'Siyah', 'SYH', '#111111', 1) RETURNING id)
+  SELECT t_set('val_black', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('opt_color'), 'Leopar', 'LEO', 2) RETURNING id)
+  SELECT t_set('val_leo', id) FROM x;
+-- 'L' is seeded (c1000000-…-0004); attach its code rather than inserting a duplicate value
+SELECT t_set('val_l', 'c1000000-0000-4000-8000-000000000004');
+UPDATE option_values SET code = 'L' WHERE id = t_get('val_l');
+SELECT t_check('T60a option kind stored', (SELECT kind::text FROM product_options WHERE id = t_get('opt_color')) = 'color');
+SELECT t_check('T60b colour value has hex + code', (SELECT color_hex || '/' || code FROM option_values WHERE id = t_get('val_black')) = '#111111/SYH');
+SELECT t_check('T60c colour value may have no hex (Leopar)', (SELECT color_hex IS NULL FROM option_values WHERE id = t_get('val_leo')));
+SELECT t_err('T60d invalid hex rejected', $q$ UPDATE option_values SET color_hex = 'black' WHERE id = t_get('val_leo') $q$, '23514');
+SELECT t_ok('T60e size option kind set', $q$ UPDATE product_options SET kind = 'size' WHERE id = t_get('opt_size') $q$);
+
+-- ---------- style code: optional, tenant-scoped duplicate is a warning, not a constraint
+SELECT t_ok('T60f style_code optional and settable', $q$ UPDATE products SET style_code = 'KE-2026' WHERE id = t_get('p1') $q$);
+SELECT t_ok('T60g duplicate style_code allowed (warning is a UI concern)',
+  $q$ UPDATE products SET style_code = 'KE-2026' WHERE id = t_get('p2') $q$);
+SELECT t_check('T60h duplicate style_code lookup finds both', t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') AND lower(style_code) = 'ke-2026' $q$) = 2);
+
+-- ---------- variant matrix: manager+, atomic, idempotent
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Saten Midi Elbise', 'SME', 2500, 'active') RETURNING id)
+  SELECT t_set('p6', id) FROM x;
+CREATE FUNCTION t_combo(sku TEXT, VARIADIC vals TEXT[]) RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE ids JSONB := '[]'; k TEXT;
+BEGIN
+  FOREACH k IN ARRAY vals LOOP ids := ids || to_jsonb(t_get(k)::text); END LOOP;
+  RETURN jsonb_build_object('sku', sku, 'option_value_ids', ids);
+END $$;
+
+SELECT t_login('u3');
+SELECT t_err('T60i sales_staff cannot generate a matrix',
+  $q$ SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-SYH-S','val_black','val_s'))) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T60j other tenant owner cannot generate a matrix here',
+  $q$ SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-SYH-S','val_black','val_s'))) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+SELECT t_login('u2');
+CREATE TEMP TABLE _m1 AS
+  SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(
+    t_combo('SME-SYH-S','val_black','val_s'), t_combo('SME-SYH-M','val_black','val_m'), t_combo('SME-SYH-L','val_black','val_l'),
+    t_combo('SME-LEO-S','val_leo','val_s'),   t_combo('SME-LEO-M','val_leo','val_m'),   t_combo('SME-LEO-L','val_leo','val_l')));
+SELECT t_check('T60k 2 colours x 3 sizes = 6 variants created', (SELECT count(*) FILTER (WHERE created) FROM _m1) = 6);
+SELECT t_check('T60l every variant carries two option rows',
+  t_count($q$ SELECT count(*) FROM variant_option_values vov JOIN product_variants pv ON pv.id = vov.variant_id WHERE pv.product_id = t_get('p6') $q$) = 12);
+SELECT t_check('T60m fingerprints distinct',
+  t_count($q$ SELECT count(DISTINCT option_fingerprint) FROM product_variants WHERE product_id = t_get('p6') $q$) = 6);
+
+-- re-run the same matrix plus one new combination: nothing duplicates, only the new one is created
+CREATE TEMP TABLE _m2 AS
+  SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(
+    t_combo('SME-SYH-S-DUP','val_black','val_s'), t_combo('SME-LEO-M-DUP','val_leo','val_m')));
+SELECT t_check('T60n re-run is idempotent (0 created)', (SELECT count(*) FILTER (WHERE created) FROM _m2) = 0);
+SELECT t_check('T60o re-run reports the existing variant ids',
+  (SELECT count(*) FROM _m2 m JOIN product_variants pv ON pv.id = m.variant_id WHERE pv.product_id = t_get('p6')) = 2);
+SELECT t_check('T60p still 6 variants after re-run', t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p6') $q$) = 6);
+
+-- a combination may not carry two values of the same option
+SELECT t_err('T60q two sizes in one combination rejected',
+  $q$ SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-BAD','val_s','val_m'))) $q$, 'INVALID_COMBINATION');
+-- another tenant's option value is refused
+SELECT t_logout();
+WITH x AS (INSERT INTO product_options (business_id, name, kind) VALUES (t_get('bizB'), 'Renk', 'color') RETURNING id) SELECT t_set('optB_color', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value) VALUES (t_get('optB_color'), 'Kırmızı') RETURNING id) SELECT t_set('valB_red', id) FROM x;
+SELECT t_login('u2');
+SELECT t_err('T60r option value of another tenant refused',
+  $q$ SELECT * FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-X','valB_red'))) $q$, 'INVALID_OPTION_VALUE');
+-- one-size / no-option product: a single variant with an empty fingerprint
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Tek Beden Şal', 'TBS', 400, 'active') RETURNING id)
+  SELECT t_set('p7', id) FROM x;
+CREATE TEMP TABLE _m3 AS SELECT * FROM rpc_generate_variants(t_get('p7'), jsonb_build_array(jsonb_build_object('sku', 'TBS-STD', 'option_value_ids', '[]'::jsonb)));
+SELECT t_check('T60s one-size product creates a single option-less variant',
+  (SELECT count(*) FILTER (WHERE created) FROM _m3) = 1
+  AND t_count($q$ SELECT count(*) FROM variant_option_values vov JOIN product_variants pv ON pv.id = vov.variant_id WHERE pv.product_id = t_get('p7') $q$) = 0);
+CREATE TEMP TABLE _m4 AS SELECT * FROM rpc_generate_variants(t_get('p7'), jsonb_build_array(jsonb_build_object('sku', 'TBS-STD2', 'option_value_ids', '[]'::jsonb)));
+SELECT t_check('T60t second option-less combination is the same variant', (SELECT bool_and(NOT created) FROM _m4));
+SELECT t_err('T60u empty matrix rejected', $q$ SELECT * FROM rpc_generate_variants(t_get('p7'), '[]'::jsonb) $q$, 'EMPTY_MATRIX');
+SELECT t_logout();
+
+-- ---------- barcode resolution: tenant-safe, exactly one
+SELECT t_set('v6a', (SELECT variant_id FROM _m1 WHERE sku = 'SME-SYH-S'));
+INSERT INTO barcodes (variant_id, barcode, barcode_type, symbology, is_primary) VALUES (t_get('v6a'), '8690000000999', 'supplier', 'EAN13', true);
+INSERT INTO barcodes (variant_id, barcode, barcode_type, symbology) VALUES (t_get('v6a'), 'OLD-LABEL-7', 'supplier', 'CODE128');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pB'), 'OP-01-STD') RETURNING id) SELECT t_set('vB', id) FROM x;
+SELECT t_err('T60v same barcode twice in one business rejected', $q$ INSERT INTO barcodes (variant_id, barcode) VALUES (t_get('v2'), '8690000000999') $q$, '23505');
+SELECT t_ok('T60w same code may exist in ANOTHER business',
+  $q$ INSERT INTO barcodes (variant_id, barcode) VALUES (t_get('vB'), '8690000000999') $q$);
+SELECT t_login('u3');
+SELECT t_check('T60x sales_staff resolves a barcode to exactly one variant',
+  (SELECT count(*) FROM rpc_resolve_barcode(t_get('biz'), '8690000000999')) = 1
+  AND (SELECT variant_id FROM rpc_resolve_barcode(t_get('biz'), '8690000000999')) = t_get('v6a'));
+SELECT t_check('T60y an alternate / historical code resolves to the same variant',
+  (SELECT variant_id FROM rpc_resolve_barcode(t_get('biz'), 'OLD-LABEL-7')) = t_get('v6a'));
+SELECT t_check('T60z SKU is a keyboard fallback', (SELECT matched_by FROM rpc_resolve_barcode(t_get('biz'), 'SME-LEO-M')) = 'sku');
+SELECT t_check('T60aa unknown code resolves to nothing', (SELECT count(*) FROM rpc_resolve_barcode(t_get('biz'), 'NOPE')) = 0);
+SELECT t_err('T60ab resolving in another tenant is refused', $q$ SELECT * FROM rpc_resolve_barcode(t_get('bizB'), '8690000000999') $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T60ac the same code in business B resolves to B''s own variant',
+  (SELECT product_id FROM rpc_resolve_barcode(t_get('bizB'), '8690000000999')) = t_get('pB'));
+SELECT t_logout();
+
+-- ---------- images: roles, constraints, main-image uniqueness
+SELECT t_login('u2');
+WITH x AS (INSERT INTO product_images (product_id, role, storage_path, mime_type, byte_size)
+  VALUES (t_get('p6'), 'product_main', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/a.jpg', 'image/jpeg', 1000) RETURNING id)
+  SELECT t_set('img_main', id) FROM x;
+WITH x AS (INSERT INTO product_images (product_id, role, storage_path, mime_type, byte_size)
+  VALUES (t_get('p6'), 'product_gallery', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/b.jpg', 'image/jpeg', 1000) RETURNING id)
+  SELECT t_set('img_gal', id) FROM x;
+SELECT t_check('T60ad image business_id derived from product', (SELECT business_id FROM product_images WHERE id = t_get('img_main')) = t_get('biz'));
+SELECT t_err('T60ae second product_main rejected by index',
+  $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p6'), 'product_main', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/c.jpg') $q$, '23505');
+SELECT t_ok('T60af rpc_set_main_image swaps main atomically', $q$ SELECT rpc_set_main_image(t_get('img_gal')) $q$);
+SELECT t_check('T60ag exactly one main after swap and it is the gallery image',
+  t_count($q$ SELECT count(*) FROM product_images WHERE product_id = t_get('p6') AND role = 'product_main' $q$) = 1
+  AND (SELECT role::text FROM product_images WHERE id = t_get('img_gal')) = 'product_main'
+  AND (SELECT role::text FROM product_images WHERE id = t_get('img_main')) = 'product_gallery');
+SELECT t_err('T60ah variant image needs a variant', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p6'), 'variant', 'business/x/v.jpg') $q$, '23514');
+SELECT t_ok('T60ai variant image accepted', $q$ INSERT INTO product_images (product_id, variant_id, role, storage_path) VALUES (t_get('p6'), t_get('v6a'), 'variant', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/v.jpg') $q$);
+SELECT t_err('T60aj image needs a source (url or storage_path)', $q$ INSERT INTO product_images (product_id, role) VALUES (t_get('p6'), 'product_gallery') $q$, '23514');
+SELECT t_err('T60ak unsupported mime rejected', $q$ INSERT INTO product_images (product_id, role, storage_path, mime_type) VALUES (t_get('p6'), 'product_gallery', 'business/x/d.gif', 'image/gif') $q$, '23514');
+SELECT t_err('T60al receiving proof needs a goods receipt', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p6'), 'receiving_proof', 'business/x/r.jpg') $q$, '23514');
+SELECT t_ok('T60am receiving proof attaches to a goods receipt without a product',
+  $q$ INSERT INTO product_images (goods_receipt_id, role, storage_path) VALUES (t_get('gr1'), 'receiving_proof', 'business/' || t_get('biz') || '/receipts/' || t_get('gr1') || '/proof.jpg') $q$);
+SELECT t_check('T60an receiving proof business_id derived from the receipt',
+  (SELECT business_id FROM product_images WHERE goods_receipt_id = t_get('gr1')) = t_get('biz'));
+SELECT t_logout();
+
+-- image RLS: members read, manager+ write, other tenant sees nothing
+SELECT t_login('u3');
+SELECT t_check('T60ao sales_staff reads product images of own tenant', t_count($q$ SELECT count(*) FROM product_images WHERE product_id = t_get('p6') $q$) = 3);
+SELECT t_err('T60aq sales_staff insert refused by RLS',
+  $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p6'), 'product_gallery', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/z.jpg') $q$, '42501');
+SELECT t_err('T60ar sales_staff cannot promote a main image', $q$ SELECT rpc_set_main_image(t_get('img_main')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T60as other tenant sees no images of p6', t_count($q$ SELECT count(*) FROM product_images WHERE product_id = t_get('p6') $q$) = 0);
+-- the owner-resolving trigger reads products under RLS, so the foreign product is simply not there
+SELECT t_err('T60at other tenant cannot attach an image to p6', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p6'), 'product_gallery', 'business/' || t_get('bizB') || '/products/x/z.jpg') $q$, 'not found');
+SELECT t_err('T60au other tenant cannot promote p6 image', $q$ SELECT rpc_set_main_image(t_get('img_main')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- ---------- storage objects RLS (bucket product-images, path business/<id>/...)
+SELECT t_check('T60av bucket exists and is private',
+  (SELECT NOT public AND file_size_limit = 5242880 FROM storage.buckets WHERE id = 'product-images'));
+SELECT t_check('T60aw path helper extracts the tenant',
+  fn_storage_business_id('business/' || t_get('biz') || '/products/p/a.jpg') = t_get('biz')
+  AND fn_storage_business_id('other/' || t_get('biz') || '/a.jpg') IS NULL
+  AND fn_storage_business_id('business/not-a-uuid/a.jpg') IS NULL);
+SELECT t_login('u2');
+SELECT t_ok('T60ax manager uploads into own tenant path',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'business/' || t_get('biz') || '/products/' || t_get('p6') || '/a.jpg', auth.uid()) $q$);
+SELECT t_err('T60ay manager cannot upload into another tenant path',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'business/' || t_get('bizB') || '/products/x/a.jpg', auth.uid()) $q$, '42501');
+SELECT t_err('T60az manager cannot upload outside the business/ prefix',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'loose/a.jpg', auth.uid()) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_ok('T60ba tenant B uploads into its own path',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'business/' || t_get('bizB') || '/products/' || t_get('pB') || '/b.jpg', auth.uid()) $q$);
+SELECT t_check('T60bb tenant B cannot read tenant A objects',
+  t_count($q$ SELECT count(*) FROM storage.objects WHERE name LIKE 'business/' || t_get('biz') || '/%' $q$) = 0);
+SELECT t_check('T60bc tenant B reads its own object', t_count($q$ SELECT count(*) FROM storage.objects WHERE name LIKE 'business/' || t_get('bizB') || '/%' $q$) = 1);
+SELECT t_check('T60bd tenant B cannot delete tenant A objects (0 rows)',
+  t_count($q$ WITH d AS (DELETE FROM storage.objects WHERE name LIKE 'business/' || t_get('biz') || '/%' RETURNING id) SELECT count(*) FROM d $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T60be sales_staff reads own tenant object (signed URLs work)', t_count($q$ SELECT count(*) FROM storage.objects WHERE name LIKE 'business/' || t_get('biz') || '/%' $q$) = 1);
+SELECT t_err('T60bf sales_staff cannot upload', $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'business/' || t_get('biz') || '/products/x/s.jpg', auth.uid()) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T60bg stock_staff cannot upload either (manager+ only in 6A)', $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('product-images', 'business/' || t_get('biz') || '/products/x/s.jpg', auth.uid()) $q$, '42501');
+SELECT t_logout();
+
+-- ---------- staff cannot escalate by rewriting business_id
+SELECT t_login('u2');
+SELECT t_err('T60bh manager cannot move a product to another tenant',
+  $q$ UPDATE products SET business_id = t_get('bizB') WHERE id = t_get('p6') $q$, '42501');
+-- the image trigger re-derives business_id from the product on every write, so the rewrite is neutralised
+SELECT t_ok('T60bi image business_id rewrite is accepted…', $q$ UPDATE product_images SET business_id = t_get('bizB') WHERE id = t_get('img_main') $q$);
+SELECT t_check('T60bi2 …but neutralised: image still belongs to tenant A', (SELECT business_id FROM product_images WHERE id = t_get('img_main')) = t_get('biz'));
+SELECT t_logout();
+
+-- ---------- archive instead of delete: history protects the variant
+SELECT t_err('T60bj variant with sales/receipt history cannot be deleted', $q$ DELETE FROM product_variants WHERE id = t_get('v1') $q$, '23503');
+SELECT t_err('T60bk product with variant history cannot be deleted', $q$ DELETE FROM products WHERE id = t_get('p1') $q$, '23503');
+SELECT t_login('u2');
+SELECT t_ok('T60bl variant is archived instead', $q$ UPDATE product_variants SET status = 'archived' WHERE id = t_get('v6a') $q$);
+SELECT t_check('T60bm archived variant frees its combination for a new active one',
+  (SELECT created FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-SYH-S-2','val_black','val_s')))) = true);
+SELECT t_ok('T60bn product archived, not deleted', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p7') $q$);
+SELECT t_check('T60bo archived product keeps its variants', t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p7') $q$) = 1);
+SELECT t_logout();
+
+-- ---------- tenant isolation of the product master queries
+SELECT t_login('u5');
+SELECT t_check('T60bp tenant B sees none of tenant A products / variants / values',
+  t_count($q$ SELECT count(*) FROM products WHERE business_id = t_get('biz') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p6') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM option_values WHERE id = t_get('val_black') $q$) = 0);
+SELECT t_logout();
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$

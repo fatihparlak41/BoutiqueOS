@@ -28,8 +28,61 @@ export const VARIANT_STATUS_LABELS: Record<VariantStatus, string> = {
 
 export type NamedRef = { id: string; name: string };
 
-export type OptionValue = { id: string; value: string; sort_order: number };
-export type ProductOption = { id: string; name: string; sort_order: number; values: OptionValue[] };
+/** product_options.kind — drives the matrix UX (swatches for colours, chips for sizes). */
+export type OptionKind = "color" | "size" | "other";
+
+export const OPTION_KIND_LABELS: Record<OptionKind, string> = {
+  color: "Renk",
+  size: "Beden",
+  other: "Diğer",
+};
+
+export type OptionValue = {
+  id: string;
+  value: string;
+  sort_order: number;
+  /** Short key used when a SKU is derived (SYH, M, 36). Optional. */
+  code: string | null;
+  /** UI swatch only. Never an identity: "Leopar" or "Çok Renkli" simply have none. */
+  color_hex: string | null;
+};
+export type ProductOption = {
+  id: string;
+  name: string;
+  kind: OptionKind;
+  sort_order: number;
+  values: OptionValue[];
+};
+
+export type ImageRole = "product_main" | "product_gallery" | "variant" | "label_tag" | "receiving_proof";
+
+export const IMAGE_ROLE_LABELS: Record<ImageRole, string> = {
+  product_main: "Ana görsel",
+  product_gallery: "Galeri",
+  variant: "Varyant görseli",
+  label_tag: "Etiket",
+  receiving_proof: "Mal kabul kanıtı",
+};
+
+export type ProductImage = {
+  id: string;
+  role: ImageRole;
+  variant_id: string | null;
+  /** Short-lived signed URL; null when the file could not be signed. */
+  url: string | null;
+  alt_text: string | null;
+  sort_order: number;
+  mime_type: string | null;
+  byte_size: number | null;
+};
+
+export type SimilarProduct = {
+  id: string;
+  name: string;
+  style_code: string | null;
+  status: ProductStatus;
+  reason: "style_code" | "name";
+};
 
 export type Barcode = {
   id: string;
@@ -42,8 +95,11 @@ export type Barcode = {
 export type VariantOptionPair = {
   option_id: string;
   option_name: string;
+  option_kind: OptionKind;
   value_id: string;
   value: string;
+  color_hex: string | null;
+  sort_order: number;
 };
 
 export type VariantRow = {
@@ -59,6 +115,9 @@ export type ProductListRow = {
   id: string;
   name: string;
   sku_prefix: string;
+  style_code: string | null;
+  /** Signed URL of the main image, or null. */
+  thumbnail_url: string | null;
   status: ProductStatus;
   default_sale_price: number;
   category: NamedRef | null;
@@ -73,6 +132,7 @@ export type ProductDetail = {
   id: string;
   name: string;
   sku_prefix: string;
+  style_code: string | null;
   status: ProductStatus;
   default_sale_price: number;
   tax_rate: number;
@@ -84,6 +144,7 @@ export type ProductDetail = {
   category: NamedRef | null;
   brand: NamedRef | null;
   variants: VariantRow[];
+  images: ProductImage[];
 };
 
 export type ProductFilters = {

@@ -4,6 +4,7 @@ import {
   listCategories,
   listBrands,
   loadCatalogContext,
+  resolveBarcode,
   PRODUCT_STATUS_LABELS,
   type ProductStatus,
 } from "@/lib/catalog/queries";
@@ -17,6 +18,8 @@ import { FilterBar, FilterField } from "@/components/ui/filter-bar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CellTitle, TBody, TD, TH, THead, TR, TableShell, rowLinkClass } from "@/components/ui/table";
 import { StatusPill } from "@/components/catalog/status-pill";
+import { ProductThumb } from "@/components/catalog/product-thumb";
+import { BarcodeLookup } from "@/components/catalog/barcode-lookup";
 
 export const metadata = { title: "Ürünler · BoutiqueOS" };
 
@@ -25,6 +28,7 @@ type SearchParams = {
   kategori?: string;
   marka?: string;
   durum?: string;
+  barkod?: string;
 };
 
 function isProductStatus(value: string | undefined): value is ProductStatus {
@@ -43,11 +47,13 @@ export default async function ProductsPage({
   const status = isProductStatus(params.durum) ? params.durum : undefined;
 
   const { caps } = await loadCatalogContext();
+  const barcode = params.barkod?.trim() ?? "";
 
-  const [products, categories, brands] = await Promise.all([
+  const [products, categories, brands, hit] = await Promise.all([
     listProducts({ search, categoryId: categoryId || undefined, brandId: brandId || undefined, status }),
     listCategories(),
     listBrands(),
+    barcode ? resolveBarcode(barcode) : Promise.resolve(null),
   ]);
 
   const hasFilter = Boolean(search || categoryId || brandId || status);
@@ -66,10 +72,12 @@ export default async function ProductsPage({
         }
       />
 
+      <BarcodeLookup code={barcode} hit={hit} />
+
       <FilterBar clearHref="/app/urunler" hasFilter={hasFilter}>
         <FilterField wide>
           <Label htmlFor="q">Ara</Label>
-          <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı veya SKU ön eki" spellCheck={false} />
+          <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı, model kodu veya SKU ön eki" spellCheck={false} />
         </FilterField>
         <FilterField>
           <Label htmlFor="kategori">Kategori</Label>
@@ -144,11 +152,14 @@ export default async function ProductsPage({
             {products.map((product) => (
               <TR key={product.id}>
                 <TD>
-                  <CellTitle sub={product.sku_prefix} subNumeric>
-                    <Link href={`/app/urunler/${product.id}`} className={rowLinkClass}>
-                      {product.name}
-                    </Link>
-                  </CellTitle>
+                  <span className="flex items-center gap-3">
+                    <ProductThumb url={product.thumbnail_url} alt={product.name} />
+                    <CellTitle sub={[product.style_code, product.sku_prefix].filter(Boolean).join("  ")} subNumeric>
+                      <Link href={`/app/urunler/${product.id}`} className={rowLinkClass}>
+                        {product.name}
+                      </Link>
+                    </CellTitle>
+                  </span>
                 </TD>
                 <TD muted>{product.category?.name ?? "—"}</TD>
                 <TD muted>{product.brand?.name ?? "—"}</TD>

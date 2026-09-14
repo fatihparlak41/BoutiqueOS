@@ -4,6 +4,6 @@
  * It lives outside app/app/urunler/actions.ts on purpose: a "use server" module may only
  * export async functions, so the constant and the type cannot be declared there.
  */
-export type ActionState = { error: string | null; ok: boolean };
+export type ActionState = { error: string | null; ok: boolean; /** Optional success detail ("6 varyant oluşturuldu"). */ message?: string };
 
 export const IDLE: ActionState = { error: null, ok: false };

@@ -64,3 +64,50 @@ $$;
 GRANT EXECUTE ON FUNCTION auth.uid()  TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION auth.role() TO anon, authenticated, service_role;
 GRANT SELECT ON auth.users TO service_role;
+
+-- ------------------------------------------------------------
+-- storage shim (Phase 6A): the subset of Supabase Storage's schema that the
+-- product-images migration touches — buckets, objects, foldername(). Column names and
+-- the folder helper match the real service so the same policies apply in both modes.
+-- ------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS storage;
+
+CREATE TABLE IF NOT EXISTS storage.buckets (
+  id                 TEXT PRIMARY KEY,
+  name               TEXT NOT NULL UNIQUE,
+  owner              UUID,
+  public             BOOLEAN NOT NULL DEFAULT false,
+  file_size_limit    BIGINT,
+  allowed_mime_types TEXT[],
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS storage.objects (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bucket_id        TEXT NOT NULL REFERENCES storage.buckets(id),
+  name             TEXT NOT NULL,
+  owner            UUID,
+  owner_id         TEXT,
+  metadata         JSONB,
+  user_metadata    JSONB,
+  version          TEXT,
+  path_tokens      TEXT[] GENERATED ALWAYS AS (string_to_array(name, '/')) STORED,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (bucket_id, name)
+);
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+-- Supabase: every path segment except the last (the file name).
+CREATE OR REPLACE FUNCTION storage.foldername(name TEXT)
+RETURNS TEXT[] LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE _parts TEXT[];
+BEGIN
+  SELECT string_to_array(name, '/') INTO _parts;
+  RETURN _parts[1 : array_length(_parts, 1) - 1];
+END $$;
+
+GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
+GRANT ALL ON storage.buckets, storage.objects TO anon, authenticated, service_role;

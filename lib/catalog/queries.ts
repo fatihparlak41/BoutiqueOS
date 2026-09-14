@@ -3,13 +3,18 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { requireTenant } from "@/lib/tenant";
 import { catalogCaps } from "@/lib/catalog/model";
+import { signImagePaths } from "@/lib/catalog/images";
 import type {
+  ImageRole,
   NamedRef,
+  OptionKind,
   ProductDetail,
   ProductFilters,
+  ProductImage,
   ProductListRow,
   ProductOption,
   ProductStatus,
+  SimilarProduct,
   VariantRow,
   VariantStatus,
 } from "@/lib/catalog/model";
@@ -94,13 +99,13 @@ export async function listProductOptions(): Promise<ProductOption[]> {
     await Promise.all([
       supabase
         .from("product_options")
-        .select("id, name, sort_order")
+        .select("id, name, kind, sort_order")
         .eq("business_id", businessId)
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true }),
       supabase
         .from("option_values")
-        .select("id, product_option_id, value, sort_order")
+        .select("id, product_option_id, value, sort_order, code, color_hex")
         .eq("business_id", businessId)
         .order("sort_order", { ascending: true })
         .order("value", { ascending: true }),
@@ -112,6 +117,7 @@ export async function listProductOptions(): Promise<ProductOption[]> {
   return (optionRows ?? []).map((option) => ({
     id: option.id as string,
     name: option.name as string,
+    kind: (option.kind as OptionKind) ?? "other",
     sort_order: option.sort_order as number,
     values: (valueRows ?? [])
       .filter((value) => value.product_option_id === option.id)
@@ -119,6 +125,8 @@ export async function listProductOptions(): Promise<ProductOption[]> {
         id: value.id as string,
         value: value.value as string,
         sort_order: value.sort_order as number,
+        code: (value.code as string | null) ?? null,
+        color_hex: (value.color_hex as string | null) ?? null,
       })),
   }));
 }
@@ -139,11 +147,11 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
 
   let query = supabase
     .from("products")
-    .select("id, name, sku_prefix, status, default_sale_price, category_id, brand_id")
+    .select("id, name, sku_prefix, style_code, status, default_sale_price, category_id, brand_id")
     .eq("business_id", businessId);
 
   const search = sanitizeSearch(filters.search ?? "");
-  if (search) query = query.or(`name.ilike.%${search}%,sku_prefix.ilike.%${search}%`);
+  if (search) query = query.or(`name.ilike.%${search}%,sku_prefix.ilike.%${search}%,style_code.ilike.%${search}%`);
   if (filters.categoryId) query = query.eq("category_id", filters.categoryId);
   if (filters.brandId) query = query.eq("brand_id", filters.brandId);
   if (filters.status) query = query.eq("status", filters.status);
@@ -159,17 +167,35 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
   // Variant counts are aggregated here rather than in SQL: the catalogue has no aggregate
   // RPC and adding one would mean a migration. Adequate at pilot size; revisit past a few
   // thousand products.
-  const [{ data: variantRows, error: variantError }, categories, brands] = await Promise.all([
+  const [{ data: variantRows, error: variantError }, { data: imageRows }, categories, brands] = await Promise.all([
     supabase
       .from("product_variants")
       .select("id, product_id, sale_price_override, status")
       .eq("business_id", businessId)
+      .in("product_id", productIds),
+    supabase
+      .from("product_images")
+      .select("product_id, storage_path, url")
+      .eq("business_id", businessId)
+      .eq("role", "product_main")
       .in("product_id", productIds),
     listCategories(),
     listBrands(),
   ]);
 
   if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
+
+  // One signing round trip for every thumbnail on the page.
+  const mains = (imageRows ?? []) as Array<{ product_id: string; storage_path: string | null; url: string | null }>;
+  const signed = await signImagePaths(
+    supabase,
+    mains.map((m) => m.storage_path).filter((x): x is string => !!x),
+  );
+  const thumbFor = (productId: string): string | null => {
+    const m = mains.find((row) => row.product_id === productId);
+    if (!m) return null;
+    return m.storage_path ? (signed.get(m.storage_path) ?? null) : m.url;
+  };
 
   return products.map((row) => {
     const id = row.id as string;
@@ -185,6 +211,8 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
       id,
       name: row.name as string,
       sku_prefix: row.sku_prefix as string,
+      style_code: (row.style_code as string | null) ?? null,
+      thumbnail_url: thumbFor(id),
       status: row.status as ProductStatus,
       default_sale_price: defaultPrice,
       category: categories.find((c) => c.id === row.category_id) ?? null,
@@ -202,7 +230,7 @@ export async function getProduct(productId: string): Promise<ProductDetail | nul
   const { data: product, error } = await supabase
     .from("products")
     .select(
-      "id, name, sku_prefix, status, default_sale_price, tax_rate, is_tax_inclusive, collection, description, category_id, brand_id",
+      "id, name, sku_prefix, style_code, status, default_sale_price, tax_rate, is_tax_inclusive, collection, description, category_id, brand_id",
     )
     .eq("business_id", businessId)
     .eq("id", productId)
@@ -250,10 +278,11 @@ export async function getProduct(productId: string): Promise<ProductDetail | nul
     barcodeRows = (barcodeResult.data ?? []) as BarcodeRow[];
   }
 
-  const [options, categories, brands] = await Promise.all([
+  const [options, categories, brands, images] = await Promise.all([
     listProductOptions(),
     listCategories(),
     listBrands(),
+    listProductImages(productId),
   ]);
 
   const variants: VariantRow[] = (variantRows ?? []).map((row) => {
@@ -271,11 +300,15 @@ export async function getProduct(productId: string): Promise<ProductDetail | nul
           return {
             option_id: vov.product_option_id,
             option_name: option?.name ?? "—",
+            option_kind: option?.kind ?? "other",
             value_id: vov.option_value_id,
             value: value?.value ?? "—",
+            color_hex: value?.color_hex ?? null,
+            sort_order: value?.sort_order ?? 0,
           };
         })
-        .sort((a, b) => a.option_name.localeCompare(b.option_name, "tr")),
+        // colour before size before anything else, then the option's own order
+        .sort((a, b) => kindRank(a.option_kind) - kindRank(b.option_kind) || a.option_name.localeCompare(b.option_name, "tr")),
       barcodes: barcodeRows
         .filter((barcode) => barcode.variant_id === variantId)
         .map((barcode) => ({
@@ -292,6 +325,7 @@ export async function getProduct(productId: string): Promise<ProductDetail | nul
     id: product.id as string,
     name: product.name as string,
     sku_prefix: product.sku_prefix as string,
+    style_code: (product.style_code as string | null) ?? null,
     status: product.status as ProductStatus,
     default_sale_price: num(product.default_sale_price),
     tax_rate: num(product.tax_rate),
@@ -303,5 +337,105 @@ export async function getProduct(productId: string): Promise<ProductDetail | nul
     category: categories.find((c) => c.id === product.category_id) ?? null,
     brand: brands.find((b) => b.id === product.brand_id) ?? null,
     variants,
+    images,
   };
+}
+
+function kindRank(kind: OptionKind): number {
+  return kind === "color" ? 0 : kind === "size" ? 1 : 2;
+}
+
+/** Every image of a product with a signed URL; main first, then gallery, then variant images. */
+export async function listProductImages(productId: string): Promise<ProductImage[]> {
+  const { supabase, businessId } = await loadCatalogContext();
+
+  const { data, error } = await supabase
+    .from("product_images")
+    .select("id, role, variant_id, storage_path, url, alt_text, sort_order, mime_type, byte_size")
+    .eq("business_id", businessId)
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Görseller okunamadı: ${error.message}`);
+
+  const rows = (data ?? []) as Array<{
+    id: string; role: ImageRole; variant_id: string | null; storage_path: string | null; url: string | null;
+    alt_text: string | null; sort_order: number; mime_type: string | null; byte_size: number | null;
+  }>;
+  const signed = await signImagePaths(supabase, rows.map((r) => r.storage_path).filter((x): x is string => !!x));
+  const roleRank: Record<ImageRole, number> = { product_main: 0, product_gallery: 1, variant: 2, label_tag: 3, receiving_proof: 4 };
+
+  return rows
+    .map((r) => ({
+      id: r.id,
+      role: r.role,
+      variant_id: r.variant_id,
+      url: r.storage_path ? (signed.get(r.storage_path) ?? null) : r.url,
+      alt_text: r.alt_text,
+      sort_order: r.sort_order,
+      mime_type: r.mime_type,
+      byte_size: r.byte_size,
+    }))
+    .sort((a, b) => roleRank[a.role] - roleRank[b.role] || a.sort_order - b.sort_order);
+}
+
+/**
+ * Duplicate WARNING candidates: same style code, or a name that starts the same way.
+ * The database enforces nothing here on purpose — a boutique may re-use a code — so the
+ * screen shows what exists and lets the person decide.
+ */
+export async function findSimilarProducts(input: {
+  name: string;
+  styleCode: string | null;
+  excludeId?: string;
+}): Promise<SimilarProduct[]> {
+  const { supabase, businessId } = await loadCatalogContext();
+  const out: SimilarProduct[] = [];
+
+  if (input.styleCode) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, style_code, status")
+      .eq("business_id", businessId)
+      .ilike("style_code", input.styleCode)
+      .limit(5);
+    for (const r of data ?? []) {
+      if (r.id === input.excludeId) continue;
+      out.push({ id: r.id as string, name: r.name as string, style_code: r.style_code as string | null, status: r.status as ProductStatus, reason: "style_code" });
+    }
+  }
+
+  const stem = sanitizeSearch(input.name).slice(0, 12);
+  if (stem.length >= 4) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, style_code, status")
+      .eq("business_id", businessId)
+      .ilike("name", `${stem}%`)
+      .limit(5);
+    for (const r of data ?? []) {
+      if (r.id === input.excludeId || out.some((o) => o.id === r.id)) continue;
+      out.push({ id: r.id as string, name: r.name as string, style_code: r.style_code as string | null, status: r.status as ProductStatus, reason: "name" });
+    }
+  }
+  return out;
+}
+
+export type BarcodeHit = {
+  variant_id: string;
+  product_id: string;
+  product_name: string;
+  sku: string;
+  variant_status: VariantStatus;
+  product_status: ProductStatus;
+  matched_by: "barcode" | "sku";
+};
+
+/** Tenant-safe scan: rpc_resolve_barcode requires membership and reads only this business. */
+export async function resolveBarcode(code: string): Promise<BarcodeHit | null> {
+  const { supabase, businessId } = await loadCatalogContext();
+  const { data, error } = await supabase.rpc("rpc_resolve_barcode", { p_business_id: businessId, p_code: code });
+  if (error) throw new Error(`Barkod çözümlenemedi: ${error.message}`);
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row as BarcodeHit | undefined) ?? null;
 }
