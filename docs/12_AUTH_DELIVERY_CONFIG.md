@@ -151,3 +151,8 @@ Read by exactly one module, `lib/supabase/admin.ts`, whose first line is
   generic failure.
 * Delivery outcome (`invited` vs `magic_link`) is never surfaced to the inviter, so an
   inviter cannot learn whether an address already has an account.
+* `/sifre-sifirla` always answers with the same generic sentence; `resetPasswordForEmail`
+  never throws, so a delivery failure (transport error, gateway rejection, Auth error) is
+  visible **only** as a server log line `[auth] password reset delivery failed` with
+  `name / status / code / message` — no address, no URL. If Supabase Auth Logs show no
+  `POST /recover` for a request, look there (Vercel → Functions logs).

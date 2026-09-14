@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { authDestinationUrl } from "@/lib/url";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
+import { settleResetRequest, type ResetRequestState } from "@/lib/auth/reset-request";
 import { ACTIVE_BUSINESS_COOKIE, loadMemberships } from "@/lib/tenant";
 
 export type SignInState = { error: string | null };
@@ -78,7 +79,7 @@ export async function selectBusinessAction(
 
 // ------------------------------------------------------------------ password recovery
 
-export type ResetRequestState = { done: boolean; error: string | null };
+export type { ResetRequestState };
 export type SetPasswordState = { error: string | null };
 
 /** Canonical origin for auth links: configuration first, request host only as a fallback. */
@@ -105,12 +106,14 @@ export async function requestPasswordResetAction(
   }
 
   const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(email, {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: authDestinationUrl("/sifre-belirle", await currentOrigin()),
   });
 
-  // The result of the call above is deliberately not inspected.
-  return { done: true, error: null };
+  // resetPasswordForEmail never throws: a transport failure or a gateway rejection
+  // comes back as `error` exactly like an Auth error. The visitor's answer stays
+  // generic either way; the operator gets a server log (metadata only, no address).
+  return settleResetRequest({ error }, console.error);
 }
 
 /**

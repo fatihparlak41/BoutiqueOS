@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test:redirect": "node --experimental-strip-types tests/redirect/check_redirect.ts"
+    "test:redirect": "node --experimental-strip-types tests/redirect/check_redirect.ts",
+    "test:reset": "node --experimental-strip-types tests/auth/check_reset_request.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.6",
