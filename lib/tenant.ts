@@ -5,9 +5,23 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { withFreshJwtRetry } from "@/lib/auth/jwt-skew";
+import { tenantReadOutcome } from "@/lib/auth/session-ready";
 import type { UserRole } from "@/lib/roles";
 
 export const ACTIVE_BUSINESS_COOKIE = "bos_active_business";
+
+/**
+ * One exit for every failed tenant read. A token PostgREST is not yet willing to
+ * accept (PGRST303 "JWT issued at future", seen live right after a password update)
+ * is not a fault of this page: the visitor is parked on /auth/session-ready, which
+ * renders no tenant data and polls a read-only probe until the token is accepted. Every
+ * other error is thrown with its message intact.
+ */
+function failTenantRead(label: string, error: { message: string; code?: string | null }): never {
+  const outcome = tenantReadOutcome(label, error);
+  if (outcome.kind === "redirect") redirect(outcome.to);
+  throw new Error(outcome.kind === "throw" ? outcome.message : `${label}: ${error.message}`);
+}
 
 export type { UserRole } from "@/lib/roles";
 
@@ -56,8 +70,9 @@ export const loadMemberships = cache(async () => {
 
   // First read with a possibly seconds-old token. A token minted by Auth in the same
   // second can be "issued at future" for PostgREST's clock; that one condition is
-  // retried once after a short pause (lib/auth/jwt-skew.ts). Every other error goes
-  // straight through.
+  // retried once after a short pause (lib/auth/jwt-skew.ts) and, if it persists,
+  // handed to /auth/session-ready by failTenantRead. Every other error goes straight
+  // through.
   const {
     profile: { data: profileRow },
     members: { data: memberRows, error: memberError },
@@ -73,7 +88,7 @@ export const loadMemberships = cache(async () => {
     return { profile, members, error: members.error ?? profile.error };
   });
 
-  if (memberError) throw new Error(`Üyelikler okunamadı: ${memberError.message}`);
+  if (memberError) failTenantRead("Üyelikler okunamadı", memberError);
 
   const businessIds = (memberRows ?? []).map((m) => m.business_id as string);
 
@@ -96,8 +111,8 @@ export const loadMemberships = cache(async () => {
           .order("name", { ascending: true }),
       ]);
 
-    if (bizError) throw new Error(`İşletmeler okunamadı: ${bizError.message}`);
-    if (branchError) throw new Error(`Şubeler okunamadı: ${branchError.message}`);
+    if (bizError) failTenantRead("İşletmeler okunamadı", bizError);
+    if (branchError) failTenantRead("Şubeler okunamadı", branchError);
 
     memberships = (memberRows ?? [])
       .map((m) => {

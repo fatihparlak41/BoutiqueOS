@@ -9,6 +9,7 @@ import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 import { deliverResetRequest, type ResetRequestState } from "@/lib/auth/reset-request";
 import { planSetPassword } from "@/lib/auth/recovery-session";
 import { loadRecoveryGate } from "@/lib/auth/recovery-session-server";
+import { AFTER_PASSWORD_UPDATE_PATH } from "@/lib/auth/session-ready";
 import { ACTIVE_BUSINESS_COOKIE, loadMemberships } from "@/lib/tenant";
 
 export type SignInState = { error: string | null };
@@ -150,8 +151,9 @@ export async function setPasswordAction(
     return { error: "Parola güncellenemedi. Farklı bir parola deneyin." };
   }
 
-  // The token Auth just issued can be a moment ahead of PostgREST's clock; the tenant
-  // bootstrap behind /app tolerates that once (lib/auth/jwt-skew.ts).
+  // The token Auth just issued can be rejected by PostgREST for a moment (PGRST303
+  // "JWT issued at future"). Do not walk straight into a tenant-loading route: park
+  // on /auth/session-ready, which polls a read-only probe and then continues to /app.
   revalidatePath("/", "layout");
-  redirect("/app");
+  redirect(AFTER_PASSWORD_UPDATE_PATH);
 }

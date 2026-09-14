@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
 import { publicSupabaseEnv } from "@/lib/env";
 
-const PROTECTED_PREFIXES = ["/app", "/select-business", "/no-access"];
+const PROTECTED_PREFIXES = ["/app", "/select-business", "/no-access", "/auth/session-ready"];
 
 /**
  * Refreshes the Supabase session on every request and enforces the two routing rules:
