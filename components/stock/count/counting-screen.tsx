@@ -228,10 +228,10 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
               <div className="mt-1"><ConditionBadge bucket={last.bucket} /></div>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-2 gap-2">
             <Button variant="outline" onClick={() => bump(last, last.bucket, -1)} disabled={pending || (last.counted_quantity ?? 0) === 0} aria-label="Bir azalt">−1</Button>
             <Button onClick={() => bump(last, last.bucket, 1)} disabled={pending} aria-label="Bir artır">+1</Button>
-            <Button variant="outline" onClick={() => setExact(last, last.bucket, 0)} disabled={pending} className="text-xs">0 adet olarak doğrula</Button>
+            <Button variant="outline" onClick={() => setExact(last, last.bucket, 0)} disabled={pending} className="col-span-2 text-xs">0 adet olarak doğrula</Button>
           </div>
           <form
             onSubmit={(e) => {
