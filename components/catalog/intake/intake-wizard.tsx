@@ -20,6 +20,7 @@ import {
 import {
   checkDuplicatesAction,
   loadProductAction,
+  lookupBarcodeAction,
   onboardProductAction,
   onboardVariantsAction,
   uploadIntakeImageAction,
@@ -211,7 +212,7 @@ export function IntakeWizard({
     setStep(4);
   }
 
-  function leaveMatrix() {
+  async function leaveMatrix() {
     setError(null);
     if (payload.length === 0) return setError("Eklenecek en az bir varyant olmalı.");
     const seen = new Set<string>();
@@ -223,6 +224,23 @@ export function IntakeWizard({
         seen.add(b);
         if (knownBarcodes[b]) return setError(`${b} bu işletmede zaten kayıtlı (${knownBarcodes[b]}). Etiketi kontrol edin.`);
       }
+    }
+    // Every code is checked against the business here as well, not only on field blur: a
+    // scanner types and sends Enter without ever blurring the field, and the database
+    // would otherwise refuse the whole garment only at the final save.
+    setBusy(true);
+    try {
+      for (const code of seen) {
+        const res = await lookupBarcodeAction(code);
+        if (!res.ok) return setError(res.error);
+        if (res.data) {
+          const owner = `${res.data.product_name} · ${res.data.sku}`;
+          setKnownBarcodes((prev) => ({ ...prev, [code]: owner }));
+          return setError(`${code} bu işletmede zaten kayıtlı (${owner}). Etiketi kontrol edin.`);
+        }
+      }
+    } finally {
+      setBusy(false);
     }
     setStep(5);
   }
@@ -481,7 +499,7 @@ export function IntakeWizard({
             </Button>
           ) : step === 4 ? (
             <Button onClick={leaveMatrix} disabled={busy}>
-              Kontrole geç
+              {busy ? "Barkodlar kontrol ediliyor…" : "Kontrole geç"}
             </Button>
           ) : step === 5 ? (
             <Button onClick={save} disabled={busy || payload.length === 0} size="lg">
