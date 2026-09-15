@@ -54,21 +54,15 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const scanRef = useRef<HTMLInputElement>(null);
-  // A scanner keeps typing while the previous code is still on its way to the server; the
-  // field stays enabled and an Enter that lands mid-flight is replayed when the flight ends.
-  const queuedRef = useRef(false);
+  // A scanner types the next code while the previous one is still on its way to the
+  // server. Every Enter takes the field's current value, clears the field at once and
+  // queues the code; codes are sent one after another in the order they were read.
+  const queueRef = useRef<Array<{ code: string; bucket: Bucket }>>([]);
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     setLines(count.lines);
   }, [count.lines]);
-
-  useEffect(() => {
-    if (!pending && queuedRef.current) {
-      queuedRef.current = false;
-      scan();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending]);
 
   const focusScan = () => window.setTimeout(() => scanRef.current?.focus(), 0);
 
@@ -78,25 +72,33 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
     setManualQty("");
   }
 
+  async function drain() {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const next = queueRef.current.shift()!;
+        const res = await scanCodeAction({ count_id: count.id, code: next.code, bucket: next.bucket, ...event() });
+        if (!res.ok) {
+          setError(res.error);
+        } else {
+          setError(null);
+          merge(res.data);
+          setHistory((h) => [{ variant_id: res.data.variant_id, bucket: next.bucket }, ...h].slice(0, 50));
+        }
+      }
+    } finally {
+      sendingRef.current = false;
+      focusScan();
+    }
+  }
+
   function scan() {
     const value = code.trim();
+    setCode("");
     if (!value) return;
-    if (pending) {
-      queuedRef.current = true;
-      return;
-    }
-    setError(null);
-    start(async () => {
-      const res = await scanCodeAction({ count_id: count.id, code: value, bucket, ...event() });
-      if (!res.ok) {
-        setError(res.error);
-      } else {
-        merge(res.data);
-        setHistory((h) => [{ variant_id: res.data.variant_id, bucket }, ...h].slice(0, 50));
-        setCode("");
-      }
-      focusScan();
-    });
+    queueRef.current.push({ code: value, bucket });
+    start(() => drain());
   }
 
   function bump(v: CountVariant, b: Bucket, delta: number) {
