@@ -364,6 +364,35 @@ A Satin Dress 2×3 → 1 kapatıldı, 1 SKU düzenlendi → 5 varyant + ana/etik
 ### Açık
 Gerçek TLC ürün batch'i (5–10 fiziksel ürün) sahibin onayıyla girilecek; TLC seed seçeneklerinin `kind` düzeltmesi (Color→color, Size→size) yapıldı, başka TLC yazması yok.
 
+## 15. Faz 7A — Fiziksel stok sayımı motoru (2026-09-15)
+
+### Envanter denetimi → karar
+| Alan | CURRENT | REQUIRED | Uygulanan |
+|---|---|---|---|
+| Defter | `inventory_movements` append-only, `bucket` (sellable/quarantine/damaged) = durum modeli, `reason` enum'unda `adjustment` var, `reference_type/id` | sayım kaynaklı düzeltme, kalıcı bağ | reason `adjustment`, reference_type `stock_count_line`, reference_id = satır; `uix_movement_stock_count_line` (satır başına tek hareket) — enum'a değer eklenmedi |
+| Maliyet | `variant_cost_pools` yalnız `fn_post_to_cost_pool` yazar; çıkış pre-movement MWA; giriş maliyet ister (`COST_REQUIRED`) | sayım farkı için güvenli kural | eksik → MWA çıkışı; fazla → mevcut MWA devri; pool boşsa bloklanır; borç yok |
+| Kilit / yarış | `fn_lock_pools` variant sırasıyla FOR UPDATE | çift işleme, eş zamanlı stok değişimi | header FOR UPDATE + pool kilidi + satır bazlı defter yeniden okuma (`STALE_COUNT`) |
+| Sayım stub'ları | `inventory_counts/_lines` (Rev 3, 0 satır, RPC/UI yok, istemci yazabilir) | yaşam döngüsü draft/counting/review/posted/cancelled | yeni `stock_counts/_lines/_scans` (RPC-only); stub'lar dokunulmadan superseded |
+| Roller | procurement = owner/manager/stock_staff; adjustment RPC manager+ | POST yetkisi | sayma/inceleme procurement; POST + iptal owner/manager; sales_staff hiç görmez |
+
+### Mimari
+`20260915150000_phase7a_stock_count_engine`: `stock_count_status/type` enum'ları; `stock_counts` (şube, tür full/cycle, not, created/reviewed/posted/cancelled_by/at, `review_ledger_watermark`), `stock_count_lines` (variant × bucket tekil; `expected_quantity` inceleme snapshot'ı, `counted_quantity` NULL = çözümsüz, `zero_confirmed`, `posted_delta`, `movement_id`), `stock_count_scans` (append-only olay günlüğü: kind scan/undo/set/zero_confirm, delta, `client_transaction_id` tekil → replay no-op, `device_id`, `client_at`, server `created_at` — çevrimdışıya hazır alanlar). RPC'ler: `rpc_stock_count_create` (procurement, `SC-YYYY-000001`), `_scan` (±n), `_set_quantity` (tam miktar; 0 = açık sıfır onayı), `_review` (FULL: defterde olup taranmayan her variant×bucket için çözümsüz satır; herkes için expected snapshot; tekrar çağrı = yeniden hesap), `_reopen`, `_cancel` (manager+), `_post` (manager+). `fn_guard_stock_count(_line)` trigger'ları posted/cancelled belgeleri herkese karşı dondurur. RLS: SELECT procurement; INSERT/UPDATE/DELETE grant'i yok.
+
+### POST (tek transaction)
+rol → işletme aktif → şube → durum = review (posted → `ALREADY_POSTED`) → çözümsüz satır yok (`UNRESOLVED_LINES`) → pool kilidi → her satır için `fn_bucket_qty` yeniden okunur, snapshot'tan farklıysa `STALE_COUNT` ("Stok sayım sırasında değişti. Farkları yeniden hesaplayın.") → fark ≠ 0 satırlara `fn_post_to_cost_pool` + `fn_ledger_post` → satırlara `posted_delta/movement_id` → header posted. Çift gönderim: header kilidinde bekleyen ikinci çağrı `ALREADY_POSTED` alır; ayrıca unique index ikinci hareketi imkânsız kılar.
+
+### Testler
+T63 (**87**): yetki envanteri, tarama/tekrar/replay/undo/negatif red, aynı varyant iki durumda iki satır, yabancı varyant red, draft/counting/review/cancelled'da sıfır hareket-maliyet-borç-mal kabul, FULL inceleme çözümsüz satır, `UNRESOLVED_LINES`, açık sıfır onayı, `COST_REQUIRED` (boş pool) bloklar ve hiçbir şey yazmaz, araya giren hareket → `STALE_COUNT` → yeniden inceleme, atomik post (5 hareket; MWA doğrulaması: eksik 4/400, fazla 2/140, net sıfır 3/150, sıfır onay 0/0), `ALREADY_POSTED`, posted/cancelled immutability (maintenance dahil), unique index, cycle sayım yalnız kendi satırları, iptal kaydı, pasif şube red, çapraz tenant (okuma/yazma/şube/varyant/business_id/hareket sahteciliği) red, stock_staff POST red, sales_staff hiç. Toplam **731/0**; concurrency `count_double_post_run.ps1` PASS (A işledi, B `ALREADY_POSTED`, tek hareket), satış yarışı PASS; `test:auth` 25/108/27/30/62; lint/typecheck/build temiz; secret scan 0.
+
+### Sentetik canlı smoke (fixture `ZZ E2E STOCK COUNT TEST`, alias owner, uzantısız Chrome, 390 px, gerçek klavye/tarayıcı girişi)
+Açılış stoğu adjustment RPC ile: A 5@400, B 3@420, C 2@350, D sellable 2 / damaged 1 @380, E 1@350, F stoksuz. Sayım: A 4 ardışık okutma (queue) → 4, 5. okutma aynı satır → 5, geri al → 4; bilinmeyen barkod uyarı + hiçbir şey oluşmadı + alan temizlendi; C ×2, D sellable ×1; durum → Hasarlı, D ×2 (ayrı satır); F ×1; arama (barkodsuz) ile B +1 / −1; incelemeye geç → E (defterde 1, taranmadı) **çözümsüz**, "Sayımı işle" kapalı; sayıma dön, B ×3; inceleme: filtreler (farklar/eksik/fazla/sayılmamış/0 onay); E için "0 adet olarak doğrula" → cnt 0; POST → `COST_REQUIRED` (F, pool boş) — hiçbir şey yazılmadı; F maliyeti adjustment ile çözüldü → POST → `STALE_COUNT` → "Farkları yeniden hesapla" → POST: 7 satır, 4 hareket, −3 eksik, +1 fazla. Sonuç: A 4, B 3, C 2, D sellable 1 / damaged 2, E 0, F 1; pool A 4/1600, D 3/1140, C 2/700, E 0/0, F 1/350; tedarikçi kaydı/mal kabul yok. API: çift POST `ALREADY_POSTED`, posted satır update/delete/insert grant yok, TLC sayımı görünmez/oluşturulamaz, TLC varyantı sayılamaz, iptal edilen sayımlar korunuyor. Responsive 390/768/1440: liste, sayma, inceleme, sonuç — yatay taşma yok. Tenant sonra archived + audited RPC ile `cancelled`.
+
+### TLC
+Before/after snapshot (ürün/varyant/barkod/görsel/hareket/pool/borç/mal kabul/sayım) **birebir aynı**; TLC'de 0 sayım. Gerçek TLC sayımı yapılmadı.
+
+### Ertelenen
+Çevrimdışı senkron (alanlar hazır), çoklu sayaç (aynı sayımda cihaz bazlı ayrım `device_id` ile kayıtlı, UI yok), sayım sırasında beklenen miktarı gösterme (bilinçli gizli), sayım PDF/rapor, Rev 3 `inventory_counts` stub'larının kaldırılması, `COST_REQUIRED` fazlası için sayım içinden maliyet girişi (şimdilik ayrı adjustment).
+
 ### Frontend bağımlılık taban çizgisi (Faz 1)
 
 Next 15.5.25 · React 19.0.0 · Tailwind 3.4.17 · `@supabase/supabase-js ^2.116.0` · `@supabase/ssr 0.12.6` ·
