@@ -43,7 +43,7 @@ function ImageCard({ image, productId, variantLabel, canEdit }: { image: Product
         {image.alt_text ? <p className="mt-1 text-xs text-text-secondary">{image.alt_text}</p> : null}
         {image.byte_size ? (
           <p className="mt-1 text-2xs text-text-muted" data-numeric>
-            {(image.byte_size / 1024).toFixed(0)} KB
+            {image.byte_size < 1024 ? "<1" : (image.byte_size / 1024).toFixed(0)} KB
           </p>
         ) : null}
         {canEdit ? (

@@ -61,17 +61,29 @@ export function VariantMatrix({
 
   if (variants.length === 0) return null;
 
+  // Fashion order: colour run first, then the size run as the boutique ordered it,
+  // never alphabetical SKU order (which would put "L" before "M").
+  const sorted = [...variants].sort((a, b) => {
+    for (let i = 0; i < Math.max(a.options.length, b.options.length); i++) {
+      const oa = a.options[i], ob = b.options[i];
+      if (!oa || !ob) return a.options.length - b.options.length;
+      if (oa.sort_order !== ob.sort_order) return oa.sort_order - ob.sort_order;
+      if (oa.value !== ob.value) return oa.value.localeCompare(ob.value, "tr");
+    }
+    return a.sku.localeCompare(b.sku, "tr");
+  });
+
   return (
     <>
       <ul className="space-y-2 lg:hidden">
-        {variants.map((v) => {
+        {sorted.map((v) => {
           const img = imageFor(v.id);
           const st = stockFor(v.id);
           return (
             <li key={v.id}>
               <Card>
                 <CardBody className="flex gap-3">
-                  <ProductThumb url={img?.url ?? null} alt={v.sku} size="md" />
+                  {img ? <ProductThumb url={img.url} alt={v.sku} size="md" /> : null}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 text-sm font-medium">
@@ -104,7 +116,7 @@ export function VariantMatrix({
             <TH>Durum</TH>
           </THead>
           <TBody>
-            {variants.map((v) => {
+            {sorted.map((v) => {
               const img = imageFor(v.id);
               const st = stockFor(v.id);
               return (

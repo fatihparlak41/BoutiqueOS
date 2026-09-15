@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   findSimilarProducts,
@@ -169,10 +168,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       {product.variants.length > 0 && (caps.canEditCatalog || caps.canManageBarcodes) ? (
         <section className="space-y-3">
-          <SectionHeader
-            title="Varyant düzenleme ve barkodlar"
-            action={<Link href="#varyantlar" className="sr-only">Varyantlar</Link>}
-          />
+          <SectionHeader title="Varyant düzenleme ve barkodlar" />
           <VariantManager
             productId={product.id}
             skuPrefix={product.sku_prefix}
@@ -181,6 +177,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             variants={product.variants}
             canEdit={caps.canEditCatalog}
             canManageBarcodes={caps.canManageBarcodes}
+            showAddForm={false}
           />
         </section>
       ) : null}

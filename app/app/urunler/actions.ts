@@ -218,8 +218,16 @@ export async function createOptionValueAction(
   const hexRaw = optionalText(formData, "color_hex");
   const colorHex = hexRaw ? (/^#[0-9a-fA-F]{6}$/.test(hexRaw) ? hexRaw.toLowerCase() : undefined) : null;
   if (colorHex === undefined) return fail("Renk kodu #RRGGBB biçiminde olmalı.");
-  const sortRaw = text(formData, "sort_order");
-  const sortOrder = /^\d{1,5}$/.test(sortRaw) ? Number(sortRaw) : 100;
+  // Next position in this option's run, read from the database at write time so two
+  // values added in quick succession never share an order (S, L, M was observed live).
+  const { data: last } = await supabase
+    .from("option_values")
+    .select("sort_order")
+    .eq("product_option_id", optionId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const sortOrder = ((last?.sort_order as number | undefined) ?? 0) + 10;
 
   // business_id is filled by trg_bid_option_values from the parent option.
   const { error } = await supabase

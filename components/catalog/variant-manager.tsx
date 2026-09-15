@@ -291,6 +291,7 @@ export function VariantManager({
   variants,
   canEdit,
   canManageBarcodes,
+  showAddForm = true,
 }: {
   productId: string;
   skuPrefix: string;
@@ -299,13 +300,15 @@ export function VariantManager({
   variants: VariantRow[];
   canEdit: boolean;
   canManageBarcodes: boolean;
+  /** The product page has the matrix builder; the one-at-a-time form is then redundant. */
+  showAddForm?: boolean;
 }) {
   return (
     <section className="space-y-4">
       <div>
-        <h3 className="text-sm font-medium tracking-tightish">Varyantlar</h3>
-        <p className="mt-1 text-xs text-muted">
-          Satılabilir birimler. Stok miktarı burada tutulmaz — mal kabul ve stok hareketleriyle gelir.
+        <p className="text-xs text-muted">
+          SKU, fiyat ve durum düzenlemesi; barkod ekleme ve birincil barkod seçimi. Stok miktarı burada tutulmaz —
+          mal kabul ve stok hareketleriyle gelir.
         </p>
       </div>
 
@@ -344,7 +347,7 @@ export function VariantManager({
         </div>
       )}
 
-      {canEdit ? (
+      {canEdit && showAddForm ? (
         options.length === 0 ? (
           <p className="text-xs text-muted">
             Varyant eklemek için önce en az bir seçenek tanımlayın.

@@ -80,6 +80,9 @@ export function MatrixBuilder({
   }, [usable]);
 
   const combos = useMemo(() => {
+    // A business with options but no selection has nothing to create yet; only a
+    // business without any option values gets the single option-less variant.
+    if (groups.length === 0 && usable.length > 0) return [];
     const rows = groups.length === 0 ? [[]] : cartesian(groups);
     return rows.map((values) => {
       const ids = values.map((v) => v.id);
@@ -89,7 +92,7 @@ export function MatrixBuilder({
       const sku = skuEdits[key] ?? suggestSku(skuPrefix, values.map((v) => v.code ?? v.value));
       return { key, label, values, ids, sku, exists: activeFingerprints.has(fp) };
     });
-  }, [groups, ownerOf, skuPrefix, skuEdits, activeFingerprints]);
+  }, [groups, usable.length, ownerOf, skuPrefix, skuEdits, activeFingerprints]);
 
   const payload: MatrixCombo[] = combos
     .filter((c) => !c.exists && !disabled[c.key])

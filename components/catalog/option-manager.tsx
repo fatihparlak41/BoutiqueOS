@@ -30,7 +30,6 @@ function InlineSubmit({ label }: { label: string }) {
 
 function OptionRow({ option, canEdit }: { option: ProductOption; canEdit: boolean }) {
   const [state, formAction] = useActionState(createOptionValueAction, IDLE);
-  const nextSort = (option.values.reduce((m, v) => Math.max(m, v.sort_order), 0) || 0) + 10;
 
   return (
     <div className="py-4">
@@ -58,7 +57,6 @@ function OptionRow({ option, canEdit }: { option: ProductOption; canEdit: boolea
       {canEdit ? (
         <form action={formAction} className="mt-3 flex flex-wrap items-end gap-2">
           <input type="hidden" name="product_option_id" value={option.id} />
-          <input type="hidden" name="sort_order" value={nextSort} />
           <Input
             name="option_value"
             required
