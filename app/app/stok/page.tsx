@@ -1,4 +1,8 @@
+import Link from "next/link";
+import { loadAppContext } from "@/lib/app-context";
 import { listBranchOptions, listStock } from "@/lib/stock/queries";
+import { countCaps } from "@/lib/stock/count-model";
+import { Button } from "@/components/ui/button";
 import { STOCK_STATE_LABELS, type StockState } from "@/lib/stock/model";
 import { listBrands, listCategories } from "@/lib/catalog/queries";
 import { Input } from "@/components/ui/input";
@@ -32,6 +36,7 @@ export default async function StockPage({
   const branchId = params.sube ?? "";
   const state = isState(params.durum) ? params.durum : undefined;
 
+  const { role } = await loadAppContext();
   const [rows, branches, categories, brands] = await Promise.all([
     listStock({
       search,
@@ -53,6 +58,13 @@ export default async function StockPage({
       <PageHeader
         title="Stok"
         description="Miktarlar değişmez stok defterinden gelir. Bu ekranda elle stok girişi yoktur."
+        actions={
+          countCaps(role).canCount ? (
+            <Link href="/app/stok/sayim">
+              <Button size="sm" variant="outline">Stok sayımı</Button>
+            </Link>
+          ) : undefined
+        }
       />
 
       <FilterBar clearHref="/app/stok" hasFilter={hasFilter}>

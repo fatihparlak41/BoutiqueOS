@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 51 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 51,
+SELECT t_check('T01 all 54 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 54,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -2256,6 +2256,259 @@ SELECT t_err('T62g image row with a foreign tenant storage path refused', $q$ IN
 SELECT t_err('T62g image row with a loose path refused', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_gallery', 'products/' || t_get('p62') || '/x.jpg') $q$, '23514');
 SELECT t_ok('T62g image row under its own tenant prefix accepted', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_gallery', 'business/' || t_get('biz') || '/products/' || t_get('p62') || '/g.jpg') $q$);
 SELECT t_logout();
+
+-- ============================================================
+-- T63 — Phase 7A stock count engine: lifecycle, zero side effects before POST,
+--        missing-item rule, stale snapshot, atomic posting, idempotency, cost, RLS
+-- ============================================================
+-- Fresh product with four variants in tenant A, branch br1. Opening stock through the
+-- existing adjustment RPC (manual cost), so pools carry a known moving average.
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Sayım Elbise', 'SAY-63', 900, 'active') RETURNING id)
+  SELECT t_set('p63', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63'), 'SAY-63-A') RETURNING id) SELECT t_set('v63a', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63a'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63'), 'SAY-63-B') RETURNING id) SELECT t_set('v63b', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63b'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63'), 'SAY-63-C') RETURNING id) SELECT t_set('v63c', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63c'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000003');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63'), 'SAY-63-D') RETURNING id) SELECT t_set('v63d', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63d'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000004');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63'), 'SAY-63-E') RETURNING id) SELECT t_set('v63e', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63e'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000005');
+WITH x AS (INSERT INTO barcodes (variant_id, barcode, barcode_type) VALUES (t_get('v63a'), '2009000063001', 'supplier') RETURNING id) SELECT t_set('bc63a', id) FROM x;
+-- a branch of its own, so the FULL count sees exactly this fixture's stock
+WITH x AS (INSERT INTO branches (business_id, name, code) VALUES (t_get('biz'), 'Sayım Şubesi', 'SAY') RETURNING id) SELECT t_set('br63', id) FROM x;
+
+SELECT t_login('u1');
+SELECT t_ok('T63 opening stock A=5 @100', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63a'), 'sellable', 5, 'sayım fixture', 'manual_cost', 100) $q$);
+SELECT t_ok('T63 opening stock B=3 @200', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63b'), 'sellable', 3, 'sayım fixture', 'manual_cost', 200) $q$);
+SELECT t_ok('T63 opening stock D sellable=2 @50', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63d'), 'sellable', 2, 'sayım fixture', 'manual_cost', 50) $q$);
+SELECT t_ok('T63 opening stock D damaged=1 @50', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63d'), 'damaged', 1, 'sayım fixture', 'manual_cost', 50) $q$);
+SELECT t_ok('T63 opening stock E=1 @30 (will not be scanned)', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63e'), 'sellable', 1, 'sayım fixture', 'manual_cost', 30) $q$);
+SELECT t_logout();
+
+CREATE TEMP TABLE _t63_base AS
+SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) AS movements,
+       (SELECT count(*) FROM inventory_movement_costs WHERE business_id = t_get('biz')) AS movement_costs,
+       (SELECT count(*) FROM supplier_account_entries) AS liab_rows,
+       (SELECT count(*) FROM goods_receipts) AS receipts,
+       (SELECT count(*) FROM inventory_adjustments) AS adjustments,
+       (SELECT string_agg(variant_id::text || ':' || on_hand_qty || ':' || total_value_base, ',' ORDER BY variant_id)
+          FROM variant_cost_pools WHERE business_id = t_get('biz') AND branch_id = t_get('br63')) AS pools;
+GRANT SELECT ON _t63_base TO authenticated;
+
+SELECT t_check('T63 privilege: count tables have no client writes and RPCs are authenticated-only',
+  NOT has_table_privilege('authenticated', 'stock_counts', 'INSERT') AND NOT has_table_privilege('authenticated', 'stock_counts', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'stock_count_lines', 'UPDATE') AND NOT has_table_privilege('authenticated', 'stock_count_lines', 'DELETE')
+  AND NOT has_table_privilege('authenticated', 'stock_count_scans', 'INSERT')
+  AND has_function_privilege('authenticated', 'rpc_stock_count_post(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_stock_count_post(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_stock_count_apply(uuid, uuid, inventory_bucket, integer, integer, uuid, text, timestamptz)', 'EXECUTE'));
+
+-- A) create (stock_staff may), scan, duplicate scan, idempotent replay, undo, conditions
+SELECT t_login('u4');
+SELECT t_set('sc63', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'full', 'T63 tam sayım'));
+SELECT t_check('T63a count created as draft with a document number',
+  (SELECT status::text || '/' || count_number FROM stock_counts WHERE id = t_get('sc63')) LIKE 'draft/SC-%');
+SELECT t_ok('T63a first scan A', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, '11111111-0000-4000-8000-000000000001', 'test-device', now()) $q$);
+SELECT t_check('T63a first scan moves the count to counting', (SELECT status::text FROM stock_counts WHERE id = t_get('sc63')) = 'counting');
+SELECT t_ok('T63a duplicate scan A (new event)', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, '11111111-0000-4000-8000-000000000002') $q$);
+SELECT t_ok('T63a replay of the first event is a no-op', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, '11111111-0000-4000-8000-000000000001') $q$);
+SELECT t_check('T63a repeated scans increment one line, replay ignored',
+  t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63') $q$) = 1
+  AND (SELECT counted_quantity FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a')) = 2
+  AND t_count($q$ SELECT count(*) FROM stock_count_scans WHERE stock_count_id = t_get('sc63') $q$) = 2);
+SELECT t_ok('T63a scan A twice more', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 2, '11111111-0000-4000-8000-000000000003') $q$);
+SELECT t_ok('T63a undo last scan (−1)', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', -1, '11111111-0000-4000-8000-000000000004') $q$);
+SELECT t_err('T63a undo below zero refused', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', -9, '11111111-0000-4000-8000-000000000005') $q$, 'INVALID_QTY');
+SELECT t_check('T63a A counted = 3 after scans and undo', (SELECT counted_quantity FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a')) = 3);
+SELECT t_ok('T63a A manual set to 4', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63'), t_get('v63a'), 'sellable', 4, '11111111-0000-4000-8000-000000000006') $q$);
+SELECT t_ok('T63a B = 3', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63'), t_get('v63b'), 'sellable', 3, '11111111-0000-4000-8000-000000000007') $q$);
+SELECT t_ok('T63a C = 2 (surplus on an empty pool)', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63'), t_get('v63c'), 'sellable', 2, '11111111-0000-4000-8000-000000000008') $q$);
+SELECT t_ok('T63a D sellable = 1', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63'), t_get('v63d'), 'sellable', 1, '11111111-0000-4000-8000-000000000009') $q$);
+SELECT t_ok('T63a D damaged = 2 (same variant, other condition = own line)', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63'), t_get('v63d'), 'damaged', 2, '11111111-0000-4000-8000-00000000000a') $q$);
+SELECT t_check('T63a two distinct lines for D', t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63d') $q$) = 2);
+SELECT t_err('T63a foreign variant refused', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('vB'), 'sellable', 1, '11111111-0000-4000-8000-00000000000b') $q$, 'INVALID_VARIANT');
+SELECT t_err('T63a event without client id refused', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, NULL) $q$, 'INVALID_EVENT');
+SELECT t_logout();
+
+-- B) zero side effect in draft / counting
+SELECT t_check('T63b counting wrote no movement, cost, adjustment, receipt or liability',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base)
+  AND (SELECT count(*) FROM inventory_movement_costs WHERE business_id = t_get('biz')) = (SELECT movement_costs FROM _t63_base)
+  AND (SELECT count(*) FROM inventory_adjustments) = (SELECT adjustments FROM _t63_base)
+  AND (SELECT count(*) FROM goods_receipts) = (SELECT receipts FROM _t63_base)
+  AND (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t63_base)
+  AND (SELECT string_agg(variant_id::text || ':' || on_hand_qty || ':' || total_value_base, ',' ORDER BY variant_id)
+         FROM variant_cost_pools WHERE business_id = t_get('biz') AND branch_id = t_get('br63')) = (SELECT pools FROM _t63_base));
+
+-- C) posting requires review; stock_staff may review but not post; sales_staff nothing
+SELECT t_login('u2');
+SELECT t_err('T63c post before review refused', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_ok('T63c stock_staff enters review', $q$ SELECT rpc_stock_count_review(t_get('sc63')) $q$);
+SELECT t_check('T63c expected quantities snapshotted (A 5, B 3, C 0, D sell 2, D dmg 1)',
+  (SELECT string_agg(pv.sku || '/' || l.bucket::text || '=' || l.expected_quantity, ',' ORDER BY pv.sku, l.bucket)
+   FROM stock_count_lines l JOIN product_variants pv ON pv.id = l.variant_id WHERE l.stock_count_id = t_get('sc63'))
+  = 'SAY-63-A/sellable=5,SAY-63-B/sellable=3,SAY-63-C/sellable=0,SAY-63-D/sellable=2,SAY-63-D/damaged=1,SAY-63-E/sellable=1',
+  (SELECT string_agg(pv.sku || '/' || l.bucket::text || '=' || COALESCE(l.expected_quantity::text, 'null'), ',' ORDER BY pv.sku, l.bucket)
+   FROM stock_count_lines l JOIN product_variants pv ON pv.id = l.variant_id WHERE l.stock_count_id = t_get('sc63')));
+SELECT t_check('T63c E (on the shelf per ledger, never scanned) became the one unresolved line — not zero',
+  t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND counted_quantity IS NULL $q$) = 1
+  AND (SELECT variant_id FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND counted_quantity IS NULL) = t_get('v63e'));
+SELECT t_err('T63c stock_staff cannot post', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, '42501');
+SELECT t_err('T63c scanning in review is closed', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, '11111111-0000-4000-8000-00000000000c') $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T63c sales_staff sees no count', t_count($q$ SELECT count(*) FROM stock_counts $q$) = 0);
+SELECT t_err('T63c sales_staff cannot create a count', $q$ SELECT rpc_stock_count_create(t_get('biz'), t_get('br63'), 'full', NULL) $q$, '42501');
+SELECT t_err('T63c sales_staff cannot post', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, '42501');
+SELECT t_logout();
+SELECT t_check('T63c review wrote no movement',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base));
+
+-- D) missing-item rule: unresolved lines block POST; explicit zero resolves them
+SELECT t_login('u2');
+SELECT t_err('T63d unresolved lines block posting', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, 'UNRESOLVED_LINES');
+SELECT t_ok('T63d back to counting', $q$ SELECT rpc_stock_count_reopen(t_get('sc63')) $q$);
+-- confirm every unresolved line as an explicit zero (0 adet olarak doğrula)
+DO $$
+DECLARE r RECORD; n INT := 0;
+BEGIN
+  FOR r IN SELECT variant_id, bucket FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND counted_quantity IS NULL LOOP
+    n := n + 1;
+    PERFORM rpc_stock_count_set_quantity(t_get('sc63'), r.variant_id, r.bucket, 0, ('22222222-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid);
+  END LOOP;
+END $$;
+SELECT t_check('T63d explicit zeros are flagged and no line is unresolved',
+  t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND counted_quantity IS NULL $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND zero_confirmed AND counted_quantity = 0 $q$) >= 1);
+SELECT t_ok('T63d review again', $q$ SELECT rpc_stock_count_review(t_get('sc63')) $q$);
+
+-- E) surplus on an empty pool blocks the whole posting (no silent zero cost), nothing written
+SELECT t_err('T63e surplus for C (empty pool) blocks posting', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, 'COST_REQUIRED');
+SELECT t_check('T63e blocked posting wrote nothing and left the count in review',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base)
+  AND (SELECT status::text FROM stock_counts WHERE id = t_get('sc63')) = 'review');
+-- give C a cost the legitimate way (an adjustment with manual cost), then the count is stale
+SELECT t_ok('T63e C gets 1 unit @70 through an adjustment', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63c'), 'sellable', 1, 'sayım fixture', 'manual_cost', 70) $q$);
+SELECT t_logout();
+CREATE TEMP TABLE _t63_base2 AS SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) AS movements;
+GRANT SELECT ON _t63_base2 TO authenticated;
+
+-- F) stale snapshot: the ledger moved after review → posting refused, nothing written
+SELECT t_login('u2');
+SELECT t_err('T63f stale count refused after intervening movement', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, 'STALE_COUNT');
+SELECT t_check('T63f stale refusal wrote nothing', (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base2));
+SELECT t_ok('T63f re-review recomputes the snapshot', $q$ SELECT rpc_stock_count_review(t_get('sc63')) $q$);
+SELECT t_check('T63f C expected is now 1', (SELECT expected_quantity FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63c')) = 1);
+
+-- G) atomic post: A 4 (−1), B 3 (0), C 2 (+1 at MWA 70), D sellable 1 (−1), D damaged 2 (+1 at MWA 50), E 0 confirmed (−1)
+CREATE TEMP TABLE _t63_post AS SELECT * FROM rpc_stock_count_post(t_get('sc63'));
+GRANT SELECT ON _t63_post TO authenticated;
+SELECT t_logout();
+SELECT t_check('T63g post summary: adjustments and units',
+  (SELECT adjustments FROM _t63_post) = 5 AND (SELECT shortage_units FROM _t63_post) = 3 AND (SELECT surplus_units FROM _t63_post) = 2);
+SELECT t_check('T63g header posted with actor and time',
+  (SELECT status::text FROM stock_counts WHERE id = t_get('sc63')) = 'posted'
+  AND (SELECT posted_by FROM stock_counts WHERE id = t_get('sc63')) = t_get('u2')
+  AND (SELECT posted_at FROM stock_counts WHERE id = t_get('sc63')) IS NOT NULL);
+SELECT t_check('T63g ledger quantities after post: A 4, B 3, C 2, D sell 1, D dmg 2',
+  fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63a'), 'sellable') = 4
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63b'), 'sellable') = 3
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63c'), 'sellable') = 2
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63d'), 'sellable') = 1
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63d'), 'damaged') = 2
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63e'), 'sellable') = 0);
+SELECT t_check('T63g exactly five movements, reason adjustment, referencing the lines',
+  t_count($q$ SELECT count(*) FROM inventory_movements m JOIN stock_count_lines l ON l.id = m.reference_id AND m.reference_type = 'stock_count_line' WHERE l.stock_count_id = t_get('sc63') AND m.reason = 'adjustment' $q$) = 5
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base2) + 5);
+SELECT t_check('T63g lines carry posted_delta and movement_id; zero-difference line has delta 0 and no movement',
+  (SELECT posted_delta FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a')) = -1
+  AND (SELECT movement_id IS NOT NULL FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a'))
+  AND (SELECT posted_delta FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63b')) = 0
+  AND (SELECT movement_id IS NULL FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63b')));
+-- cost behaviour: shortage at MWA, surplus at MWA, no supplier entry, no adjustment document
+SELECT t_check('T63g A shortage left at MWA 100 → pool 4 / 400',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63a') AND branch_id = t_get('br63')) = '4/400.00');
+SELECT t_check('T63g C surplus inherited MWA 70 → pool 2 / 140',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63c') AND branch_id = t_get('br63')) = '2/140.00');
+SELECT t_check('T63g E zero-confirmed → pool 0 / 0 (exact depletion)',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63e') AND branch_id = t_get('br63')) = '0/0.00');
+SELECT t_check('T63g D −1 sellable +1 damaged at MWA 50 → pool 3 / 150 (net quantity unchanged, value unchanged)',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63d') AND branch_id = t_get('br63')) = '3/150.00');
+SELECT t_check('T63g movement cost rows written for the five movements, unit cost = MWA',
+  t_count($q$ SELECT count(*) FROM inventory_movement_costs mc JOIN inventory_movements m ON m.id = mc.movement_id WHERE m.reference_type = 'stock_count_line' AND m.reference_id IN (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63')) $q$) = 5
+  AND (SELECT mc.unit_cost_base FROM inventory_movement_costs mc JOIN inventory_movements m ON m.id = mc.movement_id JOIN stock_count_lines l ON l.id = m.reference_id WHERE l.stock_count_id = t_get('sc63') AND l.variant_id = t_get('v63c')) = 70);
+SELECT t_check('T63g no supplier entry, receipt or adjustment document from the count',
+  (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t63_base)
+  AND (SELECT count(*) FROM goods_receipts) = (SELECT receipts FROM _t63_base)
+  AND (SELECT count(*) FROM inventory_adjustments) = (SELECT adjustments FROM _t63_base) + 1);
+
+-- H) idempotency / immutability
+SELECT t_login('u2');
+SELECT t_err('T63h second post refused as ALREADY_POSTED', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63')) $q$, 'ALREADY_POSTED');
+SELECT t_check('T63h still exactly five count movements', t_count($q$ SELECT count(*) FROM inventory_movements WHERE reference_type = 'stock_count_line' AND reference_id IN (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63')) $q$) = 5);
+SELECT t_err('T63h posted count cannot be reopened', $q$ SELECT rpc_stock_count_reopen(t_get('sc63')) $q$, 'INVALID_STATE');
+SELECT t_err('T63h posted count cannot be cancelled', $q$ SELECT rpc_stock_count_cancel(t_get('sc63'), 'x') $q$, 'INVALID_STATE');
+SELECT t_err('T63h posted count cannot be scanned', $q$ SELECT rpc_stock_count_scan(t_get('sc63'), t_get('v63a'), 'sellable', 1, '11111111-0000-4000-8000-00000000000d') $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_err('T63h posted header immutable even for maintenance', $q$ UPDATE stock_counts SET note = 'x' WHERE id = t_get('sc63') $q$, 'IMMUTABLE');
+SELECT t_err('T63h posted line immutable even for maintenance', $q$ UPDATE stock_count_lines SET counted_quantity = 99 WHERE stock_count_id = t_get('sc63') $q$, 'IMMUTABLE');
+SELECT t_err('T63h posted line undeletable', $q$ DELETE FROM stock_count_lines WHERE stock_count_id = t_get('sc63') $q$, 'IMMUTABLE');
+SELECT t_err('T63h posted header undeletable', $q$ DELETE FROM stock_counts WHERE id = t_get('sc63') $q$, 'IMMUTABLE');
+SELECT t_err('T63h a second movement for a posted line is impossible (unique index)',
+  $q$ INSERT INTO inventory_movements (business_id, branch_id, variant_id, bucket, quantity, reason, reference_type, reference_id)
+      SELECT business_id, t_get('br63'), variant_id, bucket, 1, 'adjustment', 'stock_count_line', id FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a') $q$, '23505');
+SELECT t_login('u2');
+SELECT t_check('T63h manager cannot update a posted line through the API (no grant)', NOT has_table_privilege('authenticated', 'stock_count_lines', 'UPDATE'));
+SELECT t_logout();
+
+-- I) cycle count reconciles only included variants; cancel keeps the document
+SELECT t_login('u2');
+SELECT t_set('sc63c', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'cycle', 'T63 kısmi sayım'));
+SELECT t_ok('T63i cycle: count only B = 2', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63c'), t_get('v63b'), 'sellable', 2, '33333333-0000-4000-8000-000000000001') $q$);
+SELECT t_ok('T63i cycle review', $q$ SELECT rpc_stock_count_review(t_get('sc63c')) $q$);
+SELECT t_check('T63i cycle review adds no lines for uncounted stock', t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63c') $q$) = 1);
+CREATE TEMP TABLE _t63_base3 AS SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) AS movements;
+GRANT SELECT ON _t63_base3 TO authenticated;
+SELECT t_ok('T63i cycle post', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63c')) $q$);
+SELECT t_logout();
+SELECT t_check('T63i cycle post touched only B (−1), A untouched at 4',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base3) + 1
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63b'), 'sellable') = 2
+  AND fn_bucket_qty(t_get('biz'), t_get('br63'), t_get('v63a'), 'sellable') = 4);
+SELECT t_login('u2');
+SELECT t_set('sc63x', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'full', 'T63 iptal'));
+SELECT t_ok('T63i scan then cancel', $q$ SELECT rpc_stock_count_scan(t_get('sc63x'), t_get('v63a'), 'sellable', 1, '44444444-0000-4000-8000-000000000001') $q$);
+SELECT t_ok('T63i cancel', $q$ SELECT rpc_stock_count_cancel(t_get('sc63x'), 'test iptali') $q$);
+SELECT t_check('T63i cancelled count retained with reason and scans, no movement',
+  (SELECT status::text || '/' || cancel_reason FROM stock_counts WHERE id = t_get('sc63x')) = 'cancelled/test iptali'
+  AND t_count($q$ SELECT count(*) FROM stock_count_scans WHERE stock_count_id = t_get('sc63x') $q$) = 1
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63_base3) + 1);
+SELECT t_err('T63i cancelled count cannot be posted', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63x')) $q$, 'INVALID_STATE');
+SELECT t_err('T63i cancelled count cannot be scanned', $q$ SELECT rpc_stock_count_scan(t_get('sc63x'), t_get('v63a'), 'sellable', 1, '44444444-0000-4000-8000-000000000002') $q$, 'INVALID_STATE');
+SELECT t_err('T63i inactive branch refused', $q$ SELECT rpc_stock_count_create(t_get('biz'), t_get('brOff'), 'full', NULL) $q$, 'INVALID_BRANCH');
+SELECT t_logout();
+
+-- J) cross-tenant
+SELECT t_login('u5');
+SELECT t_check('T63j other tenant sees no count of A', t_count($q$ SELECT count(*) FROM stock_counts WHERE business_id = t_get('biz') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM stock_count_lines WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_err('T63j other tenant cannot create a count in A', $q$ SELECT rpc_stock_count_create(t_get('biz'), t_get('br63'), 'full', NULL) $q$, '42501');
+SELECT t_err('T63j other tenant cannot use A''s branch with its own business', $q$ SELECT rpc_stock_count_create(t_get('bizB'), t_get('br63'), 'full', NULL) $q$, 'INVALID_BRANCH');
+SELECT t_err('T63j other tenant cannot scan / post A''s count', $q$ SELECT rpc_stock_count_scan(t_get('sc63c'), t_get('v63b'), 'sellable', 1, '55555555-0000-4000-8000-000000000001') $q$, '42501');
+SELECT t_err('T63j other tenant cannot post A''s count', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63c')) $q$, '42501');
+SELECT t_set('sc63B', rpc_stock_count_create(t_get('bizB'), t_get('brB'), 'cycle', NULL));
+SELECT t_err('T63j B cannot count A''s variant in its own count', $q$ SELECT rpc_stock_count_scan(t_get('sc63B'), t_get('v63a'), 'sellable', 1, '55555555-0000-4000-8000-000000000002') $q$, 'INVALID_VARIANT');
+SELECT t_logout();
+SELECT t_err('T63j business_id of a line cannot point at another tenant (parent trigger)',
+  $q$ INSERT INTO stock_count_lines (business_id, stock_count_id, variant_id, bucket) VALUES (t_get('bizB'), t_get('sc63B'), t_get('v63a'), 'sellable') $q$, '23503');
+SELECT t_err('T63j a count movement cannot be forged for another tenant''s line',
+  $q$ INSERT INTO inventory_movements (business_id, branch_id, variant_id, bucket, quantity, reason, reference_type, reference_id)
+      SELECT t_get('bizB'), t_get('brB'), t_get('vB'), 'sellable', 1, 'adjustment', 'stock_count_line', id FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a') $q$, '23505');
 
 -- ============================================================
 -- SUMMARY
