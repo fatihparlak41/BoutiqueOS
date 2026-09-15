@@ -155,7 +155,7 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
           {/* phone: cards */}
           <ul className="space-y-2 lg:hidden">
             {visible.map((l) => (
-              <li key={l.id} className={cn("rounded border bg-surface p-3", l.counted_quantity === null ? "border-warning/40" : "border-border")}>
+              <li key={l.id} className={cn("rounded border bg-surface p-3", l.counted_quantity === null ? "border-warning/40" : "border-border")} data-sku={l.sku} data-bucket={l.bucket} data-expected={l.expected_quantity ?? ""} data-counted={l.counted_quantity ?? ""}>
                 <VariantIdentity v={l} size="sm" />
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <ConditionBadge bucket={l.bucket} />

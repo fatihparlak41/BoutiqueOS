@@ -220,7 +220,7 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
 
       {/* last scanned */}
       {last ? (
-        <section className={cn("rounded border p-4", LAST_BORDER[last.bucket])} aria-live="polite">
+        <section className={cn("rounded border p-4", LAST_BORDER[last.bucket])} aria-live="polite" data-last-sku={last.sku} data-last-bucket={last.bucket} data-last-qty={last.counted_quantity ?? ""}>
           <div className="flex items-start justify-between gap-3">
             <VariantIdentity v={last} />
             <div className="shrink-0 text-right">
@@ -263,7 +263,7 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
         {lines.length === 0 ? null : (
           <ul className="divide-y divide-border border-y border-border">
             {lines.map((l) => (
-              <li key={l.id} className="flex items-center justify-between gap-3 py-2.5">
+              <li key={l.id} className="flex items-center justify-between gap-3 py-2.5" data-sku={l.sku} data-bucket={l.bucket} data-qty={l.counted_quantity ?? ""}>
                 <VariantIdentity v={l} size="sm" />
                 <div className="flex shrink-0 items-center gap-2">
                   <ConditionBadge bucket={l.bucket} />
