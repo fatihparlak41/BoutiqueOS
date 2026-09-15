@@ -108,21 +108,27 @@ export async function checkDuplicatesAction(input: { name: string; style_code: s
     const similar = await findSimilarProducts({ name, styleCode: styleCode || null });
     const styleIds = similar.filter((s) => s.reason === "style_code" && styleCode && s.style_code?.toLocaleLowerCase("tr-TR") === styleCode.toLocaleLowerCase("tr-TR")).map((s) => s.id);
 
-    // Name candidates: every product sharing the first word, then the deterministic rule.
+    // Name candidates: the prefix hits findSimilarProducts already found plus every product
+    // sharing the longest word of the name ("zz test satin dress" must not be skipped because
+    // its first word is short). The deterministic rule then decides: same normalised name, or
+    // one is the other's word-prefix.
     const wanted = normalizeName(name);
-    const firstWord = wanted.split(" ")[0] ?? "";
-    const nameIds: string[] = [];
-    if (firstWord.length >= 3) {
+    const longestWord = wanted.split(" ").sort((a, b) => b.length - a.length)[0] ?? "";
+    const candidates = new Map<string, string>();
+    for (const s of similar) if (s.reason === "name") candidates.set(s.id, s.name);
+    if (longestWord.length >= 3) {
       const { data } = await supabase
         .from("products")
         .select("id, name")
         .eq("business_id", businessId)
-        .ilike("name", `%${firstWord.replace(/[,()*\\%]/g, " ")}%`)
+        .ilike("name", `%${longestWord.replace(/[,()*\\%]/g, " ")}%`)
         .limit(50);
-      for (const r of data ?? []) {
-        const have = normalizeName(r.name as string);
-        if (have === wanted || have.startsWith(`${wanted} `) || wanted.startsWith(`${have} `)) nameIds.push(r.id as string);
-      }
+      for (const r of data ?? []) candidates.set(r.id as string, r.name as string);
+    }
+    const nameIds: string[] = [];
+    for (const [id, candidateName] of candidates) {
+      const have = normalizeName(candidateName);
+      if (have === wanted || have.startsWith(`${wanted} `) || wanted.startsWith(`${have} `)) nameIds.push(id);
     }
 
     const all = await summariesFor([...new Set([...styleIds, ...nameIds])]);
