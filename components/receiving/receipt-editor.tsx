@@ -156,6 +156,50 @@ function LineRow({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine 
   );
 }
 
+/** Narrow-screen counterpart of LineRow: same two forms, stacked so nothing scrolls sideways. */
+function LineCard({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine }) {
+  const [updateState, updateAction] = useActionState(upsertReceiptLineAction, IDLE);
+  const [deleteState, deleteAction] = useActionState(deleteReceiptLineAction, IDLE);
+
+  return (
+    <li className="space-y-2 py-3" data-line-card>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="block font-medium">{line.product_name}</span>
+          <span className="block text-2xs text-muted">
+            {line.options} · <span data-numeric>{line.sku}</span>
+            {line.primary_barcode ? <> · <span data-numeric>{line.primary_barcode}</span></> : null}
+          </span>
+        </div>
+        <span className="shrink-0 text-sm text-ink-70" data-numeric>
+          {formatMoney(line.quantity * line.unit_cost, receipt.invoice_currency)}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <form action={updateAction} className="flex flex-1 flex-wrap items-end gap-2">
+          <input type="hidden" name="receipt_id" value={receipt.id} />
+          <input type="hidden" name="variant_id" value={line.variant_id} />
+          <div className="w-20">
+            <Label htmlFor={`mqty-${line.id}`} className="text-2xs">Adet</Label>
+            <Input id={`mqty-${line.id}`} name="quantity" inputMode="numeric" defaultValue={String(line.quantity)} className="h-11 text-right" />
+          </div>
+          <div className="w-28">
+            <Label htmlFor={`mcost-${line.id}`} className="text-2xs">Birim maliyet</Label>
+            <Input id={`mcost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={moneyInputValue(line.unit_cost)} className="h-11 text-right" />
+          </div>
+          <Pending label="Güncelle" pendingLabel="…" variant="ghost" />
+        </form>
+        <form action={deleteAction}>
+          <input type="hidden" name="receipt_id" value={receipt.id} />
+          <input type="hidden" name="line_id" value={line.id} />
+          <Pending label="Sil" pendingLabel="…" variant="ghost" />
+        </form>
+      </div>
+      {updateState.error || deleteState.error ? <FormMessage state={updateState.error ? updateState : deleteState} /> : null}
+    </li>
+  );
+}
+
 function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
   const [search, searchAction] = useActionState(searchVariantsAction, VARIANT_SEARCH_IDLE);
   const [addState, addAction] = useActionState(addReceiptLinesAction, IDLE);
@@ -364,7 +408,13 @@ export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
             Henüz satır yok. Aşağıdan varyant arayıp ekleyin.
           </p>
         ) : (
-          <div className="relative overflow-x-auto">
+          <>
+          <ul className="divide-y divide-line border-y border-line text-sm sm:hidden">
+            {receipt.lines.map((line) => (
+              <LineCard key={line.id} receipt={receipt} line={line} />
+            ))}
+          </ul>
+          <div className="relative hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[46rem] border-collapse text-sm">
               <thead>
                 <tr className="border-y border-line text-left text-xs text-muted">
@@ -384,6 +434,7 @@ export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
               </tbody>
             </table>
           </div>
+          </>
         )}
 
         <VariantPicker receipt={receipt} />
