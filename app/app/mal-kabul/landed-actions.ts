@@ -7,10 +7,10 @@ import { reportDbError } from "@/lib/db-errors";
 import type { ActionState } from "@/lib/catalog/action-state";
 
 /**
- * Phase 8A write side: additional charges, allocation method, review, reversal.
- * Draft charges and the allocation method are ordinary RLS-guarded writes (procurement,
- * active business, draft document — the posted-document trigger refuses the rest).
- * Review, POST and reversal are RPCs and re-prove everything themselves.
+ * Phase 8A write side: additional charges, allocation method, review, reversal — all
+ * owner|manager. Charges are RLS-guarded table writes (manager+, active business, draft;
+ * the posted-document trigger refuses the rest), the allocation method is guarded by a
+ * table trigger, and review / POST / reversal are RPCs that re-prove the role themselves.
  */
 
 const NO_PERMISSION = "Bu işlem için yetkiniz yok.";
@@ -37,7 +37,7 @@ function parseDecimal(input: string): number | null {
 
 export async function addChargeAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, businessId, caps } = await loadReceivingContext();
-  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+  if (!caps.canManageCost) return fail(NO_PERMISSION);
   const receiptId = text(fd, "receipt_id");
   if (!UUID.test(receiptId)) return fail("Belge bulunamadı.");
 
@@ -76,7 +76,7 @@ export async function addChargeAction(_prev: ActionState, fd: FormData): Promise
 
 export async function deleteChargeAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, businessId, caps } = await loadReceivingContext();
-  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+  if (!caps.canManageCost) return fail(NO_PERMISSION);
   const receiptId = text(fd, "receipt_id");
   const chargeId = text(fd, "charge_id");
   if (!UUID.test(receiptId) || !UUID.test(chargeId)) return fail("Masraf bulunamadı.");
@@ -88,7 +88,7 @@ export async function deleteChargeAction(_prev: ActionState, fd: FormData): Prom
 
 export async function setAllocationMethodAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, businessId, caps } = await loadReceivingContext();
-  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+  if (!caps.canManageCost) return fail(NO_PERMISSION);
   const receiptId = text(fd, "receipt_id");
   if (!UUID.test(receiptId)) return fail("Belge bulunamadı.");
   const method = text(fd, "allocation_method") as AllocationMethod;
@@ -107,7 +107,7 @@ export async function setAllocationMethodAction(_prev: ActionState, fd: FormData
 /** Validates like POST would and stamps the review. Stock, cost and liabilities are untouched. */
 export async function reviewReceiptAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, caps } = await loadReceivingContext();
-  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+  if (!caps.canManageCost) return fail(NO_PERMISSION);
   const receiptId = text(fd, "receipt_id");
   if (!UUID.test(receiptId)) return fail("Belge bulunamadı.");
   const { error } = await supabase.rpc("rpc_goods_receipt_review", { p_goods_receipt_id: receiptId });

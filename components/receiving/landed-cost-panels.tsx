@@ -235,7 +235,7 @@ export function liabilitySummary(receipt: ReceiptDetail, invoiceTotalOriginal: n
 export function AllocationReviewSection({ receipt, preview }: { receipt: ReceiptDetail; preview: AllocationPreview }) {
   const [reviewState, reviewAction] = useActionState(reviewReceiptAction, IDLE);
   const byItem = new Map(receipt.lines.map((l) => [l.id, l]));
-  const invoiceTotal = receipt.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0);
+  const invoiceTotal = receipt.lines.reduce((s, l) => s + l.quantity * (l.unit_cost ?? 0), 0);
   const baseTotal = preview.lines.reduce((s, r) => s + r.total_cost_base, 0);
   const chargeTotal = preview.lines.reduce((s, r) => s + r.allocated_charge_base, 0);
   const landedTotal = preview.lines.reduce((s, r) => s + r.landed_total_cost_base, 0);

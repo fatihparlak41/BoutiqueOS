@@ -28,6 +28,11 @@ import { AllocationReviewSection, ChargesSection } from "@/components/receiving/
  * never reaches this component: no header edit, no line writes, no second post. Posting is
  * enabled only while the stored review matches the document (the RPC re-checks this and
  * refuses with STALE_DRAFT otherwise). Reversal of a posted document is a separate panel.
+ *
+ * Two roles share this screen. `receipt.cost_visible` (owner|manager) switches on every
+ * financial element: cost inputs, line totals, charges, allocation, review and POST. For
+ * stock_staff those elements do not exist here at all — and the data behind them was never
+ * loaded (the database refuses it), so nothing financial reaches the client payload.
  */
 
 function Pending({ label, pendingLabel, variant = "outline", size = "sm" }: {
@@ -125,18 +130,22 @@ function LineRow({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine 
               </Label>
               <Input id={`qty-${line.id}`} name="quantity" inputMode="numeric" defaultValue={String(line.quantity)} className="h-11 text-right sm:h-9" />
             </div>
-            <div className="w-28">
-              <Label htmlFor={`cost-${line.id}`} className="sr-only">
-                Birim maliyet
-              </Label>
-              <Input id={`cost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={moneyInputValue(line.unit_cost)} className="h-11 text-right sm:h-9" />
-            </div>
+            {receipt.cost_visible ? (
+              <div className="w-28">
+                <Label htmlFor={`cost-${line.id}`} className="sr-only">
+                  Birim maliyet
+                </Label>
+                <Input id={`cost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={line.unit_cost === null ? "" : moneyInputValue(line.unit_cost)} placeholder="fiyat girilmedi" className="h-11 text-right sm:h-9" />
+              </div>
+            ) : null}
             <Pending label="Güncelle" pendingLabel="…" variant="ghost" />
           </form>
         </td>
-        <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
-          {formatMoney(line.quantity * line.unit_cost, receipt.invoice_currency)}
-        </td>
+        {receipt.cost_visible ? (
+          <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
+            <LineTotal line={line} currency={receipt.invoice_currency} />
+          </td>
+        ) : null}
         <td className="py-2.5 text-right">
           <form action={deleteAction}>
             <input type="hidden" name="receipt_id" value={receipt.id} />
@@ -147,7 +156,7 @@ function LineRow({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine 
       </tr>
       {updateState.error || deleteState.error ? (
         <tr>
-          <td colSpan={5} className="pb-2">
+          <td colSpan={receipt.cost_visible ? 5 : 4} className="pb-2">
             <FormMessage state={updateState.error ? updateState : deleteState} />
           </td>
         </tr>
@@ -171,9 +180,11 @@ function LineCard({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine
             {line.primary_barcode ? <> · <span data-numeric>{line.primary_barcode}</span></> : null}
           </span>
         </div>
-        <span className="shrink-0 text-sm text-ink-70" data-numeric>
-          {formatMoney(line.quantity * line.unit_cost, receipt.invoice_currency)}
-        </span>
+        {receipt.cost_visible ? (
+          <span className="shrink-0 text-sm text-ink-70" data-numeric>
+            <LineTotal line={line} currency={receipt.invoice_currency} />
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <form action={updateAction} className="flex flex-1 flex-wrap items-end gap-2">
@@ -183,10 +194,12 @@ function LineCard({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine
             <Label htmlFor={`mqty-${line.id}`} className="text-2xs">Adet</Label>
             <Input id={`mqty-${line.id}`} name="quantity" inputMode="numeric" defaultValue={String(line.quantity)} className="h-11 text-right" />
           </div>
-          <div className="w-28">
-            <Label htmlFor={`mcost-${line.id}`} className="text-2xs">Birim maliyet</Label>
-            <Input id={`mcost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={moneyInputValue(line.unit_cost)} className="h-11 text-right" />
-          </div>
+          {receipt.cost_visible ? (
+            <div className="w-28">
+              <Label htmlFor={`mcost-${line.id}`} className="text-2xs">Birim maliyet</Label>
+              <Input id={`mcost-${line.id}`} name="unit_cost" inputMode="decimal" defaultValue={line.unit_cost === null ? "" : moneyInputValue(line.unit_cost)} placeholder="fiyat girilmedi" className="h-11 text-right" />
+            </div>
+          ) : null}
           <Pending label="Güncelle" pendingLabel="…" variant="ghost" />
         </form>
         <form action={deleteAction}>
@@ -198,6 +211,12 @@ function LineCard({ receipt, line }: { receipt: ReceiptDetail; line: ReceiptLine
       {updateState.error || deleteState.error ? <FormMessage state={updateState.error ? updateState : deleteState} /> : null}
     </li>
   );
+}
+
+/** Line value for a manager. A line without a price says so; it is never shown as 0. */
+function LineTotal({ line, currency }: { line: ReceiptLine; currency: ReceiptDetail["invoice_currency"] }) {
+  if (line.unit_cost === null) return <span className="text-2xs text-danger" data-missing-cost>fiyat girilmedi</span>;
+  return <>{formatMoney(line.quantity * line.unit_cost, currency)}</>;
 }
 
 function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
@@ -265,19 +284,21 @@ function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
                       className="h-11 text-right sm:h-9"
                     />
                   </div>
-                  <div className="w-28">
-                    <Label htmlFor={`cost-${variant.variant_id}`} className="text-2xs">
-                      Birim maliyet
-                    </Label>
-                    <Input
-                      id={`cost-${variant.variant_id}`}
-                      name={`cost_${variant.variant_id}`}
-                      inputMode="decimal"
-                      defaultValue={line ? moneyInputValue(line.unit_cost) : ""}
-                      placeholder="0,00"
-                      className="h-11 text-right sm:h-9"
-                    />
-                  </div>
+                  {receipt.cost_visible ? (
+                    <div className="w-28">
+                      <Label htmlFor={`cost-${variant.variant_id}`} className="text-2xs">
+                        Birim maliyet
+                      </Label>
+                      <Input
+                        id={`cost-${variant.variant_id}`}
+                        name={`cost_${variant.variant_id}`}
+                        inputMode="decimal"
+                        defaultValue={line && line.unit_cost !== null ? moneyInputValue(line.unit_cost) : ""}
+                        placeholder="0,00"
+                        className="h-11 text-right sm:h-9"
+                      />
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -299,11 +320,12 @@ function PostPanel({ receipt, preview }: { receipt: ReceiptDetail; preview: Allo
   const [confirmed, setConfirmed] = useState(false);
 
   const totalQuantity = receipt.lines.reduce((sum, line) => sum + line.quantity, 0);
-  const totalOriginal = receipt.lines.reduce((sum, line) => sum + line.quantity * line.unit_cost, 0);
+  const priced = receipt.missing_cost_lines === 0;
+  const totalOriginal = receipt.lines.reduce((sum, line) => sum + line.quantity * (line.unit_cost ?? 0), 0);
   const totalBasePreview = preview.lines.reduce((sum, r) => sum + r.total_cost_base, 0);
   const landedTotal = preview.lines.reduce((sum, r) => sum + r.landed_total_cost_base, 0);
   const empty = receipt.lines.length === 0;
-  const reviewed = preview.review_current && !preview.error;
+  const reviewed = preview.review_current && !preview.error && priced;
 
   return (
     <section className="space-y-4 border border-line-strong p-4">
@@ -317,10 +339,10 @@ function PostPanel({ receipt, preview }: { receipt: ReceiptDetail; preview: Allo
           ["Satır sayısı", String(receipt.lines.length)],
           ["Toplam adet", formatQuantity(totalQuantity)],
           ["Para birimi", receipt.invoice_currency],
-          ["Belge tutarı", formatMoney(totalOriginal, receipt.invoice_currency)],
+          ["Belge tutarı", priced ? formatMoney(totalOriginal, receipt.invoice_currency) : `${receipt.missing_cost_lines} satırda fiyat girilmedi`],
           ["Kur", formatRate(receipt.exchange_rate)],
-          ["TRY karşılığı", formatMoney(totalBasePreview, "TRY")],
-          ["İniş maliyeti toplamı", formatMoney(landedTotal, "TRY")],
+          ["TRY karşılığı", priced ? formatMoney(totalBasePreview, "TRY") : "—"],
+          ["İniş maliyeti toplamı", priced ? formatMoney(landedTotal, "TRY") : "—"],
           ["Gözden geçirme", reviewed ? "Güncel" : "Gerekli"],
         ].map(([label, value]) => (
           <div key={label} className="flex justify-between gap-6 py-2">
@@ -353,6 +375,8 @@ function PostPanel({ receipt, preview }: { receipt: ReceiptDetail; preview: Allo
         <PostButton disabled={!confirmed || empty || !reviewed} />
         {empty ? (
           <p className="text-2xs text-muted">Belgede satır yok; işlenemez.</p>
+        ) : !priced ? (
+          <p className="text-2xs text-danger" data-testid="post-blocked">Fiyatı girilmemiş satırlar var; önce her satıra birim maliyet girin.</p>
         ) : !reviewed ? (
           <p className="text-2xs text-muted" data-testid="post-blocked">Önce belgeyi gözden geçirin.</p>
         ) : null}
@@ -372,6 +396,48 @@ function PostPanel({ receipt, preview }: { receipt: ReceiptDetail; preview: Allo
   );
 }
 
+/**
+ * What a stock_staff member sees instead of the financial panels: the document's
+ * operational summary and the draft cancel. Pricing, charges, review and POST belong to
+ * the manager and are not offered here in any form.
+ */
+function OperationalPanel({ receipt }: { receipt: ReceiptDetail }) {
+  const [cancelState, cancelAction] = useActionState(cancelReceiptAction, IDLE);
+  const totalQuantity = receipt.lines.reduce((sum, line) => sum + line.quantity, 0);
+  return (
+    <section className="space-y-4 border border-line-strong p-4" data-testid="operational-panel">
+      <h3 className="text-sm font-medium tracking-tightish">Mal kabul özeti</h3>
+      <dl className="divide-y divide-line border-y border-line text-sm">
+        {[
+          ["Belge no", receipt.receipt_number],
+          ["Tedarikçi", receipt.supplier_name],
+          ["Şube", receipt.branch_name],
+          ["Satır sayısı", String(receipt.lines.length)],
+          ["Toplam adet", formatQuantity(totalQuantity)],
+          ["Para birimi", receipt.invoice_currency],
+        ].map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-6 py-2">
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-right" data-numeric>
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs leading-relaxed text-muted">
+        Adetler kaydedildi. Birim maliyet, ek masraflar, gözden geçirme ve işleme işletme
+        sahibi ya da yönetici tarafından yapılır; belge o zamana kadar taslak kalır.
+      </p>
+      <form action={cancelAction} className="border-t border-line pt-3">
+        <input type="hidden" name="receipt_id" value={receipt.id} />
+        <Pending label="Taslağı iptal et" pendingLabel="İptal ediliyor…" variant="ghost" />
+        <p className="mt-1 text-2xs text-muted">Yalnız taslak belgeler iptal edilebilir; stoğa hiç dokunulmaz.</p>
+      </form>
+      <FormMessage state={cancelState} />
+    </section>
+  );
+}
+
 function PostButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
   return (
@@ -384,7 +450,8 @@ function PostButton({ disabled }: { disabled: boolean }) {
 export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
   receipt: ReceiptDetail;
   fxHint: number | null;
-  preview: AllocationPreview;
+  /** null for a role without cost access: no allocation, review or POST on this screen. */
+  preview: AllocationPreview | null;
   suppliers: Supplier[];
 }) {
   return (
@@ -420,8 +487,8 @@ export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
                 <tr className="border-y border-line text-left text-xs text-muted">
                   <th scope="col" className="py-2 pr-4 font-medium">Ürün</th>
                   <th scope="col" className="py-2 pr-4 font-medium">SKU / barkod</th>
-                  <th scope="col" className="py-2 pr-4 font-medium">Adet ve birim maliyet</th>
-                  <th scope="col" className="py-2 pr-4 text-right font-medium">Satır tutarı</th>
+                  <th scope="col" className="py-2 pr-4 font-medium">{receipt.cost_visible ? "Adet ve birim maliyet" : "Adet"}</th>
+                  {receipt.cost_visible ? <th scope="col" className="py-2 pr-4 text-right font-medium">Satır tutarı</th> : null}
                   <th scope="col" className="py-2 text-right font-medium">
                     <span className="sr-only">Sil</span>
                   </th>
@@ -440,10 +507,15 @@ export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
         <VariantPicker receipt={receipt} />
       </section>
 
-      <ChargesSection receipt={receipt} suppliers={suppliers} editable />
-      <AllocationReviewSection receipt={receipt} preview={preview} />
-
-      <PostPanel receipt={receipt} preview={preview} />
+      {receipt.cost_visible && preview ? (
+        <>
+          <ChargesSection receipt={receipt} suppliers={suppliers} editable />
+          <AllocationReviewSection receipt={receipt} preview={preview} />
+          <PostPanel receipt={receipt} preview={preview} />
+        </>
+      ) : (
+        <OperationalPanel receipt={receipt} />
+      )}
     </div>
   );
 }

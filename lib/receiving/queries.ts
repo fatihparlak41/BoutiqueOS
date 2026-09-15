@@ -26,9 +26,11 @@ import {
  * Read side of receiving.
  *
  * Every query is additionally filtered by business_id even though RLS already scopes it.
- * Cost columns appear only where the contract allows them: goods_receipt_items.unit_cost
- * and the post-time snapshots, which pol_gri_select opens to procurement roles.
- * variant_cost_pools and inventory_movement_costs are never touched here.
+ * Cost never comes from a table read: the cost columns of goods_receipt_items /
+ * goods_receipts / goods_receipt_reversals are not SELECT-able by the authenticated role
+ * (20260916120000). Owner|manager get them from rpc_goods_receipt_financial and
+ * rpc_goods_receipt_list_totals; for stock_staff those calls are not made and every cost
+ * field stays null. variant_cost_pools and inventory_movement_costs are never touched here.
  */
 
 /** Explicit page ceilings — kept in the query layer so no component invents its own. */
@@ -124,7 +126,7 @@ export type ReceiptFilters = {
 };
 
 export async function listReceipts(filters: ReceiptFilters = {}): Promise<ReceiptListRow[]> {
-  const { supabase, businessId } = await loadReceivingContext();
+  const { supabase, businessId, caps } = await loadReceivingContext();
 
   let query = supabase
     .from("goods_receipts")
@@ -153,19 +155,24 @@ export async function listReceipts(filters: ReceiptFilters = {}): Promise<Receip
 
   const ids = receipts.map((row) => row.id as string);
 
-  // Totals are summed here: the schema has no aggregate view for receipts and adding one
-  // would mean a migration. Bounded by RECEIPT_LIST_LIMIT above.
-  const [{ data: lineRows, error: lineError }, suppliers, branches] = await Promise.all([
+  // Quantities are summed here (bounded by RECEIPT_LIST_LIMIT); invoice totals come from
+  // the manager-only RPC and are simply absent for other roles.
+  const [{ data: lineRows, error: lineError }, totals, suppliers, branches] = await Promise.all([
     supabase
       .from("goods_receipt_items")
-      .select("goods_receipt_id, quantity, unit_cost")
+      .select("goods_receipt_id, quantity")
       .eq("business_id", businessId)
       .in("goods_receipt_id", ids),
+    caps.canManageCost
+      ? supabase.rpc("rpc_goods_receipt_list_totals", { p_goods_receipt_ids: ids })
+      : Promise.resolve({ data: null, error: null }),
     listSuppliers(),
     listBranches(),
   ]);
 
   if (lineError) throw new Error(`Belge satırları okunamadı: ${lineError.message}`);
+  if (totals.error) throw new Error(`Belge tutarları okunamadı: ${totals.error.message}`);
+  const totalRows = (totals.data ?? []) as Array<Record<string, unknown>>;
 
   return receipts.map((row) => {
     const id = row.id as string;
@@ -182,7 +189,8 @@ export async function listReceipts(filters: ReceiptFilters = {}): Promise<Receip
       branch_name: branches.find((b) => b.id === row.branch_id)?.name ?? "—",
       line_count: own.length,
       total_quantity: own.reduce((sum, line) => sum + num(line.quantity), 0),
-      total_original: own.reduce((sum, line) => sum + num(line.quantity) * num(line.unit_cost), 0),
+      total_original: caps.canManageCost ? num(totalRows.find((t) => t.goods_receipt_id === id)?.total_original) : null,
+      missing_cost_lines: caps.canManageCost ? num(totalRows.find((t) => t.goods_receipt_id === id)?.missing_cost_lines) : 0,
       posted_at: (row.posted_at as string | null) ?? null,
       created_at: row.created_at as string,
     };
@@ -270,12 +278,12 @@ async function loadVariantMeta(variantIds: string[]): Promise<Map<string, Varian
 }
 
 export async function getReceipt(receiptId: string): Promise<ReceiptDetail | null> {
-  const { supabase, businessId } = await loadReceivingContext();
+  const { supabase, businessId, caps } = await loadReceivingContext();
 
   const { data: receipt, error } = await supabase
     .from("goods_receipts")
     .select(
-      "id, receipt_number, received_at, status, invoice_currency, exchange_rate, document_ref, note, supplier_id, branch_id, posted_at, created_at, allocation_method, reviewed_at, posted_invoice_total_original, posted_charges_base, posted_landed_total_base",
+      "id, receipt_number, received_at, status, invoice_currency, exchange_rate, document_ref, note, supplier_id, branch_id, posted_at, created_at, allocation_method, reviewed_at",
     )
     .eq("business_id", businessId)
     .eq("id", receiptId)
@@ -286,24 +294,29 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
 
   const { data: itemRows, error: itemError } = await supabase
     .from("goods_receipt_items")
-    .select("id, variant_id, quantity, unit_cost, fx_rate_snapshot, unit_cost_base, total_cost_base, allocated_charge_base, landed_unit_cost_base, landed_total_cost_base")
+    .select("id, variant_id, quantity")
     .eq("business_id", businessId)
     .eq("goods_receipt_id", receiptId)
     .limit(RECEIPT_LINE_LIMIT);
 
-  const [{ data: chargeRows, error: chargeError }, { data: reversalRow }] = await Promise.all([
-    supabase
-      .from("goods_receipt_charges")
-      .select("id, kind, description, amount, currency, exchange_rate, amount_base, include_in_landed, liability_mode, payee_supplier_id")
-      .eq("business_id", businessId)
-      .eq("goods_receipt_id", receiptId)
-      .order("created_at", { ascending: true }),
+  // Financial data only for owner|manager; the RPC refuses everyone else, so it is not
+  // even attempted (the page must not depend on catching a FORBIDDEN).
+  const [{ data: chargeRows, error: chargeError }, { data: reversalRow }, financial] = await Promise.all([
+    caps.canManageCost
+      ? supabase
+          .from("goods_receipt_charges")
+          .select("id, kind, description, amount, currency, exchange_rate, amount_base, include_in_landed, liability_mode, payee_supplier_id")
+          .eq("business_id", businessId)
+          .eq("goods_receipt_id", receiptId)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [], error: null }),
     supabase
       .from("goods_receipt_reversals")
-      .select("id, reason, reversed_at, reversed_by, value_removed_base")
+      .select("id, reason, reversed_at, reversed_by")
       .eq("business_id", businessId)
       .eq("goods_receipt_id", receiptId)
       .maybeSingle(),
+    caps.canManageCost ? loadFinancial(receiptId) : Promise.resolve(null),
   ]);
   if (chargeError) throw new Error(`Ek masraflar okunamadı: ${chargeError.message}`);
 
@@ -326,13 +339,7 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
         options: info?.options ?? "—",
         primary_barcode: info?.primary_barcode ?? null,
         quantity: num(row.quantity),
-        unit_cost: num(row.unit_cost),
-        fx_rate_snapshot: numOrNull(row.fx_rate_snapshot),
-        unit_cost_base: numOrNull(row.unit_cost_base),
-        total_cost_base: numOrNull(row.total_cost_base),
-        allocated_charge_base: numOrNull(row.allocated_charge_base),
-        landed_unit_cost_base: numOrNull(row.landed_unit_cost_base),
-        landed_total_cost_base: numOrNull(row.landed_total_cost_base),
+        ...(financial?.items.get(row.id as string) ?? NO_COST),
       };
     })
     .sort((a, b) => a.product_name.localeCompare(b.product_name, "tr") || a.sku.localeCompare(b.sku, "tr"));
@@ -353,6 +360,8 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
     posted_at: (receipt.posted_at as string | null) ?? null,
     created_at: receipt.created_at as string,
     lines,
+    cost_visible: financial !== null,
+    missing_cost_lines: financial?.missing_cost_lines ?? 0,
     allocation_method: (receipt.allocation_method as AllocationMethod) ?? "invoice_value_proportional",
     reviewed_at: (receipt.reviewed_at as string | null) ?? null,
     charges: (chargeRows ?? []).map((c) => ({
@@ -368,14 +377,64 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
       payee_supplier_id: (c.payee_supplier_id as string | null) ?? null,
       payee_supplier_name: c.payee_supplier_id ? (suppliers.find((s) => s.id === c.payee_supplier_id)?.name ?? "—") : null,
     })),
-    posted_invoice_total_original: numOrNull(receipt.posted_invoice_total_original),
-    posted_charges_base: numOrNull(receipt.posted_charges_base),
-    posted_landed_total_base: numOrNull(receipt.posted_landed_total_base),
-    reversal: await loadReversal(reversalRow),
+    posted_invoice_total_original: financial?.posted_invoice_total_original ?? null,
+    posted_charges_base: financial?.posted_charges_base ?? null,
+    posted_landed_total_base: financial?.posted_landed_total_base ?? null,
+    reversal: await loadReversal(reversalRow, financial?.reversal_value_removed_base ?? null),
   };
 }
 
-async function loadReversal(row: Record<string, unknown> | null): Promise<ReceiptReversal | null> {
+type ItemCost = Pick<
+  ReceiptLine,
+  "unit_cost" | "fx_rate_snapshot" | "unit_cost_base" | "total_cost_base" | "allocated_charge_base" | "landed_unit_cost_base" | "landed_total_cost_base"
+>;
+const NO_COST: ItemCost = {
+  unit_cost: null,
+  fx_rate_snapshot: null,
+  unit_cost_base: null,
+  total_cost_base: null,
+  allocated_charge_base: null,
+  landed_unit_cost_base: null,
+  landed_total_cost_base: null,
+};
+type Financial = {
+  items: Map<string, ItemCost>;
+  missing_cost_lines: number;
+  posted_invoice_total_original: number | null;
+  posted_charges_base: number | null;
+  posted_landed_total_base: number | null;
+  reversal_value_removed_base: number | null;
+};
+
+/** rpc_goods_receipt_financial — owner|manager; the only source of cost in this module. */
+async function loadFinancial(receiptId: string): Promise<Financial> {
+  const { supabase } = await loadReceivingContext();
+  const { data, error } = await supabase.rpc("rpc_goods_receipt_financial", { p_goods_receipt_id: receiptId });
+  if (error) throw new Error(`Belge maliyetleri okunamadı: ${error.message}`);
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const items = new Map<string, ItemCost>();
+  for (const raw of (payload.items as Array<Record<string, unknown>> | undefined) ?? []) {
+    items.set(String(raw.item_id), {
+      unit_cost: numOrNull(raw.unit_cost),
+      fx_rate_snapshot: numOrNull(raw.fx_rate_snapshot),
+      unit_cost_base: numOrNull(raw.unit_cost_base),
+      total_cost_base: numOrNull(raw.total_cost_base),
+      allocated_charge_base: numOrNull(raw.allocated_charge_base),
+      landed_unit_cost_base: numOrNull(raw.landed_unit_cost_base),
+      landed_total_cost_base: numOrNull(raw.landed_total_cost_base),
+    });
+  }
+  return {
+    items,
+    missing_cost_lines: num(payload.missing_cost_lines),
+    posted_invoice_total_original: numOrNull(payload.posted_invoice_total_original),
+    posted_charges_base: numOrNull(payload.posted_charges_base),
+    posted_landed_total_base: numOrNull(payload.posted_landed_total_base),
+    reversal_value_removed_base: numOrNull(payload.reversal_value_removed_base),
+  };
+}
+
+async function loadReversal(row: Record<string, unknown> | null, valueRemoved: number | null): Promise<ReceiptReversal | null> {
   if (!row) return null;
   const { supabase } = await loadReceivingContext();
   const by = row.reversed_by as string | null;
@@ -385,7 +444,7 @@ async function loadReversal(row: Record<string, unknown> | null): Promise<Receip
     reason: row.reason as string,
     reversed_at: row.reversed_at as string,
     reversed_by_name: (p?.full_name as string | null) ?? null,
-    value_removed_base: num(row.value_removed_base),
+    value_removed_base: valueRemoved,
   };
 }
 

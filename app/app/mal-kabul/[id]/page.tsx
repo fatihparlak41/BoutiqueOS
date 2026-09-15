@@ -24,16 +24,22 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
 
   const isDraft = receipt.status === "draft";
   const editing = isDraft && caps.canWriteReceipt;
+  // Financial reads (allocation preview, payee suppliers) exist only for owner|manager;
+  // the database would refuse them for anyone else, so they are not requested.
+  const financial = editing && caps.canManageCost;
   const [fxHints, preview, suppliers] = await Promise.all([
     isDraft && receipt.invoice_currency !== "TRY" ? loadFxHints(receipt.received_at) : Promise.resolve([]),
-    editing ? getAllocationPreview(receipt.id) : Promise.resolve(null),
-    editing ? listSuppliers({ status: "active" }) : Promise.resolve([]),
+    financial ? getAllocationPreview(receipt.id) : Promise.resolve(null),
+    financial ? listSuppliers({ status: "active" }) : Promise.resolve([]),
   ]);
   const fxHint = fxHints.find((h) => h.currency === receipt.invoice_currency)?.rate ?? null;
   const isPosted = receipt.status === "posted";
 
   const totalQuantity = receipt.lines.reduce((sum, line) => sum + line.quantity, 0);
-  const totalOriginal = receipt.lines.reduce((sum, line) => sum + line.quantity * line.unit_cost, 0);
+  // Cost rows exist only when the financial RPC answered (owner|manager). Nothing below
+  // renders a placeholder cost for other roles: the rows are simply not part of the page.
+  const showCost = receipt.cost_visible;
+  const totalOriginal = receipt.lines.reduce((sum, line) => sum + line.quantity * (line.unit_cost ?? 0), 0);
   // After posting, the authoritative base values come from the item snapshots, not a preview.
   const totalBase = receipt.lines.reduce((sum, line) => sum + (line.total_cost_base ?? 0), 0);
   const landedTotal = receipt.posted_landed_total_base ?? receipt.lines.reduce((sum, line) => sum + (line.landed_total_cost_base ?? 0), 0);
@@ -59,7 +65,7 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
         </p>
       </header>
 
-      {editing && preview ? (
+      {editing ? (
         <ReceiptEditor receipt={receipt} fxHint={fxHint} preview={preview} suppliers={suppliers} />
       ) : (
         <div className="space-y-8">
@@ -71,8 +77,10 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
                 {receipt.reversal.reversed_by_name ? ` · ${receipt.reversal.reversed_by_name}` : ""} · Neden: {receipt.reversal.reason}
               </p>
               <p className="mt-0.5">
-                Stoktan düşülen değer: <span data-numeric>{formatMoney(receipt.reversal.value_removed_base, "TRY")}</span>. Orijinal
-                belge ve hareketleri değiştirilmedi; ters kayıt ayrı hareketler ve alacak kayıtlarıyla yapıldı.
+                {receipt.reversal.value_removed_base !== null ? (
+                  <>Stoktan düşülen değer: <span data-numeric>{formatMoney(receipt.reversal.value_removed_base, "TRY")}</span>. </>
+                ) : null}
+                Orijinal belge ve hareketleri değiştirilmedi; ters kayıt ayrı hareketler ve alacak kayıtlarıyla yapıldı.
               </p>
             </div>
           ) : isPosted ? (
@@ -101,11 +109,15 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
                 ["Kur", formatRate(receipt.exchange_rate)],
                 ["Satır sayısı", String(receipt.lines.length)],
                 ["Toplam adet", formatQuantity(totalQuantity)],
-                ["Belge tutarı", formatMoney(totalOriginal, receipt.invoice_currency)],
-                ["TRY karşılığı", isPosted ? formatMoney(totalBase, "TRY") : "—"],
-                ["Dağıtım yöntemi", ALLOCATION_LABELS[receipt.allocation_method]],
-                ["Maliyete dahil masraflar", isPosted && receipt.posted_charges_base !== null ? formatMoney(receipt.posted_charges_base, "TRY") : "—"],
-                ["İniş maliyeti toplamı", isPosted ? formatMoney(landedTotal, "TRY") : "—"],
+                ...(showCost
+                  ? [
+                      ["Belge tutarı", receipt.missing_cost_lines > 0 ? `${receipt.missing_cost_lines} satırda fiyat girilmedi` : formatMoney(totalOriginal, receipt.invoice_currency)],
+                      ["TRY karşılığı", isPosted ? formatMoney(totalBase, "TRY") : "—"],
+                      ["Dağıtım yöntemi", ALLOCATION_LABELS[receipt.allocation_method]],
+                      ["Maliyete dahil masraflar", isPosted && receipt.posted_charges_base !== null ? formatMoney(receipt.posted_charges_base, "TRY") : "—"],
+                      ["İniş maliyeti toplamı", isPosted ? formatMoney(landedTotal, "TRY") : "—"],
+                    ]
+                  : []),
                 ["İşlenme", receipt.posted_at ? formatDateTime(receipt.posted_at) : "—"],
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between gap-6 py-2">
@@ -129,15 +141,19 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
               </p>
             ) : (
               <div className="relative overflow-x-auto">
-                <table className={`w-full border-collapse text-sm ${isPosted ? "min-w-[72rem]" : "min-w-[40rem]"}`}>
+                <table className={`w-full border-collapse text-sm ${!showCost ? "min-w-[28rem]" : isPosted ? "min-w-[72rem]" : "min-w-[40rem]"}`}>
                   <thead>
                     <tr className="border-y border-line text-left text-xs text-muted">
                       <th scope="col" className="py-2 pr-4 font-medium">Ürün</th>
                       <th scope="col" className="py-2 pr-4 font-medium">SKU / barkod</th>
                       <th scope="col" className="py-2 pr-4 text-right font-medium">Adet</th>
-                      <th scope="col" className="py-2 pr-4 text-right font-medium">Birim maliyet</th>
-                      <th scope="col" className="py-2 pr-4 text-right font-medium">Satır tutarı</th>
-                      {isPosted ? (
+                      {showCost ? (
+                        <>
+                          <th scope="col" className="py-2 pr-4 text-right font-medium">Birim maliyet</th>
+                          <th scope="col" className="py-2 pr-4 text-right font-medium">Satır tutarı</th>
+                        </>
+                      ) : null}
+                      {showCost && isPosted ? (
                         <>
                           <th scope="col" className="py-2 pr-4 text-right font-medium">Kur</th>
                           <th scope="col" className="py-2 pr-4 text-right font-medium">TRY tutarı</th>
@@ -164,13 +180,17 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
                         <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
                           {formatQuantity(line.quantity)}
                         </td>
-                        <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
-                          {formatMoney(line.unit_cost, receipt.invoice_currency)}
-                        </td>
-                        <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
-                          {formatMoney(line.quantity * line.unit_cost, receipt.invoice_currency)}
-                        </td>
-                        {isPosted ? (
+                        {showCost ? (
+                          <>
+                            <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
+                              {line.unit_cost === null ? <span className="text-2xs text-danger">fiyat girilmedi</span> : formatMoney(line.unit_cost, receipt.invoice_currency)}
+                            </td>
+                            <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
+                              {line.unit_cost === null ? "—" : formatMoney(line.quantity * line.unit_cost, receipt.invoice_currency)}
+                            </td>
+                          </>
+                        ) : null}
+                        {showCost && isPosted ? (
                           <>
                             <td className="py-2.5 pr-4 text-right text-ink-70" data-numeric>
                               {line.fx_rate_snapshot === null ? "—" : formatRate(line.fx_rate_snapshot)}
@@ -197,7 +217,7 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
             )}
           </section>
 
-          {receipt.charges.length > 0 ? <ChargesSection receipt={receipt} suppliers={[]} editable={false} /> : null}
+          {showCost && receipt.charges.length > 0 ? <ChargesSection receipt={receipt} suppliers={[]} editable={false} /> : null}
 
           {isPosted && !receipt.reversal && caps.canReverse ? <ReversalPanel receipt={receipt} /> : null}
         </div>

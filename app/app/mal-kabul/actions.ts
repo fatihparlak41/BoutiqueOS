@@ -15,9 +15,14 @@ import type { ActionState } from "@/lib/catalog/action-state";
  * status='draft'. No receipt number is ever produced here, no business_id is read from a
  * form, and no status is submitted.
  *
- * Posting goes only through rpc_post_goods_receipt, which refuses an unreviewed or
- * changed-since-review draft. Charges, allocation, review and reversal live in
- * ./landed-actions.ts (Phase 8A).
+ * Lines go through rpc_goods_receipt_upsert_line: any procurement role records a
+ * quantity, only owner|manager may send a purchase cost (the RPC and a table trigger both
+ * refuse it otherwise). A stock_staff form never carries a cost field; a manager's blank
+ * cost keeps the line's existing price rather than writing 0.
+ *
+ * Posting goes only through rpc_post_goods_receipt (owner|manager), which refuses an
+ * unreviewed, changed-since-review or unpriced draft. Charges, allocation, review and
+ * reversal live in ./landed-actions.ts (Phase 8A).
  */
 
 function fail(error: string): ActionState {
@@ -184,6 +189,20 @@ export async function cancelReceiptAction(
 // ------------------------------------------------------------------ draft lines
 
 /**
+ * Reads the cost field of a line form. Only a manager's form has one; for anyone else the
+ * field is ignored entirely, so a crafted request cannot smuggle a price in. Blank means
+ * "leave the price as it is" (the RPC keeps the existing cost on NULL).
+ */
+function costFromForm(formData: FormData, key: string, canManageCost: boolean): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (!canManageCost) return { ok: true, value: null };
+  const raw = text(formData, key);
+  if (!raw) return { ok: true, value: null };
+  const parsed = parseDecimal(raw);
+  if (parsed === null) return { ok: false, error: "Birim maliyet geçerli bir tutar olmalı (örn. 400,00)." };
+  return { ok: true, value: parsed };
+}
+
+/**
  * One line per variant is a database rule: UNIQUE (goods_receipt_id, variant_id). Selecting
  * the same variant again updates the existing line instead of trying to add a duplicate.
  */
@@ -191,7 +210,7 @@ export async function upsertReceiptLineAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase, businessId, caps } = await loadReceivingContext();
+  const { supabase, caps } = await loadReceivingContext();
   if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
 
   const receiptId = uuidOrNull(formData, "receipt_id");
@@ -201,33 +220,16 @@ export async function upsertReceiptLineAction(
   const quantity = parseQuantity(text(formData, "quantity"));
   if (quantity === null) return fail("Adet sıfırdan büyük bir tam sayı olmalı.");
 
-  const unitCost = parseDecimal(text(formData, "unit_cost"));
-  if (unitCost === null) return fail("Birim maliyet geçerli bir tutar olmalı (örn. 400,00).");
+  const cost = costFromForm(formData, "unit_cost", caps.canManageCost);
+  if (!cost.ok) return fail(cost.error);
 
-  const { data: existing, error: lookupError } = await supabase
-    .from("goods_receipt_items")
-    .select("id")
-    .eq("business_id", businessId)
-    .eq("goods_receipt_id", receiptId)
-    .eq("variant_id", variantId)
-    .maybeSingle();
-
-  if (lookupError) return fail(reportDbError("lookupReceiptLine", lookupError));
-
-  if (existing) {
-    const { error } = await supabase
-      .from("goods_receipt_items")
-      .update({ quantity, unit_cost: unitCost })
-      .eq("business_id", businessId)
-      .eq("id", existing.id as string);
-    if (error) return fail(reportDbError("updateReceiptLine", error));
-  } else {
-    // business_id is filled by trg_bid_gri from the parent receipt.
-    const { error } = await supabase
-      .from("goods_receipt_items")
-      .insert({ goods_receipt_id: receiptId, variant_id: variantId, quantity, unit_cost: unitCost });
-    if (error) return fail(reportDbError("insertReceiptLine", error));
-  }
+  const { error } = await supabase.rpc("rpc_goods_receipt_upsert_line", {
+    p_goods_receipt_id: receiptId,
+    p_variant_id: variantId,
+    p_quantity: quantity,
+    p_unit_cost: cost.value,
+  });
+  if (error) return fail(reportDbError("upsertReceiptLine", error));
 
   revalidatePath(`/app/mal-kabul/${receiptId}`);
   return DONE;
@@ -270,13 +272,13 @@ export async function addReceiptLinesAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase, businessId, caps } = await loadReceivingContext();
+  const { supabase, caps } = await loadReceivingContext();
   if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
 
   const receiptId = uuidOrNull(formData, "receipt_id");
   if (!receiptId) return fail("Belge bulunamadı.");
 
-  const rows: Array<{ variantId: string; quantity: number; unitCost: number }> = [];
+  const rows: Array<{ variantId: string; quantity: number; unitCost: number | null }> = [];
 
   for (const [key, value] of formData.entries()) {
     if (!key.startsWith("qty_") || typeof value !== "string") continue;
@@ -289,38 +291,22 @@ export async function addReceiptLinesAction(
     const quantity = parseQuantity(rawQty);
     if (quantity === null) return fail("Adet sıfırdan büyük bir tam sayı olmalı.");
 
-    const rawCost = formData.get(`cost_${variantId}`);
-    const unitCost = parseDecimal(typeof rawCost === "string" ? rawCost : "");
-    if (unitCost === null) return fail("Birim maliyet geçerli bir tutar olmalı (örn. 400,00).");
+    const cost = costFromForm(formData, `cost_${variantId}`, caps.canManageCost);
+    if (!cost.ok) return fail(cost.error);
 
-    rows.push({ variantId, quantity, unitCost });
+    rows.push({ variantId, quantity, unitCost: cost.value });
   }
 
   if (rows.length === 0) return fail("Adet girilmiş satır yok.");
 
-  const { data: existing, error: lookupError } = await supabase
-    .from("goods_receipt_items")
-    .select("id, variant_id")
-    .eq("business_id", businessId)
-    .eq("goods_receipt_id", receiptId);
-
-  if (lookupError) return fail(reportDbError("lookupReceiptLines", lookupError));
-
   for (const row of rows) {
-    const match = (existing ?? []).find((line) => line.variant_id === row.variantId);
-    if (match) {
-      const { error } = await supabase
-        .from("goods_receipt_items")
-        .update({ quantity: row.quantity, unit_cost: row.unitCost })
-        .eq("business_id", businessId)
-        .eq("id", match.id as string);
-      if (error) return fail(reportDbError("updateReceiptLines", error));
-    } else {
-      const { error } = await supabase
-        .from("goods_receipt_items")
-        .insert({ goods_receipt_id: receiptId, variant_id: row.variantId, quantity: row.quantity, unit_cost: row.unitCost });
-      if (error) return fail(reportDbError("insertReceiptLines", error));
-    }
+    const { error } = await supabase.rpc("rpc_goods_receipt_upsert_line", {
+      p_goods_receipt_id: receiptId,
+      p_variant_id: row.variantId,
+      p_quantity: row.quantity,
+      p_unit_cost: row.unitCost,
+    });
+    if (error) return fail(reportDbError("upsertReceiptLines", error));
   }
 
   revalidatePath(`/app/mal-kabul/${receiptId}`);
@@ -334,7 +320,7 @@ export async function postReceiptAction(
   formData: FormData,
 ): Promise<ActionState> {
   const { supabase, caps } = await loadReceivingContext();
-  if (!caps.canWriteReceipt) return fail(NO_PERMISSION);
+  if (!caps.canManageCost) return fail(NO_PERMISSION);
 
   const receiptId = uuidOrNull(formData, "receipt_id");
   if (!receiptId) return fail("Belge bulunamadı.");

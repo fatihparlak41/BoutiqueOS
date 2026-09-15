@@ -125,7 +125,7 @@ export default async function ReceiptsPage({
             <TH>Şube</TH>
             <TH align="right">Satır</TH>
             <TH align="right">Adet</TH>
-            <TH align="right">Tutar</TH>
+            {caps.canManageCost ? <TH align="right">Tutar</TH> : null}
             <TH>Durum</TH>
           </THead>
           <TBody>
@@ -143,7 +143,14 @@ export default async function ReceiptsPage({
                 <TD muted nowrap>{receipt.branch_name}</TD>
                 <TD muted numeric align="right">{receipt.line_count}</TD>
                 <TD muted numeric align="right">{formatQuantity(receipt.total_quantity)}</TD>
-                <TD muted numeric align="right">{formatMoney(receipt.total_original, receipt.invoice_currency)}</TD>
+                {caps.canManageCost ? (
+                  <TD muted numeric align="right">
+                    {receipt.total_original === null ? "—" : formatMoney(receipt.total_original, receipt.invoice_currency)}
+                    {receipt.missing_cost_lines > 0 ? (
+                      <span className="mt-0.5 block text-2xs text-danger">{receipt.missing_cost_lines} satır fiyat bekliyor</span>
+                    ) : null}
+                  </TD>
+                ) : null}
                 <TD>
                   <ReceiptStatusPill status={receipt.status} />
                   {receipt.posted_at ? (

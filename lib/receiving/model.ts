@@ -53,8 +53,13 @@ export type ReceiptListRow = {
   branch_name: string;
   line_count: number;
   total_quantity: number;
-  /** Sum of quantity * unit_cost in the invoice currency, computed from the lines. */
-  total_original: number;
+  /**
+   * Sum of quantity * unit_cost in the invoice currency (rpc_goods_receipt_list_totals).
+   * null when the caller may not see cost (stock_staff) — never a masked 0.
+   */
+  total_original: number | null;
+  /** Lines still waiting for a manager's price (manager+ only, else 0). */
+  missing_cost_lines: number;
   posted_at: string | null;
   created_at: string;
 };
@@ -67,7 +72,11 @@ export type ReceiptLine = {
   options: string;
   primary_barcode: string | null;
   quantity: number;
-  unit_cost: number;
+  /**
+   * Purchase cost in the invoice currency. null = not priced yet (stock_staff recorded the
+   * line) OR the caller may not see cost; `ReceiptDetail.cost_visible` tells which.
+   */
+  unit_cost: number | null;
   /** Written by rpc_post_goods_receipt; null while the receipt is a draft. */
   fx_rate_snapshot: number | null;
   unit_cost_base: number | null;
@@ -146,7 +155,8 @@ export type ReceiptReversal = {
   reason: string;
   reversed_at: string;
   reversed_by_name: string | null;
-  value_removed_base: number;
+  /** Manager+ only (column privilege); null for stock_staff. */
+  value_removed_base: number | null;
 };
 
 export type ReceiptDetail = {
@@ -165,6 +175,14 @@ export type ReceiptDetail = {
   posted_at: string | null;
   created_at: string;
   lines: ReceiptLine[];
+  /**
+   * true when the caller is owner|manager and every cost field below is real data
+   * (rpc_goods_receipt_financial). false for stock_staff: all cost fields are null and
+   * `charges` is empty because the database refused them, not because the UI hid them.
+   */
+  cost_visible: boolean;
+  /** Lines without a purchase cost (manager+ only; 0 otherwise). */
+  missing_cost_lines: number;
   /** Phase 8A */
   allocation_method: AllocationMethod;
   reviewed_at: string | null;
@@ -186,12 +204,17 @@ export type PickableVariant = {
 };
 
 export type ReceivingCaps = {
-  /** suppliers / goods_receipts / goods_receipt_items SELECT => fn_is_procurement */
+  /** suppliers / goods_receipts / goods_receipt_items (operational columns) SELECT => fn_is_procurement */
   canRead: boolean;
   /** suppliers write => fn_is_manager_plus */
   canWriteSupplier: boolean;
-  /** draft create + line writes + posting => owner | manager | stock_staff */
+  /** draft create, header, quantities, cancel => owner | manager | stock_staff */
   canWriteReceipt: boolean;
+  /**
+   * Purchase cost, charges, allocation, review, POST, financial reads
+   * (rpc_goods_receipt_financial / _list_totals, cost columns, goods_receipt_charges) => owner | manager
+   */
+  canManageCost: boolean;
   /** variant_cost_pools / inventory_movement_costs SELECT => fn_is_manager_plus */
   canSeePoolCost: boolean;
   /** rpc_reverse_goods_receipt => owner | manager */
@@ -199,11 +222,9 @@ export type ReceivingCaps = {
 };
 
 /**
- * Mirrors the RLS predicates so a screen is hidden when the database would refuse it.
- * Hiding is a courtesy; RLS and the RPC role guards are the boundary.
- *
- * Note stock_staff: it may read goods_receipt_items.unit_cost (pol_gri_select is
- * fn_is_procurement) but not variant_cost_pools — that split is deliberate.
+ * Mirrors the database rules so a screen is hidden when the database would refuse it.
+ * Hiding is a courtesy; column privileges, RLS and the RPC role guards are the boundary
+ * (20260916120000: stock_staff records quantities, never sees or enters a price).
  */
 export function receivingCaps(role: UserRole): ReceivingCaps {
   const procurement = role === "owner" || role === "manager" || role === "stock_staff";
@@ -212,6 +233,7 @@ export function receivingCaps(role: UserRole): ReceivingCaps {
     canRead: procurement,
     canWriteSupplier: managerPlus,
     canWriteReceipt: procurement,
+    canManageCost: managerPlus,
     canSeePoolCost: managerPlus,
     canReverse: managerPlus,
   };
