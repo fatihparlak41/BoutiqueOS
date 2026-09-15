@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -51,6 +51,11 @@ export function StepIdentity({
   const [newCategory, setNewCategory] = useState("");
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [categoryError, setCategoryError] = useState<string | null>(null);
+  // The duplicate report appears below the photos; bring it into view so the decision is not missed.
+  const dupRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (duplicates) dupRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [duplicates]);
 
   const have = new Set(categories.map((c) => normalizeName(c.name)));
   const suggestions = CATEGORY_SUGGESTIONS.filter((s) => !have.has(normalizeName(s)));
@@ -161,11 +166,11 @@ export function StepIdentity({
 
       <div className="grid gap-5 border-t border-border pt-5 sm:grid-cols-2">
         <PhotoField id="intake-main-photo" label="Ürün fotoğrafı" hint="Ürünün tamamı görünsün; arka plan önemli değil." photo={mainPhoto} onChange={onMainPhoto} />
-        <PhotoField id="intake-label-photo" label="Etiket fotoğrafı" hint="Barkod, model ve beden okunacak kadar yakın." photo={labelPhoto} onChange={onLabelPhoto} />
+        <PhotoField id="intake-label-photo" label="Etiket fotoğrafı" hint="Barkod, model ve beden okunacak kadar yakın." photo={labelPhoto} onChange={onLabelPhoto} camera />
       </div>
 
       {duplicates ? (
-        <div className="space-y-3">
+        <div ref={dupRef} className="space-y-3 scroll-mb-28">
           {duplicates.style_matches.length > 0 ? (
             <Notice tone="warning">
               <p className="font-medium">Aynı model kodu zaten kayıtlı.</p>

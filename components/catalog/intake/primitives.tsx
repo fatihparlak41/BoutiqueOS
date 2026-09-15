@@ -75,7 +75,11 @@ export function Chip({
 
 export type Photo = { file: File; url: string };
 
-/** Camera-first file field. The preview is a local object URL; nothing uploads until the review step. */
+/**
+ * Photo field. `camera` forces the rear camera on a phone (the label is always shot in
+ * the shop); without it the phone offers camera or gallery. The preview is a local
+ * object URL; nothing uploads until the review step.
+ */
 export function PhotoField({
   id,
   label,
@@ -83,6 +87,7 @@ export function PhotoField({
   photo,
   onChange,
   compact,
+  camera,
 }: {
   id: string;
   label: string;
@@ -90,6 +95,7 @@ export function PhotoField({
   photo: Photo | null;
   onChange: (photo: Photo | null) => void;
   compact?: boolean;
+  camera?: boolean;
 }) {
   const [url, setUrl] = useState<string | null>(photo?.url ?? null);
   useEffect(() => setUrl(photo?.url ?? null), [photo]);
@@ -120,7 +126,7 @@ export function PhotoField({
             id={id}
             type="file"
             accept="image/jpeg,image/png,image/webp"
-            capture="environment"
+            capture={camera ? "environment" : undefined}
             className="sr-only"
             onChange={(e) => {
               const file = e.target.files?.[0] ?? null;
@@ -130,7 +136,7 @@ export function PhotoField({
             }}
           />
           <label htmlFor={id} className="inline-flex min-h-11 cursor-pointer items-center rounded border border-border-strong bg-surface px-3 text-xs font-medium text-text-primary hover:bg-surface-muted sm:min-h-8">
-            {photo ? "Yeniden çek" : "Fotoğraf çek"}
+            {photo ? "Yeniden çek" : camera ? "Fotoğraf çek" : "Fotoğraf ekle"}
           </label>
           {photo ? (
             <button

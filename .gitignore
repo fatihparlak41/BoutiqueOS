@@ -21,3 +21,6 @@ Thumbs.db
 .idea/
 # claude code (kişisel yerel ayarlar)
 .claude/settings.local.json
+
+# disposable QA upload fixtures
+tests/assets/

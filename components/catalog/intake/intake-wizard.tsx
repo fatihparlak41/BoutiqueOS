@@ -174,6 +174,7 @@ export function IntakeWizard({
   }
 
   function updateIdentity(patch: Partial<IntakeIdentity>) {
+    setError(null);
     setIdentity((prev) => {
       const next = { ...prev, ...patch };
       if (!prefixTouched && (patch.name !== undefined || patch.style_code !== undefined)) {
@@ -393,14 +394,18 @@ export function IntakeWizard({
           colorOption={colorOption}
           sizeOption={sizeOption}
           selected={selected}
-          onToggle={(optionId, valueId) =>
+          onToggle={(optionId, valueId) => {
+            setError(null);
             setSelected((prev) => {
               const cur = prev[optionId] ?? [];
               return { ...prev, [optionId]: cur.includes(valueId) ? cur.filter((x) => x !== valueId) : [...cur, valueId] };
-            })
-          }
+            });
+          }}
           noOptions={noOptions}
-          onNoOptions={setNoOptions}
+          onNoOptions={(v) => {
+            setError(null);
+            setNoOptions(v);
+          }}
           onOptionChanged={(option) => setOptions((prev) => (prev.some((o) => o.id === option.id) ? prev.map((o) => (o.id === option.id ? option : o)) : [...prev, option]))}
           existing={existing}
         />
@@ -410,9 +415,18 @@ export function IntakeWizard({
         <StepMatrix
           combos={combos}
           colorValues={groups.find((g) => g[0]?.option_kind === "color") ?? []}
-          onToggle={(key, on) => setDisabled((prev) => ({ ...prev, [key]: !on }))}
-          onSku={(key, sku) => setSkuEdits((prev) => ({ ...prev, [key]: sku }))}
-          onBarcodes={(key, codes) => setBarcodeEdits((prev) => ({ ...prev, [key]: codes }))}
+          onToggle={(key, on) => {
+            setError(null);
+            setDisabled((prev) => ({ ...prev, [key]: !on }));
+          }}
+          onSku={(key, sku) => {
+            setError(null);
+            setSkuEdits((prev) => ({ ...prev, [key]: sku }));
+          }}
+          onBarcodes={(key, codes) => {
+            setError(null);
+            setBarcodeEdits((prev) => ({ ...prev, [key]: codes }));
+          }}
           knownBarcodes={knownBarcodes}
           onKnownBarcode={(code, owner) => setKnownBarcodes((prev) => ({ ...prev, [code]: owner }))}
           colorPhotos={colorPhotos}
@@ -442,10 +456,14 @@ export function IntakeWizard({
         />
       ) : null}
 
-      {error ? <Notice tone="danger">{error}</Notice> : null}
-
-      {/* Sticky action bar: reachable with a thumb, above the mobile nav. */}
+      {/* Sticky action bar: reachable with a thumb, above the mobile nav. The error sits
+          inside it so it is read without scrolling, on a phone and on a desktop alike. */}
       <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:sticky sm:inset-auto sm:bottom-0 sm:-mx-0 sm:px-0">
+        {error ? (
+          <div className="mx-auto mb-2 max-w-3xl">
+            <Notice tone="danger">{error}</Notice>
+          </div>
+        ) : null}
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
           <Button variant="ghost" onClick={back} disabled={busy || step === 1}>
             Geri
