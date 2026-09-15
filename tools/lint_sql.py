@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Static cross-check for BoutiqueOS Rev 3 migrations (no DB needed).
+"""Static cross-check for BoutiqueOS migrations, seeds and SQL tests (no DB needed).
+
+Exit code 1 on any ERROR. There is no baseline file on purpose: as of Phase 7A the run is
+clean, so every ERROR is a regression. WARN lines (missing REVOKE/GRANT on a new RPC) do
+not fail the run but must be explained in the phase report.
 Checks:
   1. INSERT INTO t (cols) -> every col exists on t (tables from CREATE TABLE)
   2. 'literal'::enum_type -> literal in enum definition
@@ -10,9 +14,13 @@ Checks:
 import re, sys, glob, os
 
 root = sys.argv[1] if len(sys.argv) > 1 else "."
-files = sorted(glob.glob(os.path.join(root, "supabase/migrations/*.sql")))
-files += sorted(glob.glob(os.path.join(root, "seeds/*.sql")))
-files += sorted(glob.glob(os.path.join(root, "tests/*.sql")))
+def norm(p):
+    # Windows glob returns backslashes; every "/migrations/" test below relies on forward slashes.
+    return p.replace(os.sep, "/")
+
+files = sorted(norm(f) for f in glob.glob(os.path.join(root, "supabase/migrations/*.sql")))
+files += sorted(norm(f) for f in glob.glob(os.path.join(root, "seeds/*.sql")))
+files += sorted(norm(f) for f in glob.glob(os.path.join(root, "tests/*.sql")))
 srcs = {f: open(f, encoding="utf-8").read() for f in files}
 mig = "\n".join(srcs[f] for f in files if "/migrations/" in f)
 
@@ -43,9 +51,17 @@ for m in re.finditer(r"CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)\s*\((.*?)\n\);"
         if first in ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT", "EXCLUDE"): continue
         cols.add(p.split()[0].lower())
     tables[name.lower()] = cols
-# ALTER TABLE ADD COLUMN
-for m in re.finditer(r"ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?(\w+)", migc):
-    tables.setdefault(m.group(1).lower(), set()).add(m.group(2).lower())
+# ALTER TABLE ... ADD COLUMN a ..., ADD COLUMN b ...;  (one statement may add several columns)
+for m in re.finditer(r"ALTER TABLE\s+(?:ONLY\s+)?(\w+)\s+(.*?);", migc, re.S):
+    t = m.group(1).lower()
+    for c in re.findall(r"ADD COLUMN\s+(?:IF NOT EXISTS\s+)?(\w+)", m.group(2), re.I):
+        tables.setdefault(t, set()).add(c.lower())
+    for c in re.findall(r"DROP COLUMN\s+(?:IF EXISTS\s+)?(\w+)", m.group(2), re.I):
+        tables.get(t, set()).discard(c.lower())
+# forward migrations may drop tables and types again
+for m in re.finditer(r"DROP TABLE\s+(?:IF EXISTS\s+)?([\w,\s]+?);", migc):
+    for t in m.group(1).split(","):
+        tables.pop(t.strip().lower(), None)
 # temp tables
 for m in re.finditer(r"CREATE TEMP TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)\s*\((.*?)\)\s*ON COMMIT", migc, re.S):
     cols = {p.strip().split()[0].lower() for p in m.group(2).split(",") if p.strip()}
@@ -55,6 +71,10 @@ for m in re.finditer(r"CREATE TEMP TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)\s*\((.*?)\
 enums = {}
 for m in re.finditer(r"CREATE TYPE\s+(\w+)\s+AS ENUM\s*\((.*?)\);", migc, re.S):
     enums[m.group(1).lower()] = set(re.findall(r"'([^']*)'", m.group(2)))
+for m in re.finditer(r"ALTER TYPE\s+(\w+)\s+ADD VALUE\s+(?:IF NOT EXISTS\s+)?'([^']*)'", migc):
+    enums.setdefault(m.group(1).lower(), set()).add(m.group(2))
+for m in re.finditer(r"DROP TYPE\s+(?:IF EXISTS\s+)?(\w+)", migc):
+    enums.pop(m.group(1).lower(), None)
 
 # ---- functions
 funcs = set(m.group(1).lower() for m in re.finditer(r"CREATE (?:OR REPLACE )?FUNCTION\s+(?:public\.)?(\w+)", migc))
@@ -70,7 +90,8 @@ for f, s in srcs.items():
         t = m.group(1).lower()
         cols = [c.strip().lower() for c in m.group(2).split(",") if c.strip()]
         if t not in tables:
-            if "/migrations/" in f or "/seeds/" in f:
+            # test-harness scratch tables start with "_" and live only inside the test file
+            if not t.startswith("_") and ("/migrations/" in f or "/seeds/" in f or "/tests/" in f):
                 errors.append(f"{short}: INSERT into unknown table {t}")
             continue
         for c in cols:
@@ -112,7 +133,7 @@ for f, s in srcs.items():
     for m in re.finditer(r"\bRAISE\s+(?:EXCEPTION|NOTICE|WARNING|INFO|LOG|DEBUG)\s+'((?:[^']|'')*)'\s*(.*?);", sc, re.S):
         fmt, rest = m.group(1), m.group(2)
         n_ph = len(re.findall(r"%", fmt.replace("%%", "")))
-        rest = re.split(r"\bUSING\b", rest, 1)[0].strip()
+        rest = re.split(r"\bUSING\b", rest, maxsplit=1)[0].strip()
         if not rest:
             n_args = 0
         else:

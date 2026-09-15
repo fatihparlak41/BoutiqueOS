@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 54 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 54,
+SELECT t_check('T01 all 52 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 52,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
