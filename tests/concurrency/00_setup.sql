@@ -30,6 +30,7 @@ COMMIT;
 BEGIN;
 UPDATE business_members SET role = 'manager' WHERE user_id = 'cccccccc-0000-4000-8000-000000000001';
 SELECT set_config('request.jwt.claims', '{"sub":"cccccccc-0000-4000-8000-000000000001","role":"authenticated"}', true);
+SELECT * FROM rpc_goods_receipt_review((SELECT v FROM zz_cc_ctx WHERE k = 'gr'));
 SELECT rpc_post_goods_receipt((SELECT v FROM zz_cc_ctx WHERE k = 'gr'));
 INSERT INTO zz_cc_ctx
 SELECT 'session', rpc_open_register_session('e0000000-0000-4000-8000-000000000001', '[{"currency":"TRY","amount":0}]'::jsonb)

@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 52 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 52,
+SELECT t_check('T01 all 54 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 54,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -181,6 +181,8 @@ WITH x AS (INSERT INTO goods_receipts (business_id, branch_id, supplier_id, rece
   VALUES (t_get('biz'), t_get('br1'), t_get('sup1'), 'GR-2026-0001', 'TRY', 1) RETURNING id) SELECT t_set('gr1', id) FROM x;
 INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES
   (t_get('gr1'), t_get('v1'), 10, 100), (t_get('gr1'), t_get('v2'), 5, 100), (t_get('gr1'), t_get('v3'), 3, 200);
+SELECT t_err('T08a0 posting without a review is refused (Phase 8A)', $q$ SELECT rpc_post_goods_receipt(t_get('gr1')) $q$, 'NOT_REVIEWED');
+SELECT t_ok('T08a1 stock_staff reviews TRY goods receipt', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr1')) $q$);
 SELECT t_ok('T08a stock_staff posts TRY goods receipt', $q$ SELECT rpc_post_goods_receipt(t_get('gr1')) $q$);
 SELECT t_check('T08b stock_staff can read acquisition cost on receipt items', t_count($q$ SELECT count(*) FROM goods_receipt_items WHERE unit_cost_base IS NOT NULL $q$) = 3);
 SELECT t_check('T08c stock_staff cannot read supplier ledger', t_count($q$ SELECT count(*) FROM supplier_account_entries $q$) = 0);
@@ -196,6 +198,7 @@ SELECT t_err('T11f posting twice rejected', $q$ SELECT rpc_post_goods_receipt(t_
 WITH x AS (INSERT INTO goods_receipts (business_id, branch_id, supplier_id, receipt_number, invoice_currency, exchange_rate)
   VALUES (t_get('biz'), t_get('br1'), t_get('sup2'), 'GR-2026-0002', 'GBP', 40) RETURNING id) SELECT t_set('gr2', id) FROM x;
 INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr2'), t_get('v1'), 10, 4);
+SELECT t_ok('T12a0 review GBP receipt', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr2')) $q$);
 SELECT t_ok('T12a stock_staff posts GBP goods receipt @40', $q$ SELECT rpc_post_goods_receipt(t_get('gr2')) $q$);
 SELECT t_logout();
 SELECT t_err('T11d2 posted receipt frozen by trigger (RLS-bypassing role)', $q$ UPDATE goods_receipts SET note = 'x' WHERE id = t_get('gr1') $q$, 'IMMUTABLE');
@@ -478,7 +481,7 @@ SELECT t_ok('T34b new distinct combination accepted', $q$ SELECT rpc_create_vari
 SELECT t_ok('T34d internal barcode assigned (Code128, business-prefixed)', $q$ SELECT rpc_assign_internal_barcode(t_get('v1')) $q$);
 SELECT t_check('T34e barcode format TLC + digits', (SELECT barcode ~ '^TLC[0-9]+$' FROM barcodes WHERE variant_id = t_get('v1') AND is_primary));
 SELECT t_err('T34f supplier return posting is DEFERRED', $q$ SELECT rpc_post_supplier_return(gen_random_uuid()) $q$, 'NOT_IMPLEMENTED');
-SELECT t_err('T34g goods receipt reversal is DEFERRED', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr1')) $q$, 'NOT_IMPLEMENTED');
+SELECT t_err('T34g goods receipt reversal needs a reason (Phase 8A replaced the stub)', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr1'), '') $q$, 'REASON_REQUIRED');
 SELECT t_err('T34h owner cannot write supplier_returns directly', $q$ INSERT INTO supplier_returns (business_id, branch_id, supplier_id, return_number) VALUES (t_get('biz'), t_get('br1'), t_get('sup1'), 'SR-1') $q$, '42501');
 SELECT t_logout();
 SELECT t_err('T34i missing policy setting raises (no invented defaults)', $q$ SELECT fn_setting(t_get('bizB'), 'exchange_window_days') $q$, 'SETTING_MISSING');
@@ -548,9 +551,11 @@ SELECT t_check('T35z execute granted to authenticated only',
 -- the created draft must flow through the UNCHANGED posting RPC
 SELECT t_login('u4');
 INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr3'), t_get('v1'), 4, 120);
+SELECT t_ok ('T35aa0 rpc-created draft reviews', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr3')) $q$);
 SELECT t_ok ('T35aa rpc-created draft posts via existing rpc_post_goods_receipt', $q$ SELECT rpc_post_goods_receipt(t_get('gr3')) $q$);
 SELECT t_err('T35ab second post of the same receipt rejected', $q$ SELECT rpc_post_goods_receipt(t_get('gr3')) $q$, 'INVALID_STATE');
-SELECT t_err('T35ac empty rpc-created draft cannot be posted', $q$ SELECT rpc_post_goods_receipt(t_get('gr6')) $q$, 'EMPTY_DOCUMENT');
+SELECT t_err('T35ac empty rpc-created draft cannot be reviewed', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr6')) $q$, 'EMPTY_DOCUMENT');
+SELECT t_err('T35ac2 …nor posted', $q$ SELECT rpc_post_goods_receipt(t_get('gr6')) $q$, 'NOT_REVIEWED');
 SELECT t_logout();
 SELECT t_check('T35ad posting produced a sellable ledger row for the new receipt',
   t_count($q$ SELECT count(*) FROM inventory_movements m JOIN goods_receipt_items i ON i.id = m.reference_id
@@ -2509,6 +2514,202 @@ SELECT t_err('T63j business_id of a line cannot point at another tenant (parent 
 SELECT t_err('T63j a count movement cannot be forged for another tenant''s line',
   $q$ INSERT INTO inventory_movements (business_id, branch_id, variant_id, bucket, quantity, reason, reference_type, reference_id)
       SELECT t_get('bizB'), t_get('brB'), t_get('vB'), 'sellable', 1, 'adjustment', 'stock_count_line', id FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a') $q$, '23505');
+
+-- ============================================================
+-- T64 — Phase 8A goods receiving + landed cost: charges, allocation, review/stale,
+--        atomic idempotent POST, liabilities per charge mode, reversal, RLS
+-- ============================================================
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Landed Elbise', 'LND-64', 900, 'active') RETURNING id)
+  SELECT t_set('p64', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p64'), 'LND-64-A') RETURNING id) SELECT t_set('v64a', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v64a'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p64'), 'LND-64-B') RETURNING id) SELECT t_set('v64b', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v64b'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p64'), 'LND-64-C') RETURNING id) SELECT t_set('v64c', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v64c'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000003');
+WITH x AS (INSERT INTO branches (business_id, name, code) VALUES (t_get('biz'), 'Landed Şubesi', 'LND') RETURNING id) SELECT t_set('br64', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name) VALUES (t_get('biz'), 'Kargo Firması 64') RETURNING id) SELECT t_set('sup64k', id) FROM x;
+
+CREATE TEMP TABLE _t64_base AS
+SELECT (SELECT count(*) FROM inventory_movements) AS movements,
+       (SELECT count(*) FROM supplier_account_entries) AS liab_rows,
+       (SELECT COALESCE(sum(amount_base), 0) FROM supplier_account_entries) AS liab_sum,
+       (SELECT count(*) FROM variant_cost_pools WHERE branch_id = t_get('br64')) AS pools;
+GRANT SELECT ON _t64_base TO authenticated;
+
+SELECT t_check('T64 privilege: charges are procurement-writable in draft, reversals RPC-only, internals hidden',
+  has_table_privilege('authenticated', 'goods_receipt_charges', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'goods_receipt_reversals', 'INSERT')
+  AND NOT has_function_privilege('authenticated', 'fn_goods_receipt_allocation(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_goods_receipt_hash(uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_goods_receipt_review(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_reverse_goods_receipt(uuid, text)', 'EXECUTE'));
+
+-- A) multi-item, multi-charge, value-proportional allocation, TRY
+SELECT t_login('u4');
+SELECT t_set('gr64', rpc_create_goods_receipt(t_get('br64'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'INV-64', 'landed test'));
+INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES
+  (t_get('gr64'), t_get('v64a'), 10, 100),    -- 1000
+  (t_get('gr64'), t_get('v64b'), 5, 200),     -- 1000
+  (t_get('gr64'), t_get('v64c'), 1, 500);     --  500  → invoice 2500
+SELECT t_ok('T64a freight charge, billed on the invoice, landed', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, description, amount, currency, exchange_rate, include_in_landed, liability_mode) VALUES (t_get('gr64'), 'freight', 'nakliye', 250, 'TRY', 1, true, 'add_to_invoice') $q$);
+SELECT t_ok('T64a customs charge, billed by another supplier, landed', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, description, amount, currency, exchange_rate, include_in_landed, liability_mode, payee_supplier_id) VALUES (t_get('gr64'), 'customs', 'gümrük', 100, 'TRY', 1, true, 'separate_supplier', t_get('sup64k')) $q$);
+SELECT t_ok('T64a bank fee, not landed, no liability', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, description, amount, currency, exchange_rate, include_in_landed, liability_mode) VALUES (t_get('gr64'), 'other', 'banka masrafı', 30, 'TRY', 1, false, 'no_liability') $q$);
+SELECT t_err('T64a zero charge refused', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount) VALUES (t_get('gr64'), 'other', 0) $q$, '23514');
+SELECT t_err('T64a negative charge refused', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount) VALUES (t_get('gr64'), 'other', -5) $q$, '23514');
+SELECT t_err('T64a separate_supplier without payee refused', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, liability_mode) VALUES (t_get('gr64'), 'other', 5, 'separate_supplier') $q$, '23514');
+SELECT t_err('T64a payee from another tenant refused', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, liability_mode, payee_supplier_id) VALUES (t_get('gr64'), 'other', 5, 'separate_supplier', t_get('supB')) $q$, '23503');
+SELECT t_ok('T64a charge with a foreign business_id is accepted…', $q$ INSERT INTO goods_receipt_charges (business_id, goods_receipt_id, kind, amount, liability_mode) VALUES (t_get('bizB'), t_get('gr64'), 'other', 5, 'no_liability') $q$);
+SELECT t_check('T64a …but the parent trigger rewrote business_id to the receipt''s tenant', t_count($q$ SELECT count(*) FROM goods_receipt_charges WHERE goods_receipt_id = t_get('gr64') AND business_id <> t_get('biz') $q$) = 0);
+DELETE FROM goods_receipt_charges WHERE goods_receipt_id = t_get('gr64') AND amount = 5;
+
+SELECT t_err('T64b post before review refused', $q$ SELECT rpc_post_goods_receipt(t_get('gr64')) $q$, 'NOT_REVIEWED');
+SELECT t_check('T64b preview before review: lines computed, review not current',
+  (SELECT jsonb_array_length(rpc_goods_receipt_preview(t_get('gr64')) -> 'lines')) = 3
+  AND (SELECT (rpc_goods_receipt_preview(t_get('gr64')) ->> 'review_current')::boolean) = false);
+CREATE TEMP TABLE _t64_review AS SELECT * FROM rpc_goods_receipt_review(t_get('gr64'));
+GRANT SELECT ON _t64_review TO authenticated;
+SELECT t_check('T64b review allocates 350 eligible charges by invoice value: A 140, B 140, C 70',
+  (SELECT string_agg(pv.sku || '=' || r.allocated_charge_base::numeric(12,2), ',' ORDER BY pv.sku) FROM _t64_review r JOIN product_variants pv ON pv.id = r.variant_id)
+  = 'LND-64-A=140.00,LND-64-B=140.00,LND-64-C=70.00');
+SELECT t_check('T64b landed unit costs: A 114, B 228, C 570',
+  (SELECT string_agg(pv.sku || '=' || r.landed_unit_cost_base::numeric(12,2), ',' ORDER BY pv.sku) FROM _t64_review r JOIN product_variants pv ON pv.id = r.variant_id)
+  = 'LND-64-A=114.00,LND-64-B=228.00,LND-64-C=570.00');
+SELECT t_check('T64b shares add up to the eligible charge total exactly', (SELECT sum(allocated_charge_base) FROM _t64_review) = 350);
+SELECT t_check('T64b preview after review reports the review as current and the same numbers',
+  (SELECT (rpc_goods_receipt_preview(t_get('gr64')) ->> 'review_current')::boolean) = true
+  AND (SELECT sum((l ->> 'allocated_charge_base')::numeric) FROM jsonb_array_elements(rpc_goods_receipt_preview(t_get('gr64')) -> 'lines') l) = 350);
+SELECT t_check('T64b review stamped, nothing posted', (SELECT reviewed_at IS NOT NULL AND review_hash IS NOT NULL AND status = 'draft' FROM goods_receipts WHERE id = t_get('gr64'))
+  AND (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t64_base));
+
+-- C) stale draft: an edit after review invalidates it
+SELECT t_ok('T64c edit a line after review', $q$ UPDATE goods_receipt_items SET quantity = 11 WHERE goods_receipt_id = t_get('gr64') AND variant_id = t_get('v64a') $q$);
+SELECT t_check('T64c preview flags the review as no longer current', (SELECT (rpc_goods_receipt_preview(t_get('gr64')) ->> 'review_current')::boolean) = false);
+SELECT t_err('T64c posting an edited draft on the old review refused', $q$ SELECT rpc_post_goods_receipt(t_get('gr64')) $q$, 'STALE_DRAFT');
+SELECT t_ok('T64c undo the edit', $q$ UPDATE goods_receipt_items SET quantity = 10 WHERE goods_receipt_id = t_get('gr64') AND variant_id = t_get('v64a') $q$);
+SELECT t_ok('T64c review again', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64')) $q$);
+SELECT t_ok('T64c a charge edit also invalidates', $q$ UPDATE goods_receipt_charges SET amount = 260 WHERE goods_receipt_id = t_get('gr64') AND kind = 'freight' $q$);
+SELECT t_err('T64c stale after charge edit', $q$ SELECT rpc_post_goods_receipt(t_get('gr64')) $q$, 'STALE_DRAFT');
+SELECT t_ok('T64c restore charge and review', $q$ UPDATE goods_receipt_charges SET amount = 250 WHERE goods_receipt_id = t_get('gr64') AND kind = 'freight'; SELECT * FROM rpc_goods_receipt_review(t_get('gr64')) $q$);
+SELECT t_check('T64c nothing posted through all of that', (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t64_base));
+
+-- D) POST: landed cost into items, pools, ledger; liabilities per mode; idempotent
+SELECT t_ok('T64d post', $q$ SELECT rpc_post_goods_receipt(t_get('gr64')) $q$);
+SELECT t_err('T64d second post refused', $q$ SELECT rpc_post_goods_receipt(t_get('gr64')) $q$, 'INVALID_STATE');
+SELECT t_err('T64d review of a posted receipt refused', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64')) $q$, 'INVALID_STATE');
+SELECT t_err('T64d charges of a posted receipt frozen', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount) VALUES (t_get('gr64'), 'other', 5) $q$, 'IMMUTABLE');
+SELECT t_logout();
+SELECT t_check('T64d items carry landed values',
+  (SELECT string_agg(pv.sku || '=' || i.allocated_charge_base::numeric(12,2) || '/' || i.landed_unit_cost_base::numeric(12,2) || '/' || i.landed_total_cost_base::numeric(12,2), ',' ORDER BY pv.sku)
+   FROM goods_receipt_items i JOIN product_variants pv ON pv.id = i.variant_id WHERE i.goods_receipt_id = t_get('gr64'))
+  = 'LND-64-A=140.00/114.00/1140.00,LND-64-B=140.00/228.00/1140.00,LND-64-C=70.00/570.00/570.00');
+SELECT t_check('T64d header totals: invoice 2500, charges 350, landed 2850',
+  (SELECT posted_invoice_total_original || '/' || posted_charges_base::numeric(12,2) || '/' || posted_landed_total_base::numeric(12,2) FROM goods_receipts WHERE id = t_get('gr64')) = '2500.00/350.00/2850.00');
+SELECT t_check('T64d pools hold landed value (MWA = landed unit cost)',
+  (SELECT string_agg(pv.sku || '=' || p.on_hand_qty || '@' || (p.total_value_base / p.on_hand_qty)::numeric(12,2), ',' ORDER BY pv.sku)
+   FROM variant_cost_pools p JOIN product_variants pv ON pv.id = p.variant_id WHERE p.branch_id = t_get('br64'))
+  = 'LND-64-A=10@114.00,LND-64-B=5@228.00,LND-64-C=1@570.00');
+SELECT t_check('T64d ledger rows carry the landed unit cost',
+  (SELECT string_agg(pv.sku || '=' || mc.unit_cost_base::numeric(12,2), ',' ORDER BY pv.sku)
+   FROM inventory_movements m JOIN inventory_movement_costs mc ON mc.movement_id = m.id JOIN goods_receipt_items i ON i.id = m.reference_id AND m.reference_type = 'goods_receipt_item'
+   JOIN product_variants pv ON pv.id = m.variant_id WHERE i.goods_receipt_id = t_get('gr64'))
+  = 'LND-64-A=114.00,LND-64-B=228.00,LND-64-C=570.00');
+SELECT t_check('T64d supplier liability = invoice 2500 + freight 250 = 2750 (one entry), customs 100 to the carrier, bank fee nowhere',
+  (SELECT amount_original FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr64')) = 2750
+  AND t_count($q$ SELECT count(*) FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr64') $q$) = 1
+  AND (SELECT amount_original || '/' || supplier_id::text FROM supplier_account_entries WHERE reference_type = 'goods_receipt_charge') = '100.00/' || t_get('sup64k')::text
+  AND (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t64_base) + 2);
+SELECT t_check('T64d inventory value (2850) ≠ supplier liability (2750 + 100): valuation and debt are separate',
+  (SELECT sum(total_value_base) FROM variant_cost_pools WHERE branch_id = t_get('br64')) = 2850
+  AND (SELECT sum(amount_base) FROM supplier_account_entries) = (SELECT liab_sum FROM _t64_base) + 2850);
+
+-- E) other allocation methods, FX, zero-cost basis, rounding remainder
+SELECT t_login('u2');
+SELECT t_set('gr64q', rpc_create_goods_receipt(t_get('br64'), t_get('sup2'), 'GBP', 40, CURRENT_DATE, 'INV-64Q', NULL));
+INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr64q'), t_get('v64a'), 3, 10), (t_get('gr64q'), t_get('v64b'), 1, 10);
+SELECT t_ok('T64e charge in TRY on a GBP invoice must not be billed on the invoice', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, currency, exchange_rate, liability_mode) VALUES (t_get('gr64q'), 'freight', 1000, 'TRY', 1, 'no_liability') $q$);
+SELECT t_ok('T64e quantity allocation', $q$ UPDATE goods_receipts SET allocation_method = 'quantity_proportional' WHERE id = t_get('gr64q') $q$);
+CREATE TEMP TABLE _t64_q AS SELECT * FROM rpc_goods_receipt_review(t_get('gr64q'));
+GRANT SELECT ON _t64_q TO authenticated;
+SELECT t_check('T64e quantity-proportional: 3/4 and 1/4 of 1000 → 750 / 250; landed unit 650 / 650 (GBP 10 @40 = 400 + 250)',
+  (SELECT string_agg(pv.sku || '=' || r.allocated_charge_base::numeric(12,2) || '/' || r.landed_unit_cost_base::numeric(12,2), ',' ORDER BY pv.sku) FROM _t64_q r JOIN product_variants pv ON pv.id = r.variant_id)
+  = 'LND-64-A=750.00/650.00,LND-64-B=250.00/650.00');
+SELECT t_ok('T64e equal allocation', $q$ UPDATE goods_receipts SET allocation_method = 'equal_per_line' WHERE id = t_get('gr64q') $q$);
+SELECT t_check('T64e equal per line: 500 / 500',
+  (SELECT string_agg(r.allocated_charge_base::numeric(12,2)::text, ',' ORDER BY r.variant_id) FROM rpc_goods_receipt_review(t_get('gr64q')) r) = '500.00,500.00');
+SELECT t_err('T64e manual allocation is architected but refused', $q$ UPDATE goods_receipts SET allocation_method = 'manual' WHERE id = t_get('gr64q'); SELECT * FROM rpc_goods_receipt_review(t_get('gr64q')) $q$, 'NOT_IMPLEMENTED');
+SELECT t_ok('T64e back to value allocation', $q$ UPDATE goods_receipts SET allocation_method = 'invoice_value_proportional' WHERE id = t_get('gr64q') $q$);
+SELECT t_ok('T64e a charge billed on a GBP invoice in TRY is refused at review', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, currency, exchange_rate, liability_mode) VALUES (t_get('gr64q'), 'handling', 5, 'TRY', 1, 'add_to_invoice') $q$);
+SELECT t_err('T64e …CHARGE_CURRENCY', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64q')) $q$, 'CHARGE_CURRENCY');
+DELETE FROM goods_receipt_charges WHERE goods_receipt_id = t_get('gr64q') AND kind = 'handling';
+-- rounding remainder: 1000 over 3 equal lines
+SELECT t_set('gr64r', rpc_create_goods_receipt(t_get('br64'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'INV-64R', NULL));
+INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr64r'), t_get('v64a'), 1, 10), (t_get('gr64r'), t_get('v64b'), 1, 10), (t_get('gr64r'), t_get('v64c'), 1, 10);
+INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, liability_mode) VALUES (t_get('gr64r'), 'freight', 1000, 'no_liability');
+SELECT t_check('T64e remainder folded: three shares sum to exactly 1000',
+  (SELECT sum(allocated_charge_base) FROM rpc_goods_receipt_review(t_get('gr64r'))) = 1000
+  AND (SELECT max(allocated_charge_base) - min(allocated_charge_base) FROM rpc_goods_receipt_review(t_get('gr64r'))) < 0.000002);
+-- zero-cost lines with value allocation
+SELECT t_set('gr64z', rpc_create_goods_receipt(t_get('br64'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'INV-64Z', NULL));
+INSERT INTO goods_receipt_items (goods_receipt_id, variant_id, quantity, unit_cost) VALUES (t_get('gr64z'), t_get('v64a'), 2, 0);
+INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount, liability_mode) VALUES (t_get('gr64z'), 'freight', 50, 'no_liability');
+SELECT t_err('T64e value allocation over zero-cost lines refused (no silent basis)', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64z')) $q$, 'ALLOCATION_BASIS');
+SELECT t_ok('T64e quantity allocation carries the charge onto the free goods', $q$ UPDATE goods_receipts SET allocation_method = 'quantity_proportional' WHERE id = t_get('gr64z'); SELECT * FROM rpc_goods_receipt_review(t_get('gr64z')) $q$);
+SELECT t_check('T64e free goods land at 25 each', (SELECT landed_unit_cost_base FROM rpc_goods_receipt_review(t_get('gr64z'))) = 25);
+SELECT t_logout();
+
+-- F) roles / cross-tenant
+SELECT t_login('u3');
+SELECT t_check('T64f sales_staff sees no charges', t_count($q$ SELECT count(*) FROM goods_receipt_charges $q$) = 0);
+SELECT t_err('T64f sales_staff cannot review', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64q')) $q$, '42501');
+SELECT t_err('T64f sales_staff cannot reverse', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64'), 'test') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T64f stock_staff cannot reverse (manager+)', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64'), 'test') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T64f other tenant sees nothing of the receipt', t_count($q$ SELECT count(*) FROM goods_receipt_charges WHERE goods_receipt_id = t_get('gr64') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM goods_receipt_reversals $q$) = 0);
+SELECT t_err('T64f other tenant cannot review A''s draft', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64q')) $q$, '42501');
+SELECT t_err('T64f other tenant cannot post A''s draft', $q$ SELECT rpc_post_goods_receipt(t_get('gr64q')) $q$, '42501');
+SELECT t_err('T64f other tenant cannot reverse A''s receipt', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64'), 'test') $q$, '42501');
+SELECT t_err('T64f other tenant insert on A''s draft refused (parent invisible under RLS)', $q$ INSERT INTO goods_receipt_charges (goods_receipt_id, kind, amount) VALUES (t_get('gr64q'), 'other', 5) $q$, 'not found');
+SELECT t_logout();
+
+-- G) reversal: goods out at MWA, liabilities credited, once
+SELECT t_login('u2');
+CREATE TEMP TABLE _t64_pre AS SELECT (SELECT count(*) FROM inventory_movements) AS movements, (SELECT count(*) FROM supplier_account_entries) AS liab_rows;
+GRANT SELECT ON _t64_pre TO authenticated;
+SELECT t_err('T64g reversal needs a reason', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64'), NULL) $q$, 'REASON_REQUIRED');
+SELECT t_err('T64g a draft cannot be reversed', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64q'), 'yanlış') $q$, 'INVALID_STATE');
+SELECT t_set('rev64', rpc_reverse_goods_receipt(t_get('gr64'), 'fatura iptal edildi'));
+SELECT t_err('T64g second reversal refused', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64'), 'tekrar') $q$, 'ALREADY_REVERSED');
+SELECT t_logout();
+SELECT t_check('T64g receipt row untouched (still posted, same totals)',
+  (SELECT status::text || '/' || posted_landed_total_base::numeric(12,2) FROM goods_receipts WHERE id = t_get('gr64')) = 'posted/2850.00');
+SELECT t_check('T64g reversal row recorded with the value removed',
+  (SELECT reason || '/' || value_removed_base::numeric(12,2) || '/' || (reversed_by = t_get('u2'))::text FROM goods_receipt_reversals WHERE goods_receipt_id = t_get('gr64')) = 'fatura iptal edildi/2850.00/true');
+SELECT t_check('T64g pools back to zero, exact depletion',
+  (SELECT sum(on_hand_qty) || '/' || sum(total_value_base)::numeric(12,2) FROM variant_cost_pools WHERE branch_id = t_get('br64')) = '0/0.00');
+SELECT t_check('T64g three reversal movements, one per item, negative, referencing the items',
+  t_count($q$ SELECT count(*) FROM inventory_movements m JOIN goods_receipt_items i ON i.id = m.reference_id AND m.reference_type = 'goods_receipt_reversal_item' WHERE i.goods_receipt_id = t_get('gr64') AND m.quantity < 0 $q$) = 3
+  AND (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t64_pre) + 3);
+SELECT t_check('T64g liabilities credited: −2750 to the invoice supplier, −100 to the carrier',
+  (SELECT string_agg(amount_original::text, ',' ORDER BY amount_original) FROM supplier_account_entries WHERE reference_type = 'goods_receipt_reversal' AND reference_id = t_get('rev64')) = '-2750.00,-100.00'
+  AND (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t64_pre) + 2
+  AND (SELECT sum(amount_base) FROM supplier_account_entries) = (SELECT liab_sum FROM _t64_base));
+SELECT t_err('T64g reversal rows immutable', $q$ DELETE FROM goods_receipt_reversals WHERE goods_receipt_id = t_get('gr64') $q$, 'IMMUTABLE');
+SELECT t_err('T64g a second reversal movement for an item is impossible (unique index)',
+  $q$ INSERT INTO inventory_movements (business_id, branch_id, variant_id, bucket, quantity, reason, reference_type, reference_id)
+      SELECT business_id, t_get('br64'), variant_id, 'sellable', -1, 'goods_receipt', 'goods_receipt_reversal_item', id FROM goods_receipt_items WHERE goods_receipt_id = t_get('gr64') AND variant_id = t_get('v64a') $q$, '23505');
+-- reversal refused when the goods are gone
+SELECT t_login('u2');
+SELECT t_ok('T64g post the GBP receipt', $q$ SELECT * FROM rpc_goods_receipt_review(t_get('gr64q')); SELECT rpc_post_goods_receipt(t_get('gr64q')) $q$);
+SELECT t_ok('T64g sell/adjust the goods away', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br64'), t_get('v64a'), 'sellable', -3, 'test tüketimi', 'current_mwa') $q$);
+SELECT t_err('T64g reversal refused once the goods left', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr64q'), 'çok geç') $q$, 'INSUFFICIENT_STOCK');
+SELECT t_check('T64g refused reversal wrote nothing', t_count($q$ SELECT count(*) FROM goods_receipt_reversals WHERE goods_receipt_id = t_get('gr64q') $q$) = 0);
+SELECT t_logout();
 
 -- ============================================================
 -- SUMMARY

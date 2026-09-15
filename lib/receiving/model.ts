@@ -72,6 +72,81 @@ export type ReceiptLine = {
   fx_rate_snapshot: number | null;
   unit_cost_base: number | null;
   total_cost_base: number | null;
+  /** Landed cost, written at POST (Phase 8A): allocated eligible charges and the resulting unit cost. */
+  allocated_charge_base: number | null;
+  landed_unit_cost_base: number | null;
+  landed_total_cost_base: number | null;
+};
+
+/** goods_receipt_charges.kind */
+export type ChargeKind = "freight" | "customs" | "insurance" | "handling" | "other";
+export const CHARGE_KIND_LABELS: Record<ChargeKind, string> = {
+  freight: "Nakliye",
+  customs: "Gümrük",
+  insurance: "Sigorta",
+  handling: "Elleçleme",
+  other: "Diğer",
+};
+
+/** goods_receipt_charges.liability_mode — who is owed the charge. */
+export type ChargeLiabilityMode = "add_to_invoice" | "separate_supplier" | "no_liability";
+export const CHARGE_LIABILITY_LABELS: Record<ChargeLiabilityMode, string> = {
+  add_to_invoice: "Fatura tedarikçisine borç (aynı para birimi)",
+  separate_supplier: "Başka tedarikçiye borç",
+  no_liability: "Borç yazma (ödendi / gider)",
+};
+
+/** goods_receipts.allocation_method — how eligible charges spread over the lines. */
+export type AllocationMethod = "invoice_value_proportional" | "quantity_proportional" | "equal_per_line" | "manual";
+export const ALLOCATION_LABELS: Record<AllocationMethod, string> = {
+  invoice_value_proportional: "Fatura tutarına orantılı",
+  quantity_proportional: "Adede orantılı",
+  equal_per_line: "Satır başına eşit",
+  manual: "Elle (henüz açık değil)",
+};
+
+export type ReceiptCharge = {
+  id: string;
+  kind: ChargeKind;
+  description: string | null;
+  amount: number;
+  currency: Currency;
+  exchange_rate: number;
+  amount_base: number;
+  include_in_landed: boolean;
+  liability_mode: ChargeLiabilityMode;
+  payee_supplier_id: string | null;
+  payee_supplier_name: string | null;
+};
+
+/** One row of the allocation preview / review (rpc_goods_receipt_preview / _review). */
+export type AllocationRow = {
+  item_id: string;
+  variant_id: string;
+  quantity: number;
+  unit_cost: number;
+  unit_cost_base: number;
+  total_cost_base: number;
+  allocated_charge_base: number;
+  landed_unit_cost_base: number;
+  landed_total_cost_base: number;
+};
+
+export type AllocationPreview = {
+  lines: AllocationRow[];
+  /** The stored review still describes the document exactly as it is now. */
+  review_current: boolean;
+  reviewed_at: string | null;
+  /** Translated reason the allocation cannot be computed (ALLOCATION_BASIS, manual method …). */
+  error: string | null;
+};
+
+export type ReceiptReversal = {
+  id: string;
+  reason: string;
+  reversed_at: string;
+  reversed_by_name: string | null;
+  value_removed_base: number;
 };
 
 export type ReceiptDetail = {
@@ -90,6 +165,14 @@ export type ReceiptDetail = {
   posted_at: string | null;
   created_at: string;
   lines: ReceiptLine[];
+  /** Phase 8A */
+  allocation_method: AllocationMethod;
+  reviewed_at: string | null;
+  charges: ReceiptCharge[];
+  posted_invoice_total_original: number | null;
+  posted_charges_base: number | null;
+  posted_landed_total_base: number | null;
+  reversal: ReceiptReversal | null;
 };
 
 /** A variant offered in the line picker. */
@@ -111,6 +194,8 @@ export type ReceivingCaps = {
   canWriteReceipt: boolean;
   /** variant_cost_pools / inventory_movement_costs SELECT => fn_is_manager_plus */
   canSeePoolCost: boolean;
+  /** rpc_reverse_goods_receipt => owner | manager */
+  canReverse: boolean;
 };
 
 /**
@@ -128,6 +213,7 @@ export function receivingCaps(role: UserRole): ReceivingCaps {
     canWriteSupplier: managerPlus,
     canWriteReceipt: procurement,
     canSeePoolCost: managerPlus,
+    canReverse: managerPlus,
   };
 }
 

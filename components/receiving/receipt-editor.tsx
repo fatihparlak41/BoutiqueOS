@@ -17,15 +17,17 @@ import {
   updateReceiptHeaderAction,
   upsertReceiptLineAction,
 } from "@/app/app/mal-kabul/actions";
-import { VARIANT_SEARCH_IDLE, type ReceiptDetail, type ReceiptLine } from "@/lib/receiving/model";
+import { VARIANT_SEARCH_IDLE, type AllocationPreview, type ReceiptDetail, type ReceiptLine, type Supplier } from "@/lib/receiving/model";
 import { formatMoney, formatQuantity, formatRate, moneyInputValue } from "@/lib/receiving/format";
+import { AllocationReviewSection, ChargesSection } from "@/components/receiving/landed-cost-panels";
 
 /**
  * Draft workbench for a goods receipt.
  *
  * Everything here is draft-only. A posted receipt is rendered read-only by the page and
- * never reaches this component: no header edit, no line writes, no second post, and no
- * reversal — rpc_reverse_goods_receipt is an explicit NOT_IMPLEMENTED stub.
+ * never reaches this component: no header edit, no line writes, no second post. Posting is
+ * enabled only while the stored review matches the document (the RPC re-checks this and
+ * refuses with STALE_DRAFT otherwise). Reversal of a posted document is a separate panel.
  */
 
 function Pending({ label, pendingLabel, variant = "outline", size = "sm" }: {
@@ -247,15 +249,17 @@ function VariantPicker({ receipt }: { receipt: ReceiptDetail }) {
   );
 }
 
-function PostPanel({ receipt }: { receipt: ReceiptDetail }) {
+function PostPanel({ receipt, preview }: { receipt: ReceiptDetail; preview: AllocationPreview }) {
   const [postState, postAction] = useActionState(postReceiptAction, IDLE);
   const [cancelState, cancelAction] = useActionState(cancelReceiptAction, IDLE);
   const [confirmed, setConfirmed] = useState(false);
 
   const totalQuantity = receipt.lines.reduce((sum, line) => sum + line.quantity, 0);
   const totalOriginal = receipt.lines.reduce((sum, line) => sum + line.quantity * line.unit_cost, 0);
-  const totalBasePreview = totalOriginal * receipt.exchange_rate;
+  const totalBasePreview = preview.lines.reduce((sum, r) => sum + r.total_cost_base, 0);
+  const landedTotal = preview.lines.reduce((sum, r) => sum + r.landed_total_cost_base, 0);
   const empty = receipt.lines.length === 0;
+  const reviewed = preview.review_current && !preview.error;
 
   return (
     <section className="space-y-4 border border-line-strong p-4">
@@ -271,7 +275,9 @@ function PostPanel({ receipt }: { receipt: ReceiptDetail }) {
           ["Para birimi", receipt.invoice_currency],
           ["Belge tutarı", formatMoney(totalOriginal, receipt.invoice_currency)],
           ["Kur", formatRate(receipt.exchange_rate)],
-          ["TRY karşılığı (önizleme)", formatMoney(totalBasePreview, "TRY")],
+          ["TRY karşılığı", formatMoney(totalBasePreview, "TRY")],
+          ["İniş maliyeti toplamı", formatMoney(landedTotal, "TRY")],
+          ["Gözden geçirme", reviewed ? "Güncel" : "Gerekli"],
         ].map(([label, value]) => (
           <div key={label} className="flex justify-between gap-6 py-2">
             <dt className="text-muted">{label}</dt>
@@ -283,8 +289,8 @@ function PostPanel({ receipt }: { receipt: ReceiptDetail }) {
       </dl>
 
       <p className="text-2xs text-muted">
-        TRY karşılığı burada önizlemedir. İşlendikten sonra geçerli olan değerler belgenin
-        kendi alanlarından okunur.
+        İşleme, gözden geçirildiği andaki belgeyi kullanır; belge sonradan değiştiyse işleme
+        reddedilir ve yeniden gözden geçirme istenir.
       </p>
 
       <form action={postAction} className="space-y-3">
@@ -300,8 +306,12 @@ function PostPanel({ receipt }: { receipt: ReceiptDetail }) {
             Satırları ve tutarları kontrol ettim. İşlenen belge değiştirilemez ve geri alınamaz.
           </span>
         </label>
-        <PostButton disabled={!confirmed || empty} />
-        {empty ? <p className="text-2xs text-muted">Belgede satır yok; işlenemez.</p> : null}
+        <PostButton disabled={!confirmed || empty || !reviewed} />
+        {empty ? (
+          <p className="text-2xs text-muted">Belgede satır yok; işlenemez.</p>
+        ) : !reviewed ? (
+          <p className="text-2xs text-muted" data-testid="post-blocked">Önce belgeyi gözden geçirin.</p>
+        ) : null}
       </form>
 
       <FormMessage state={postState} />
@@ -327,7 +337,12 @@ function PostButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-export function ReceiptEditor({ receipt, fxHint }: { receipt: ReceiptDetail; fxHint: number | null }) {
+export function ReceiptEditor({ receipt, fxHint, preview, suppliers }: {
+  receipt: ReceiptDetail;
+  fxHint: number | null;
+  preview: AllocationPreview;
+  suppliers: Supplier[];
+}) {
   return (
     <div className="space-y-10">
       <section className="space-y-4">
@@ -374,7 +389,10 @@ export function ReceiptEditor({ receipt, fxHint }: { receipt: ReceiptDetail; fxH
         <VariantPicker receipt={receipt} />
       </section>
 
-      <PostPanel receipt={receipt} />
+      <ChargesSection receipt={receipt} suppliers={suppliers} editable />
+      <AllocationReviewSection receipt={receipt} preview={preview} />
+
+      <PostPanel receipt={receipt} preview={preview} />
     </div>
   );
 }

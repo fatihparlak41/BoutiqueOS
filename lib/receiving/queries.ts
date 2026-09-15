@@ -1,10 +1,18 @@
 import "server-only";
 
 import { loadAppContext } from "@/lib/app-context";
+import { toUserMessage } from "@/lib/db-errors";
 import {
   CURRENCIES,
   receivingCaps,
+  type AllocationMethod,
+  type AllocationPreview,
+  type AllocationRow,
+  type ChargeKind,
+  type ChargeLiabilityMode,
   type Currency,
+  type ReceiptCharge,
+  type ReceiptReversal,
   type PickableVariant,
   type ReceiptDetail,
   type ReceiptLine,
@@ -267,7 +275,7 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
   const { data: receipt, error } = await supabase
     .from("goods_receipts")
     .select(
-      "id, receipt_number, received_at, status, invoice_currency, exchange_rate, document_ref, note, supplier_id, branch_id, posted_at, created_at",
+      "id, receipt_number, received_at, status, invoice_currency, exchange_rate, document_ref, note, supplier_id, branch_id, posted_at, created_at, allocation_method, reviewed_at, posted_invoice_total_original, posted_charges_base, posted_landed_total_base",
     )
     .eq("business_id", businessId)
     .eq("id", receiptId)
@@ -278,10 +286,26 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
 
   const { data: itemRows, error: itemError } = await supabase
     .from("goods_receipt_items")
-    .select("id, variant_id, quantity, unit_cost, fx_rate_snapshot, unit_cost_base, total_cost_base")
+    .select("id, variant_id, quantity, unit_cost, fx_rate_snapshot, unit_cost_base, total_cost_base, allocated_charge_base, landed_unit_cost_base, landed_total_cost_base")
     .eq("business_id", businessId)
     .eq("goods_receipt_id", receiptId)
     .limit(RECEIPT_LINE_LIMIT);
+
+  const [{ data: chargeRows, error: chargeError }, { data: reversalRow }] = await Promise.all([
+    supabase
+      .from("goods_receipt_charges")
+      .select("id, kind, description, amount, currency, exchange_rate, amount_base, include_in_landed, liability_mode, payee_supplier_id")
+      .eq("business_id", businessId)
+      .eq("goods_receipt_id", receiptId)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("goods_receipt_reversals")
+      .select("id, reason, reversed_at, reversed_by, value_removed_base")
+      .eq("business_id", businessId)
+      .eq("goods_receipt_id", receiptId)
+      .maybeSingle(),
+  ]);
+  if (chargeError) throw new Error(`Ek masraflar okunamadı: ${chargeError.message}`);
 
   if (itemError) throw new Error(`Belge satırları okunamadı: ${itemError.message}`);
 
@@ -306,6 +330,9 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
         fx_rate_snapshot: numOrNull(row.fx_rate_snapshot),
         unit_cost_base: numOrNull(row.unit_cost_base),
         total_cost_base: numOrNull(row.total_cost_base),
+        allocated_charge_base: numOrNull(row.allocated_charge_base),
+        landed_unit_cost_base: numOrNull(row.landed_unit_cost_base),
+        landed_total_cost_base: numOrNull(row.landed_total_cost_base),
       };
     })
     .sort((a, b) => a.product_name.localeCompare(b.product_name, "tr") || a.sku.localeCompare(b.sku, "tr"));
@@ -326,7 +353,62 @@ export async function getReceipt(receiptId: string): Promise<ReceiptDetail | nul
     posted_at: (receipt.posted_at as string | null) ?? null,
     created_at: receipt.created_at as string,
     lines,
+    allocation_method: (receipt.allocation_method as AllocationMethod) ?? "invoice_value_proportional",
+    reviewed_at: (receipt.reviewed_at as string | null) ?? null,
+    charges: (chargeRows ?? []).map((c) => ({
+      id: c.id as string,
+      kind: c.kind as ChargeKind,
+      description: (c.description as string | null) ?? null,
+      amount: num(c.amount),
+      currency: c.currency as Currency,
+      exchange_rate: num(c.exchange_rate),
+      amount_base: num(c.amount_base),
+      include_in_landed: Boolean(c.include_in_landed),
+      liability_mode: c.liability_mode as ChargeLiabilityMode,
+      payee_supplier_id: (c.payee_supplier_id as string | null) ?? null,
+      payee_supplier_name: c.payee_supplier_id ? (suppliers.find((s) => s.id === c.payee_supplier_id)?.name ?? "—") : null,
+    })),
+    posted_invoice_total_original: numOrNull(receipt.posted_invoice_total_original),
+    posted_charges_base: numOrNull(receipt.posted_charges_base),
+    posted_landed_total_base: numOrNull(receipt.posted_landed_total_base),
+    reversal: await loadReversal(reversalRow),
   };
+}
+
+async function loadReversal(row: Record<string, unknown> | null): Promise<ReceiptReversal | null> {
+  if (!row) return null;
+  const { supabase } = await loadReceivingContext();
+  const by = row.reversed_by as string | null;
+  const { data: p } = by ? await supabase.from("profiles").select("full_name").eq("id", by).maybeSingle() : { data: null };
+  return {
+    id: row.id as string,
+    reason: row.reason as string,
+    reversed_at: row.reversed_at as string,
+    reversed_by_name: (p?.full_name as string | null) ?? null,
+    value_removed_base: num(row.value_removed_base),
+  };
+}
+
+/** Read-only allocation preview from the database (the computation POST uses). Draft only. */
+export async function getAllocationPreview(receiptId: string): Promise<AllocationPreview> {
+  const { supabase } = await loadReceivingContext();
+  const { data, error } = await supabase.rpc("rpc_goods_receipt_preview", { p_goods_receipt_id: receiptId });
+  // An allocation that cannot be computed (every line at 0 with value allocation, the manual
+  // method) is a state of the draft, not a page failure: it is shown next to the fix.
+  if (error) return { lines: [], review_current: false, reviewed_at: null, error: toUserMessage(error) };
+  const payload = (data ?? {}) as { lines?: Array<Record<string, unknown>>; review_current?: boolean; reviewed_at?: string | null };
+  const lines: AllocationRow[] = (payload.lines ?? []).map((l) => ({
+    item_id: String(l.item_id),
+    variant_id: String(l.variant_id),
+    quantity: num(l.quantity),
+    unit_cost: num(l.unit_cost),
+    unit_cost_base: num(l.unit_cost_base),
+    total_cost_base: num(l.total_cost_base),
+    allocated_charge_base: num(l.allocated_charge_base),
+    landed_unit_cost_base: num(l.landed_unit_cost_base),
+    landed_total_cost_base: num(l.landed_total_cost_base),
+  }));
+  return { lines, review_current: Boolean(payload.review_current), reviewed_at: payload.reviewed_at ?? null, error: null };
 }
 
 // ------------------------------------------------------------------ variant picker

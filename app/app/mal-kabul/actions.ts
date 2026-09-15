@@ -15,9 +15,9 @@ import type { ActionState } from "@/lib/catalog/action-state";
  * status='draft'. No receipt number is ever produced here, no business_id is read from a
  * form, and no status is submitted.
  *
- * Posting goes only through rpc_post_goods_receipt. There is no reversal action: the
- * reversal RPC is an explicit NOT_IMPLEMENTED stub (ADR-10) and this module does not
- * work around it.
+ * Posting goes only through rpc_post_goods_receipt, which refuses an unreviewed or
+ * changed-since-review draft. Charges, allocation, review and reversal live in
+ * ./landed-actions.ts (Phase 8A).
  */
 
 function fail(error: string): ActionState {
