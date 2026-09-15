@@ -1,8 +1,8 @@
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { CellTitle, TBody, TD, TH, THead, TR, TableShell } from "@/components/ui/table";
 import { Notice } from "@/components/catalog/intake/primitives";
-import { COUNT_TYPE_LABELS, lineDifference, summarize, type CountLine, type StockCount } from "@/lib/stock/count-model";
-import { ConditionBadge, Difference, VariantIdentity, formatWhen } from "./shared";
+import { COUNT_TYPE_LABELS, formatWhen, lineDifference, summarize, type CountLine, type StockCount } from "@/lib/stock/count-model";
+import { ConditionBadge, Difference, VariantIdentity } from "./shared";
 
 /**
  * Posted or cancelled: read-only, forever. A posted count is the record of what was on

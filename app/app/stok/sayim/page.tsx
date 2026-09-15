@@ -3,11 +3,11 @@ import { redirect } from "next/navigation";
 import { loadAppContext } from "@/lib/app-context";
 import { listBranchOptions } from "@/lib/stock/queries";
 import { listStockCounts } from "@/lib/stock/count-queries";
-import { COUNT_TYPE_LABELS, countCaps, type StockCountListRow } from "@/lib/stock/count-model";
+import { COUNT_TYPE_LABELS, countCaps, formatWhen, type StockCountListRow } from "@/lib/stock/count-model";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CreateCountForm } from "@/components/stock/count/create-count-form";
-import { StatusBadge, formatWhen } from "@/components/stock/count/shared";
+import { StatusBadge } from "@/components/stock/count/shared";
 
 export const metadata = { title: "Stok sayımı · BoutiqueOS" };
 

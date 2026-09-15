@@ -73,8 +73,3 @@ export function useCountEvents() {
   }, []);
   return (): CountEvent => ({ client_tx: crypto.randomUUID(), device_id: deviceId, client_at: new Date().toISOString() });
 }
-
-export function formatWhen(iso: string | null): string {
-  if (!iso) return "—";
-  return new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
-}

@@ -145,3 +145,9 @@ export function summarize(lines: CountLine[]) {
   }
   return { counted, differences, shortage, surplus, unresolved };
 }
+
+/** "15.09.2026 10:57" in the boutique's locale; "—" when there is no timestamp yet. */
+export function formatWhen(iso: string | null): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
+}
