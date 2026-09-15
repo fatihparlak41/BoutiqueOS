@@ -2250,6 +2250,13 @@ SELECT t_check('T62f exactly the expected catalogue rows were added (2 products,
   AND (SELECT count(*) FROM product_variants) = (SELECT variants FROM _t62_base) + 4
   AND (SELECT count(*) FROM barcodes) = (SELECT barcodes FROM _t62_base) + 4);
 
+-- G) image rows cannot point at another tenant's object path (Phase 6B synthetic pilot finding)
+SELECT t_login('u1');
+SELECT t_err('T62g image row with a foreign tenant storage path refused', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_gallery', 'business/' || t_get('bizB') || '/products/' || t_get('p62') || '/x.jpg') $q$, '23514');
+SELECT t_err('T62g image row with a loose path refused', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_gallery', 'products/' || t_get('p62') || '/x.jpg') $q$, '23514');
+SELECT t_ok('T62g image row under its own tenant prefix accepted', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_gallery', 'business/' || t_get('biz') || '/products/' || t_get('p62') || '/g.jpg') $q$);
+SELECT t_logout();
+
 -- ============================================================
 -- SUMMARY
 -- ============================================================
