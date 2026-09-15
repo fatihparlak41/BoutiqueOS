@@ -32,7 +32,8 @@ Yanıt dili: **Türkçe**. Kod, dosya adları ve kod içi yorumlar İngilizce.
 | Faz 4 — bilinen upstream olay | Supabase `POST /auth/v1/recover` aralıklı **525** ve taze JWT'de PostgREST **PGRST303** "JWT issued at future" — uygulama tarafında tek 525 retry + `/auth/session-ready` bekleme odası; **upstream'de düzeltilmiş değil**, `docs/13` support notu gönderilmedi |
 | Faz 5A/5B — tasarım sistemi + auth deneyimi | **DEPLOYED** (2026-09-14) — token katmanı, shell, auth shell |
 | Faz 6A — moda ürün ana verisi (`20260914130000_phase6a_product_master`, `20260914150000_phase6a_archive_only_lifecycle`) | **CLOSED — DEPLOYED TO DEV** (2026-09-15) — style_code, seçenek türü/renk metadata, matris RPC, barkod çözümleme, görsel rolleri + özel bucket + storage RLS; ürün/varyant DB düzeyinde yalnız arşivlenir (DELETE yetkisi yok); fresh-DB 601/0, canlı API/RPC/Storage smoke PASS, etkileşimli UI QA 1440/768/390 PASS (fixture C ve D cancelled) |
-| Faz 6B+ (gerçek fatura satırı içe aktarma, landed cost, PO, POS) | **Başlamadı** — 6A incelemesi bekliyor |
+| Faz 6B — fiziksel katalog onboarding (`/app/urunler/katalog-ekle`, `20260915090000_phase6b_catalog_onboarding`, `20260915120000_phase6b_image_path_tenant_check`) | **WORKFLOW VERIFIED — OPEN** (2026-09-15) — 5 adımlı telefon öncelikli akış, `rpc_onboard_product`/`rpc_onboard_variants` (atomik), `created_by` damgası; sentetik pilot (6 ürün, fixture `ZZ E2E CATALOG TEST E`, cancelled) PASS; fresh-DB 644/0; **gerçek TLC ürün batch'i henüz girilmedi** — sahibin fiziksel ürün onayı bekleniyor |
+| Faz 6C+ (gerçek fatura satırı içe aktarma, landed cost, PO, POS) | **Başlamadı** — TLC katalog batch'i bekliyor |
 
 Ayrıntılı denetim: `docs/10_AUDIT_REVIEW.md`. Mimari kararlar: `docs/09_DECISIONS.md`.
 Auth e-posta/dashboard sözleşmesi: `docs/12_AUTH_DELIVERY_CONFIG.md`. Supabase olay notu: `docs/13_SUPABASE_525_INCIDENT_NOTE.md`.
@@ -76,7 +77,7 @@ fonksiyon imzaları, `RAISE` placeholder/argüman sayısı.
 
 Yerel PostgreSQL: port 5433, `.pgdata`, DB `boutiqueos_test`. Cluster kapalıysa
 `.\scripts\db_fresh.ps1 -Init`. Harness `auth` ve `storage` (buckets/objects/foldername) şemalarını shim'ler;
-storage RLS politikaları yerelde de test edilir. Beklenen sayım: **576**.
+storage RLS politikaları yerelde de test edilir. Beklenen sayım: **644**.
 
 ## Frontend gate'i (her bağımlılık/kod değişikliğinde)
 
@@ -104,6 +105,7 @@ ardından `npm ls @supabase/supabase-js @supabase/auth-js @supabase/ssr next pos
 - Taze JWT: `loadMemberships` PGRST303 / "JWT issued at future" alırsa **fırlatmaz**, `/auth/session-ready?next=…` (allowlist: `/app`, `/select-business`)
   bekleme odasına yönlendirir; oda salt-okuma probe'u 0/1/2/4/8 s çizelgesiyle yoklar. Başka hiçbir hata yeniden denenmez.
 - `/sifre-sifirla` sonucu operatöre `[auth] password reset delivery failed|recovered …` server logu olarak gider; ziyaretçi her durumda aynı generic metni görür; yalnız HTTP 525 bir kez yeniden denenir.
+- Katalog onboarding (Faz 6B): yeni model + onaylı varyantlar + etiket barkodları **tek transaction** (`rpc_onboard_product`; barkod çakışmasında ürün dahil hepsi geri alınır). Barkod olduğu gibi saklanır (baştaki sıfırlar dahil), `supplier` tipi, 13 hane → EAN13; varyantın ilk barkodu birincil. `created_by` ürün/varyant/görsel/kategoride trigger'la dolar (ayrı audit alt sistemi yok). `product_images.storage_path` kendi tenant ön ekiyle başlamak zorunda (CHECK). Çoğaltma: barkod = hard stop, model kodu = güçlü uyarı, normalize ad = uyarı; otomatik birleştirme yok. Akışta stok/maliyet alanı yoktur.
 - Ürün ana verisi (Faz 6A): `sku` DB'de zorunlu kalır (POS/mal kabul/stok ona dayanır), UI ön ek + değer kodlarından türetir. `style_code` tekil **değildir** (uyarı). Seçenekler işletme geneli; `kind` yalnız UX ipucu. `color_hex` görünüm içindir, kimlik değildir. Matris `rpc_generate_variants` ile tek transaction (idempotent). Görseller özel `product-images` bucket'ında `business/<id>/products/<pid>/<uuid>.<ext>`; okuma yalnız imzalı URL (60 dk), yazma manager+; storage RLS `fn_storage_business_id` ile yol segmentini okur. Ürün/varyant **silinmez**, arşivlenir: `products`/`product_variants` üzerinde `anon`/`authenticated` için DELETE ve TRUNCATE yetkisi yok ve DELETE politikası tanımlı değil (history FK'ları ayrıca RESTRICT); barkod ve görsel satırları silinebilir kalır.
 - Tenant çözümlemesi yalnız sunucuda (`lib/tenant.ts`): `business_members` (aktif) → `businesses` →
   `branches`. 0 üyelik → `/no-access`, 1 → otomatik, çok → `/select-business`. Cookie yalnız *tercih*

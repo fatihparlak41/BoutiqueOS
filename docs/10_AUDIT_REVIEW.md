@@ -339,6 +339,25 @@ Dokunulmadı (2026-09-15 kapanışında yeniden doğrulandı): 3 owner, 1 ürün
 ### Ertelenen
 Tek başına çoklu ürün tablosu için stok özeti (liste), etiket görselinin mal kabul akışıyla bağlanması (`receiving_proof` modellendi, UI yok), stock_staff görsel yükleme (manager+ tutuldu), görsel boyut/oran otomatik okuma (`width/height` kolonları boş), fuzzy ad benzerliği (yalnız ön ek ilike), varyant başına stok özeti çok şubede.
 
+## 14. Faz 6B — Fiziksel katalog onboarding (2026-09-15, AÇIK)
+
+### Teslim
+`/app/urunler/katalog-ekle`: 1 Barkod (okuyucu/klavye, bilinen kod hard stop) → 2 Ürün (ad, model kodu, kategori önerileri tenant verisi olarak, fiyat isteğe bağlı, ürün + etiket fotoğrafı) → 3 Renk/Beden (yalnız işaretlenen; satır içi yeni değer; seçeneksiz için açık "tek varyant") → 4 Varyant matrisi (aç/kapat, SKU, etiket barkodu olduğu gibi, isteğe bağlı renk fotoğrafı; **kontrole geçmeden her barkod sunucuda doğrulanır**) → 5 Kontrol + tek "Ürünü kataloğa ekle". Mevcut modele eksik varyant ekleme aynı akışta. Migration'lar `20260915090000_phase6b_catalog_onboarding` (rpc_onboard_product / rpc_onboard_variants, `product_variants.created_by`, `fn_stamp_created_by`) ve `20260915120000_phase6b_image_path_tenant_check`.
+
+### Testler
+T62 (**43**): atomik onboarding, verbatim barkod/EAN13/birincil, çoğaltma rollback (çağrı dışı ve çağrı içi), mevcut ürüne ekleme + idempotency, roller/çapraz tenant red, doğrulama, **T62f sıfır stok/maliyet/borç/mal kabul etkisi**, T62g yabancı tenant görsel yolu red. Toplam **644/0**, concurrency PASS, `test:auth` 25/108/27/30/62, lint/typecheck/build temiz, tracked dosyalarda secret yok.
+
+### Sentetik pilot (fixture `ZZ E2E CATALOG TEST E`, canlı UI; sonra ürünler arşivli, tenant audited RPC ile `cancelled`)
+A Satin Dress 2×3 → 1 kapatıldı, 1 SKU düzenlendi → 5 varyant + ana/etiket/varyant görseli · B Knit Top tek beden 1 barkod · C Trousers yalnız beden 3 varyant · D Scarf yalnız renk (Leopar/Çok Renkli hex'siz) · E Bikini birincil + tedarikçi barkodu aynı varyanta çözümlendi · F Belt barkodsuz/modelsiz. Çoğaltma: bilinen barkod hard stop; E'nin barkodu F'ye → UI red + DB 23505 (satır kalmadı); aynı model kodu güçlü uyarı; `" zz test satin dress "` normalize ad uyarısı. Mevcut ürüne Zeytin: yalnız eksikler üretildi, mevcut Siyah/Bordo dokunulmadı; tekrar → 0 (UI "0 eklenecek, 9 zaten var", RPC created=0). Görsel: galeri yükleme, ana görsel takası, etiket kaldırma (satır + nesne), F'de yer tutucu; TLC yoluna yükleme/imzalama/listeleme/bağlama red. Responsive 1440/768/390: liste+barkod, ürün sayfası, 5 adım — yatay taşma yok. Sıfır yan etki: movement 0, cost pool 0, borç 0, mal kabul 0. TLC before/after snapshot **birebir aynı**.
+
+### Bulgular ve düzeltmeler
+`fb81984` normalize ad uyarısı kısa ilk kelimede atlanıyordu · `78cd2e9` `product_images.storage_path` yabancı tenant yolunu kabul ediyordu (bayt okunamıyordu, satır sarkık kalıyordu) → CHECK · `a4576ab` bilinen barkod kontrolü yalnız blur'da çalışıyordu (okuyucu Enter gönderir) → kontrole geçmeden sunucu doğrulaması.
+
+**Ortam notu:** claude-in-chrome otomasyon uzantısı altında "ara → Seç" yolu taze sekmede tarayıcı render'ını dondurdu (4/4); uzantısız temiz Chrome'da aynı yol 4/4 ve tüm QA PASS; konsolda uygulama hatası yok, istisna uzantının fetch sarmalayıcısında. Uygulama hatası olarak değerlendirilmedi; gerçek telefon turunda gözlenmeli.
+
+### Açık
+Gerçek TLC ürün batch'i (5–10 fiziksel ürün) sahibin onayıyla girilecek; TLC seed seçeneklerinin `kind` düzeltmesi (Color→color, Size→size) yapıldı, başka TLC yazması yok.
+
 ### Frontend bağımlılık taban çizgisi (Faz 1)
 
 Next 15.5.25 · React 19.0.0 · Tailwind 3.4.17 · `@supabase/supabase-js ^2.116.0` · `@supabase/ssr 0.12.6` ·
