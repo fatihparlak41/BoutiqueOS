@@ -65,9 +65,14 @@ export default async function ProductsPage({
         description="Ürün modelleri ve satılabilir varyantları. Stok miktarı bu ekranda tutulmaz; mal kabulle gelir."
         actions={
           caps.canEditCatalog ? (
-            <Link href="/app/urunler/yeni">
-              <Button size="sm">Yeni ürün</Button>
-            </Link>
+            <>
+              <Link href="/app/urunler/yeni">
+                <Button size="sm" variant="outline">Yeni ürün</Button>
+              </Link>
+              <Link href="/app/urunler/katalog-ekle">
+                <Button size="sm">Kataloğa ekle</Button>
+              </Link>
+            </>
           ) : undefined
         }
       />

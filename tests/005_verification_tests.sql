@@ -2108,6 +2108,149 @@ SELECT t_err('T61j history-bearing variant still undeletable even for maintenanc
 SELECT t_err('T61j history-bearing product still undeletable even for maintenance', $q$ DELETE FROM products WHERE id = t_get('p1') $q$, '23503');
 
 -- ============================================================
+-- T62 — Phase 6B catalogue onboarding: atomic product+variants+barcodes,
+--        creator stamping, duplicate barcode rollback, existing-product
+--        variant add, cross-tenant refusal, zero stock / cost / receipt effect
+-- ============================================================
+SELECT t_logout();
+-- baseline of everything the onboarding RPCs must never touch
+CREATE TEMP TABLE _t62_base AS
+SELECT (SELECT count(*) FROM inventory_movements)                                AS movements,
+       (SELECT count(*) FROM variant_cost_pools)                                 AS pools,
+       (SELECT COALESCE(sum(on_hand_qty), 0) FROM variant_cost_pools)           AS on_hand,
+       (SELECT COALESCE(sum(total_value_base), 0) FROM variant_cost_pools)      AS pool_value,
+       (SELECT count(*) FROM supplier_account_entries)                           AS liab_rows,
+       (SELECT COALESCE(sum(amount_base), 0) FROM supplier_account_entries)     AS liab_sum,
+       (SELECT count(*) FROM goods_receipts)                                     AS receipts,
+       (SELECT count(*) FROM goods_receipt_items)                                AS receipt_items,
+       (SELECT count(*) FROM products)                                           AS products,
+       (SELECT count(*) FROM product_variants)                                   AS variants,
+       (SELECT count(*) FROM barcodes)                                           AS barcodes;
+
+SELECT t_check('T62 privilege: onboarding RPCs are authenticated-only',
+  has_function_privilege('authenticated', 'rpc_onboard_product(uuid, jsonb, jsonb)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_onboard_product(uuid, jsonb, jsonb)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_onboard_variants(uuid, jsonb)', 'EXECUTE'));
+
+-- A) owner onboards a colour+size model with label barcodes, one call
+SELECT t_login('u1');
+SELECT t_ok('T62a owner onboards a new model with 2 variants and 3 barcodes', $q$
+  CREATE TEMP TABLE _t62a AS
+  SELECT * FROM rpc_onboard_product(t_get('biz'),
+    jsonb_build_object('name', 'Keten Gömlek', 'sku_prefix', 'KTG-62', 'style_code', 'SS26-062',
+                       'category_id', t_get('cat_elbise')::text, 'default_sale_price', '1450'),
+    jsonb_build_array(
+      jsonb_build_object('sku', 'KTG-62-SYH-L', 'option_value_ids', jsonb_build_array(t_get('val_black')::text, t_get('val_l')::text),
+                         'barcodes', jsonb_build_array('8690000000620', '0062-OLD')),
+      jsonb_build_object('sku', 'KTG-62-LEO-L', 'option_value_ids', jsonb_build_array(t_get('val_leo')::text, t_get('val_l')::text),
+                         'barcodes', jsonb_build_array('8690000000621'))))
+$q$);
+SELECT t_set('p62', (SELECT product_id FROM _t62a LIMIT 1));
+SELECT t_set('v62a', (SELECT variant_id FROM _t62a WHERE sku = 'KTG-62-SYH-L'));
+SELECT t_set('v62b', (SELECT variant_id FROM _t62a WHERE sku = 'KTG-62-LEO-L'));
+SELECT t_check('T62a two variants created', (SELECT count(*) FROM _t62a WHERE created) = 2 AND (SELECT sum(barcodes_added) FROM _t62a) = 3);
+SELECT t_check('T62a product active, in tenant, with style code and category',
+  (SELECT status::text || '/' || style_code || '/' || (category_id = t_get('cat_elbise'))::text FROM products WHERE id = t_get('p62') AND business_id = t_get('biz')) = 'active/SS26-062/true');
+SELECT t_check('T62a variants carry their option values',
+  t_count($q$ SELECT count(*) FROM variant_option_values WHERE variant_id IN (t_get('v62a'), t_get('v62b')) $q$) = 4);
+SELECT t_check('T62a barcodes stored exactly, EAN13 detected, first one primary, others alternate',
+  (SELECT string_agg(barcode || ':' || symbology || ':' || barcode_type::text || ':' || is_primary::text, ',' ORDER BY barcode)
+   FROM barcodes WHERE variant_id = t_get('v62a')) = '0062-OLD:CODE128:supplier:false,8690000000620:EAN13:supplier:true');
+SELECT t_check('T62a barcode with leading zeros preserved verbatim',
+  t_count($q$ SELECT count(*) FROM barcodes WHERE barcode = '0062-OLD' $q$) = 1);
+SELECT t_check('T62a barcode resolves to the new variant',
+  (SELECT variant_id FROM rpc_resolve_barcode(t_get('biz'), '8690000000621')) = t_get('v62b'));
+SELECT t_check('T62a created_by stamped on product and variants',
+  (SELECT created_by FROM products WHERE id = t_get('p62')) = t_get('u1')
+  AND t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p62') AND created_by = t_get('u1') $q$) = 2);
+SELECT t_ok('T62a image insert stamps creator', $q$ INSERT INTO product_images (product_id, role, storage_path) VALUES (t_get('p62'), 'product_main', 'business/' || t_get('biz') || '/products/' || t_get('p62') || '/m.jpg') $q$);
+SELECT t_check('T62a image created_by = uploader', t_count($q$ SELECT count(*) FROM product_images WHERE product_id = t_get('p62') AND created_by = t_get('u1') $q$) = 1);
+
+-- B) duplicate barcode: whole call rolls back, no orphan product
+SELECT t_err('T62b duplicate label barcode refuses the whole product', $q$
+  SELECT * FROM rpc_onboard_product(t_get('biz'),
+    jsonb_build_object('name', 'Kopya Gömlek', 'sku_prefix', 'KTG-62X'),
+    jsonb_build_array(jsonb_build_object('sku', 'KTG-62X-STD', 'option_value_ids', '[]'::jsonb, 'barcodes', jsonb_build_array('8690000000620'))))
+$q$, '23505');
+SELECT t_check('T62b nothing of the refused product remains',
+  t_count($q$ SELECT count(*) FROM products WHERE sku_prefix = 'KTG-62X' $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM product_variants WHERE sku = 'KTG-62X-STD' $q$) = 0);
+SELECT t_err('T62b duplicate barcode inside one call also rolls back',
+  $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Çift Barkod', 'sku_prefix', 'KTG-62Y'),
+        jsonb_build_array(jsonb_build_object('sku', 'KTG-62Y-A', 'option_value_ids', jsonb_build_array(t_get('val_black')::text), 'barcodes', jsonb_build_array('DUP-62')),
+                          jsonb_build_object('sku', 'KTG-62Y-B', 'option_value_ids', jsonb_build_array(t_get('val_leo')::text),   'barcodes', jsonb_build_array('DUP-62')))) $q$, '23505');
+SELECT t_check('T62b no half product from the in-call duplicate', t_count($q$ SELECT count(*) FROM products WHERE sku_prefix = 'KTG-62Y' $q$) = 0);
+
+-- C) existing product: add only the missing variant (Leopar / L exists → skipped, Siyah / Leopar + new size)
+SELECT t_ok('T62c add a missing variant to the existing model', $q$
+  CREATE TEMP TABLE _t62c AS
+  SELECT * FROM rpc_onboard_variants(t_get('p62'), jsonb_build_array(
+    jsonb_build_object('sku', 'KTG-62-LEO-L', 'option_value_ids', jsonb_build_array(t_get('val_leo')::text, t_get('val_l')::text), 'barcodes', jsonb_build_array('8690000000622')),
+    jsonb_build_object('sku', 'KTG-62-SYH-STD', 'option_value_ids', jsonb_build_array(t_get('val_black')::text), 'barcodes', '[]'::jsonb)))
+$q$);
+SELECT t_check('T62c existing combination skipped, new one created',
+  (SELECT created FROM _t62c WHERE sku = 'KTG-62-LEO-L') = false AND (SELECT created FROM _t62c WHERE sku = 'KTG-62-SYH-STD') = true);
+SELECT t_check('T62c extra barcode attached to the existing variant as alternate',
+  (SELECT is_primary FROM barcodes WHERE barcode = '8690000000622') = false
+  AND (SELECT variant_id FROM barcodes WHERE barcode = '8690000000622') = t_get('v62b'));
+SELECT t_check('T62c variant without barcode is allowed',
+  t_count($q$ SELECT count(*) FROM barcodes b JOIN product_variants pv ON pv.id = b.variant_id WHERE pv.sku = 'KTG-62-SYH-STD' $q$) = 0);
+SELECT t_check('T62c original variants and barcodes untouched',
+  t_count($q$ SELECT count(*) FROM barcodes WHERE variant_id = t_get('v62a') $q$) = 2
+  AND t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p62') AND status = 'active' $q$) = 3);
+SELECT t_logout();
+
+-- D) roles: manager may, stock_staff / sales_staff may not, other tenant may not
+SELECT t_login('u2');
+SELECT t_ok('T62d manager onboards a single-variant model without barcode', $q$
+  SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Tek Beden Şal', 'sku_prefix', 'SAL-62'),
+    jsonb_build_array(jsonb_build_object('sku', 'SAL-62-STD', 'option_value_ids', '[]'::jsonb))) $q$);
+SELECT t_check('T62d manager stamped as creator', (SELECT created_by FROM products WHERE sku_prefix = 'SAL-62') = t_get('u2'));
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T62d stock_staff cannot onboard a product', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Yasak', 'sku_prefix', 'YSK-62'), jsonb_build_array(jsonb_build_object('sku', 'YSK-62-STD', 'option_value_ids', '[]'::jsonb))) $q$, '42501');
+SELECT t_err('T62d stock_staff cannot add variants through the RPC', $q$ SELECT * FROM rpc_onboard_variants(t_get('p62'), jsonb_build_array(jsonb_build_object('sku', 'KTG-62-X', 'option_value_ids', '[]'::jsonb))) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T62d sales_staff cannot onboard a product', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Yasak', 'sku_prefix', 'YSK-62'), jsonb_build_array(jsonb_build_object('sku', 'YSK-62-STD', 'option_value_ids', '[]'::jsonb))) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T62d other tenant cannot write into business A', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Sızma', 'sku_prefix', 'SIZ-62'), jsonb_build_array(jsonb_build_object('sku', 'SIZ-62-STD', 'option_value_ids', '[]'::jsonb))) $q$, '42501');
+SELECT t_err('T62d other tenant cannot add variants to product A', $q$ SELECT * FROM rpc_onboard_variants(t_get('p62'), jsonb_build_array(jsonb_build_object('sku', 'KTG-62-Z', 'option_value_ids', '[]'::jsonb))) $q$, '42501');
+SELECT t_err('T62d other tenant cannot borrow business A option values', $q$ SELECT * FROM rpc_onboard_product(t_get('bizB'), jsonb_build_object('name', 'Sızma', 'sku_prefix', 'SIZ-62B'), jsonb_build_array(jsonb_build_object('sku', 'SIZ-62B-A', 'option_value_ids', jsonb_build_array(t_get('val_black')::text)))) $q$, '22023');
+SELECT t_err('T62d other tenant cannot reference business A category', $q$ SELECT * FROM rpc_onboard_product(t_get('bizB'), jsonb_build_object('name', 'Sızma', 'sku_prefix', 'SIZ-62C', 'category_id', t_get('cat_elbise')::text), jsonb_build_array(jsonb_build_object('sku', 'SIZ-62C-A', 'option_value_ids', '[]'::jsonb))) $q$, '23503');
+SELECT t_check('T62d no cross-tenant product was created',
+  t_count($q$ SELECT count(*) FROM products WHERE sku_prefix LIKE 'SIZ-62%' OR sku_prefix = 'YSK-62' $q$) = 0);
+SELECT t_logout();
+
+-- E) validation
+SELECT t_login('u1');
+SELECT t_err('T62e empty matrix refused', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Boş', 'sku_prefix', 'BOS-62'), '[]'::jsonb) $q$, '22023');
+SELECT t_err('T62e name too short refused', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'X', 'sku_prefix', 'X-62'), jsonb_build_array(jsonb_build_object('sku', 'X-62-STD', 'option_value_ids', '[]'::jsonb))) $q$, '22023');
+SELECT t_err('T62e barcode too short refused', $q$ SELECT * FROM rpc_onboard_product(t_get('biz'), jsonb_build_object('name', 'Kısa Barkod', 'sku_prefix', 'KB-62'), jsonb_build_array(jsonb_build_object('sku', 'KB-62-STD', 'option_value_ids', '[]'::jsonb, 'barcodes', jsonb_build_array('12')))) $q$, '22023');
+SELECT t_check('T62e refused product left nothing behind', t_count($q$ SELECT count(*) FROM products WHERE sku_prefix IN ('BOS-62','X-62','KB-62') $q$) = 0);
+SELECT t_logout();
+
+-- F) zero side effects: stock, cost, liability and receipts are byte-for-byte unchanged
+SELECT t_check('T62f no inventory movement from onboarding', (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t62_base));
+SELECT t_check('T62f no cost pool created or changed',
+  (SELECT count(*) FROM variant_cost_pools) = (SELECT pools FROM _t62_base)
+  AND (SELECT COALESCE(sum(on_hand_qty), 0) FROM variant_cost_pools) = (SELECT on_hand FROM _t62_base)
+  AND (SELECT COALESCE(sum(total_value_base), 0) FROM variant_cost_pools) = (SELECT pool_value FROM _t62_base));
+SELECT t_check('T62f supplier liability unchanged',
+  (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t62_base)
+  AND (SELECT COALESCE(sum(amount_base), 0) FROM supplier_account_entries) = (SELECT liab_sum FROM _t62_base));
+SELECT t_check('T62f goods receipts and items unchanged',
+  (SELECT count(*) FROM goods_receipts) = (SELECT receipts FROM _t62_base)
+  AND (SELECT count(*) FROM goods_receipt_items) = (SELECT receipt_items FROM _t62_base));
+SELECT t_check('T62f new variants have no cost pool row at all',
+  t_count($q$ SELECT count(*) FROM variant_cost_pools WHERE variant_id IN (SELECT id FROM product_variants WHERE product_id = t_get('p62')) $q$) = 0);
+SELECT t_check('T62f exactly the expected catalogue rows were added (2 products, 4 variants, 4 barcodes)',
+  (SELECT count(*) FROM products) = (SELECT products FROM _t62_base) + 2
+  AND (SELECT count(*) FROM product_variants) = (SELECT variants FROM _t62_base) + 4
+  AND (SELECT count(*) FROM barcodes) = (SELECT barcodes FROM _t62_base) + 4);
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$
