@@ -69,3 +69,11 @@ session returned 200 for every page. One `POST /auth/v1/verify` round trip excee
 the same window. Consistent with the fresh-token / Auth latency pattern above; not reproduced
 afterwards.
 
+Route review (2026-09-15, no code change): the failing routes were `/app`, `/app/urunler`
+and `/app/stok` (chain `/app/stok → 307 /login → 307 /app → 500`). All three render under
+`app/app/layout.tsx` → `requireTenant()` → `loadMemberships()`, which already carries the
+single "JWT issued at future" retry and the `/auth/session-ready` hand-off, so none of them
+bypasses that path. The responses were plain 500s without a Next error digest, which points
+at the request failing before the RSC render (session refresh / Auth upstream) rather than at
+the tenant read. No speculative retry expansion was made.
+
