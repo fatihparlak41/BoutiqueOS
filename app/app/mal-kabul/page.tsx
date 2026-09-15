@@ -145,7 +145,7 @@ export default async function ReceiptsPage({
                 <TD muted numeric align="right">{formatQuantity(receipt.total_quantity)}</TD>
                 {caps.canManageCost ? (
                   <TD muted numeric align="right">
-                    {receipt.total_original === null ? "—" : formatMoney(receipt.total_original, receipt.invoice_currency)}
+                    {receipt.total_original === null || receipt.missing_cost_lines > 0 ? "—" : formatMoney(receipt.total_original, receipt.invoice_currency)}
                     {receipt.missing_cost_lines > 0 ? (
                       <span className="mt-0.5 block text-2xs text-danger">{receipt.missing_cost_lines} satır fiyat bekliyor</span>
                     ) : null}
