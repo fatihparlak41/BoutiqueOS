@@ -24,3 +24,6 @@ Thumbs.db
 
 # disposable QA upload fixtures
 tests/assets/
+
+# throwaway local scripts
+.zz_*
