@@ -166,6 +166,27 @@ for f, s in srcs.items():
 alias_map = {"s.": "sales", "si.": "sale_items", "sic.": "sale_item_costs", "gr.": "goods_receipts",
              "gri.": "goods_receipt_items", "rs.": "register_sessions", "t.": "stock_transfers",
              "r.": "reservations", "th.": "transfer_held_inventory"}
+
+# 5c. Supabase runs pg-safeupdate for API sessions: a DELETE or UPDATE without WHERE fails at
+#     runtime with 21000 even inside a SECURITY DEFINER function (found live in Phase 9A:
+#     `DELETE FROM _sale_lines;`). The local harness has no safeupdate, so the fresh-DB gate
+#     cannot catch it - the linter must. Only the LATEST definition of a function counts:
+#     an applied migration is never edited, the fix is a later CREATE OR REPLACE.
+#     Use `WHERE true` to clear a scratch table.
+_fn_last = {}   # function name -> (file, body) of its last definition, migrations in order
+for f in files:
+    if "/migrations/" not in f: continue
+    sc = strip_comments(open(f, encoding="utf-8").read())
+    for m in re.finditer(r"CREATE (?:OR REPLACE )?FUNCTION\s+(\w+)\s*\((.*?)\)\s*RETURNS.*?\$\$(.*?)\$\$", sc, re.S):
+        _fn_last[(m.group(1), re.sub(r"\s+", " ", m.group(2)).count(",") )] = (f, m.group(3))
+for (fn, _), (f, body) in _fn_last.items():
+    short = f.split("/")[-1]
+    for m in re.finditer(r"\bDELETE\s+FROM\s+(\w+)\s*;", body):
+        errors.append(f"{short}: {fn}: DELETE FROM {m.group(1)} without WHERE (pg-safeupdate refuses it on Supabase)")
+    for m in re.finditer(r"\bUPDATE\s+(\w+)\s+SET\b([^;]*);", body, re.S):
+        if not re.search(r"\bWHERE\b", m.group(2)):
+            errors.append(f"{short}: {fn}: UPDATE {m.group(1)} without WHERE (pg-safeupdate refuses it on Supabase)")
+
 print(f"tables={len(tables)} enums={len(enums)} funcs={len(funcs)}")
 for e in errors: print("ERROR ", e)
 for w in warns: print("WARN  ", w)

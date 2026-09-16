@@ -94,6 +94,7 @@ const RPC_MESSAGES: Array<[string, string]> = [
   ["INVALID_PAYMENT", "Ödeme tutarı sıfırdan büyük olmalı."],
   ["CURRENCY_NOT_ACCEPTED", "Bu para birimi kabul edilmiyor."],
   ["IDEMPOTENCY_CONFLICT", "Bu satış kimliği başka bir sepetle kullanılmış. Sayfayı yenileyin."],
+  ["SETTING_MISSING", "İşletme ayarı eksik. Yönetici işletme ayarlarını tamamlamalı."],
   ["COUNT_REQUIRED", "Kasa kapanışı için sayılan nakit gerekli."],
   ["INVALID_STATE: session", "Kasa oturumu zaten kapalı."],
   ["INVALID_STATE: receipt", "Belge bu durumda bu işlemi kabul etmiyor (ör. zaten işlenmiş). Sayfayı yenileyin."],
