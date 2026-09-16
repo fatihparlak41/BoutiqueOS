@@ -49,7 +49,7 @@ export async function createRegisterAction(_prev: ActionState, fd: FormData): Pr
 
 export async function openSessionAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, caps } = await loadPosContext();
-  if (!caps.canSell) return fail(NO_PERMISSION);
+  if (!caps.canManageRegisters) return fail(NO_PERMISSION);   // drawer open/close is owner/manager (20260916170000)
   const registerId = text(fd, "register_id");
   if (!UUID.test(registerId)) return fail("Kasa seçilmedi.");
   const opening = parseMoney(text(fd, "opening_cash") || "0");
@@ -65,7 +65,7 @@ export async function openSessionAction(_prev: ActionState, fd: FormData): Promi
 
 export async function closeSessionAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const { supabase, caps } = await loadPosContext();
-  if (!caps.canSell) return fail(NO_PERMISSION);
+  if (!caps.canManageRegisters) return fail(NO_PERMISSION);
   const sessionId = text(fd, "session_id");
   if (!UUID.test(sessionId)) return fail("Oturum bulunamadı.");
   const counted = parseMoney(text(fd, "counted_cash"));

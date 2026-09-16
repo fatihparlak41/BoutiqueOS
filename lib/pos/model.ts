@@ -83,7 +83,7 @@ export type SaleReceipt = {
 export type PosCaps = {
   /** owner | manager | sales_staff — may open the POS and complete sales */
   canSell: boolean;
-  /** owner | manager — create registers, close any drawer */
+  /** owner | manager — create registers, open and close drawers (the server enforces the same) */
   canManageRegisters: boolean;
   /** owner | manager: unlimited; sales_staff: business_members.max_discount_pct > 0 */
   canDiscount: boolean;

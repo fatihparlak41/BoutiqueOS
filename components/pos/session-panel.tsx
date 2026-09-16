@@ -106,12 +106,12 @@ export function SessionBar({ register, caps, onSelect, selectedId, registers }: 
         </span>
       ) : null}
       <span className="grow" />
-      {session ? (
+      {session && caps.canManageRegisters ? (
         <button type="button" className="text-xs text-ink-70 underline-offset-2 hover:underline" onClick={() => setCloseOpen((v) => !v)}>
           {closeOpen ? "Vazgeç" : "Kasayı kapat"}
         </button>
       ) : null}
-      {closeOpen && session ? (
+      {closeOpen && session && caps.canManageRegisters ? (
         <form action={action} className="basis-full space-y-2 border border-line bg-panel/40 p-3" data-testid="close-session">
           <input type="hidden" name="session_id" value={session.id} />
           <div className="flex flex-wrap items-end gap-2">
@@ -125,7 +125,6 @@ export function SessionBar({ register, caps, onSelect, selectedId, registers }: 
             </div>
             <Pending label="Kapat" pendingLabel="Kapatılıyor…" variant="outline" />
           </div>
-          {!caps.canManageRegisters ? <p className="text-2xs text-muted">Kasa sayımı kayda geçer; fark yönetici tarafından incelenir.</p> : null}
           <FormMessage state={state} successText="Kasa kapatıldı." />
         </form>
       ) : null}

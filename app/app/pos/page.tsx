@@ -8,7 +8,8 @@ export const metadata = { title: "Kasa · BoutiqueOS" };
 /**
  * Kasa. The server decides who may be here (owner, manager, sales_staff) and what the
  * branch has: no register → a manager creates one; registers without an open drawer →
- * open one; an open drawer → the terminal. Nothing cost-related is loaded on this page.
+ * a manager opens one (sales_staff waits); an open drawer → the terminal. Nothing
+ * cost-related is loaded on this page.
  */
 export default async function PosPage() {
   const { caps, branchId, tenant } = await loadPosContext();
@@ -35,14 +36,16 @@ export default async function PosPage() {
 
       {registers.length > 0 && !anyOpen ? (
         <div className="space-y-4">
-          <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">Satış için açık bir kasa oturumu gerekir.</p>
-          <OpenSessionForm registers={registers} />
+          <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">
+            {caps.canManageRegisters ? "Satış için açık bir kasa oturumu gerekir." : "Satış için açık bir kasa oturumu gerekir. Kasayı yönetici açar."}
+          </p>
+          {caps.canManageRegisters ? <OpenSessionForm registers={registers} /> : null}
         </div>
       ) : null}
 
       {anyOpen ? <PosTerminal registers={registers} members={members} caps={caps} /> : null}
 
-      {anyOpen && registers.some((r) => r.is_active && !r.open_session) ? (
+      {anyOpen && caps.canManageRegisters && registers.some((r) => r.is_active && !r.open_session) ? (
         <details className="text-xs">
           <summary className="cursor-pointer text-muted">Başka bir kasa aç</summary>
           <div className="mt-2"><OpenSessionForm registers={registers} /></div>

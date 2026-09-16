@@ -240,10 +240,13 @@ SELECT t_check('T13 MWA v1 = 130 exact', (t_pool('v1')).total_value_base / (t_po
 -- ============================================================
 -- T22  register sessions
 -- ============================================================
-SELECT t_login('u3');
+SELECT t_login('u2');   -- drawer open/close is owner/manager (20260916170000); u3 sells on it below
 SELECT t_err('T22a sale without open register rejected', $q$ SELECT rpc_process_sale(t_get('biz'), t_get('br1'), gen_random_uuid(), t_json_items('v1','1',NULL), t_pay('cash','TRY',1000)) $q$, 'INVALID_REGISTER_SESSION');
 SELECT t_set('sess1', rpc_open_register_session(t_get('reg'), '[{"currency":"TRY","amount":500}]'::jsonb));
 SELECT t_err('T22b second open session on same register rejected', $q$ SELECT rpc_open_register_session(t_get('reg'), '[]'::jsonb) $q$, 'REGISTER_ALREADY_OPEN');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T22b sales_staff cannot open a drawer', $q$ SELECT rpc_open_register_session(t_get('reg'), '[]'::jsonb) $q$, 'FORBIDDEN');
 SELECT t_logout();
 
 -- ============================================================
@@ -322,10 +325,10 @@ SELECT t_err('T21a underpayment rejected', $q$ SELECT rpc_process_sale(t_get('bi
 SELECT t_err('T21b card overpayment rejected (no change possible)', $q$ SELECT rpc_process_sale(t_get('biz'), t_get('br1'), t_get('sess1'), t_json_items('v1','1',NULL), t_pay('card','TRY',1200)) $q$, 'PAYMENT_MISMATCH');
 SELECT t_err('T21c unaccepted currency rejected', $q$ SELECT rpc_process_sale(t_get('biz'), t_get('br1'), t_get('sess1'), t_json_items('v1','1',NULL), t_pay('cash','JPY',1000)) $q$, '22023');
 SELECT t_set('sale5', (rpc_process_sale(t_get('biz'), t_get('br1'), t_get('sess1'), t_json_items('v1','1',NULL), t_pay('cash','TRY',1200)) ->> 'sale_id')::uuid);
+SELECT t_logout();   -- cash_movements belong to the manager's drawer (35e); the row is checked outside RLS
 SELECT t_check('T21d cash overpayment => change 200 recorded and change_out movement',
   (SELECT change_given_base FROM sales WHERE id = t_get('sale5')) = 200
   AND (SELECT count(*) FROM cash_movements WHERE reference_id = t_get('sale5') AND movement_type = 'change_out' AND amount = -200) = 1);
-SELECT t_logout();
 -- v1 now 16
 
 -- ============================================================
@@ -485,6 +488,10 @@ SELECT t_logout();
 -- T22 (cont.)  register close, per-currency expected, sale after close
 -- ============================================================
 SELECT t_login('u3');
+SELECT t_err('T22c sales_staff cannot close the drawer it sells on', $q$ SELECT rpc_close_register_session(t_get('sess1'), '[{"currency":"TRY","counted_amount":0},{"currency":"GBP","counted_amount":0}]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_check('T22c …and the session is still open', (SELECT status::text FROM register_sessions WHERE id = t_get('sess1')) = 'open');
+SELECT t_logout();
+SELECT t_login('u2');
 SELECT t_err('T22c close requires every drawer currency counted', $q$ SELECT rpc_close_register_session(t_get('sess1'), '[]'::jsonb) $q$, 'COUNT_REQUIRED');
 SELECT t_ok('T22d close with TRY + GBP counts', $q$ SELECT rpc_close_register_session(t_get('sess1'), jsonb_build_array(
    jsonb_build_object('currency','TRY','counted_amount', (SELECT 500 + COALESCE(SUM(amount),0) FROM cash_movements WHERE register_session_id = t_get('sess1') AND currency='TRY')),
@@ -1038,11 +1045,15 @@ SELECT t_check('T40s no return_item leaks from an invisible return',
 SELECT t_check('T40t sale_item_costs still invisible to sales_staff', t_count($q$ SELECT count(*) FROM sale_item_costs $q$) = 0);
 SELECT t_check('T40u sale_costs still invisible to sales_staff', t_count($q$ SELECT count(*) FROM sale_costs $q$) = 0);
 SELECT t_check('T40v variant_cost_pools still invisible to sales_staff', t_count($q$ SELECT count(*) FROM variant_cost_pools $q$) = 0);
--- own register session and its cash stay readable (reconciliation)
-SELECT t_check('T40w cashier sees the session they opened',
-  t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess1') $q$) = 1);
-SELECT t_check('T40x cashier sees the cash movements of their own session',
-  t_count($q$ SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess1') $q$) > 0);
+-- drawer reconciliation is the manager's: the cashier sees neither the closed drawer nor its cash (20260916170000)
+SELECT t_check('T40w cashier does not see the manager''s closed drawer',
+  t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess1') $q$) = 0);
+SELECT t_check('T40x cashier does not see the cash movements of that drawer',
+  t_count($q$ SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess1') $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T40x …the manager who opened it does', t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess1') $q$) = 1
+  AND t_count($q$ SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess1') $q$) > 0);
 SELECT t_logout();
 
 -- a member who sold nothing sees nothing
@@ -2975,6 +2986,96 @@ SELECT t_err('T66e sale header frozen except void', $q$ UPDATE sales SET total =
 SELECT t_err('T66e payments frozen', $q$ DELETE FROM sale_payments WHERE sale_id = t_get('sale66a') $q$, 'IMMUTABLE');
 SELECT t_check('T66e ledger: sale movements are sellable −qty referencing sale_items', t_count($q$ SELECT count(*) FROM inventory_movements m JOIN sale_items i ON i.id = m.reference_id AND m.reference_type = 'sale_item' WHERE i.sale_id IN (t_get('sale66a'), t_get('sale66s')) AND m.bucket = 'sellable' AND m.quantity < 0 $q$) = 3);
 SELECT t_check('T66e cash drawer: cash tenders in, 50 change out', (SELECT string_agg(movement_type::text || '=' || amount::text, ',' ORDER BY amount) FROM cash_movements WHERE register_session_id = t_get('sess66') AND reference_type = 'sale') LIKE '%change_out=-50.00%sale_cash=600.00%');
+
+
+-- ============================================================
+-- T67 — Phase 9A register session hardening (20260916170000): drawer open/close is owner/manager;
+--       sales_staff sells on an open session but cannot open/close; stock_staff nothing; cross-tenant nothing.
+-- ============================================================
+SELECT t_logout();
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('biz'), t_get('br66'), 'Kasa 67') RETURNING id) SELECT t_set('reg67', id) FROM x;
+SELECT t_login('u2');
+SELECT t_ok('T67 fixture: B restocked 3@80 for the sales below', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br66'), t_get('v66b'), 'sellable', 3, 'T67 fixture', 'manual_cost', 80) $q$);
+SELECT t_logout();
+CREATE TEMP TABLE _t67_base AS
+SELECT (SELECT count(*) FROM register_sessions) AS sessions, (SELECT count(*) FROM register_session_currency_counts) AS counts,
+       (SELECT count(*) FROM cash_movements) AS cash, (SELECT count(*) FROM sales) AS sales;
+GRANT SELECT ON _t67_base TO authenticated;
+CREATE FUNCTION t67_unchanged() RETURNS BOOLEAN LANGUAGE sql AS $$
+  SELECT (SELECT count(*) FROM register_sessions) = (SELECT sessions FROM _t67_base)
+     AND (SELECT count(*) FROM register_session_currency_counts) = (SELECT counts FROM _t67_base)
+     AND (SELECT count(*) FROM cash_movements) = (SELECT cash FROM _t67_base)
+     AND (SELECT count(*) FROM sales) = (SELECT sales FROM _t67_base) $$;
+
+-- sales_staff / stock_staff / other tenant: no open, nothing written
+SELECT t_login('u3');
+SELECT t_err('T67a sales_staff cannot open a drawer', $q$ SELECT rpc_open_register_session(t_get('reg67'), '[{"currency":"TRY","amount":100}]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T67a stock_staff cannot open a drawer', $q$ SELECT rpc_open_register_session(t_get('reg67'), '[]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T67a other tenant''s owner cannot open A''s register', $q$ SELECT rpc_open_register_session(t_get('reg67'), '[]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_check('T67a refused opens wrote nothing', t67_unchanged());
+
+-- owner opens, sales_staff sells on it, sales_staff/stock_staff/other tenant cannot close, owner closes
+SELECT t_login('u1');
+SELECT t_set('sess67', rpc_open_register_session(t_get('reg67'), '[{"currency":"TRY","amount":100}]'::jsonb));
+SELECT t_check('T67b owner opened the drawer (opening 100, opened_by owner)',
+  (SELECT status::text || '/' || opened_by::text FROM register_sessions WHERE id = t_get('sess67')) = 'open/' || t_get('u1')::text
+  AND (SELECT opening_amount FROM register_session_currency_counts WHERE register_session_id = t_get('sess67') AND currency = 'TRY') = 100);
+SELECT t_err('T67b one open session per register: owner cannot open it twice', $q$ SELECT rpc_open_register_session(t_get('reg67'), '[]'::jsonb) $q$, 'REGISTER_ALREADY_OPEN');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T67c sales_staff sees the open drawer', t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess67') $q$) = 1);
+SELECT t_set('sale67', (rpc_pos_complete_sale(t_get('sess67'), t_json_items('v66b','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_check('T67c sales_staff completed a sale on the owner''s session (cashier = u3)',
+  (SELECT sold_by = t_get('u3') AND status = 'completed' AND total = 250 FROM sales WHERE id = t_get('sale67')));
+SELECT t_check('T67c …but does not see the owner''s drawer cash', t_count($q$ SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess67') $q$) = 0);
+SELECT t_err('T67c sales_staff cannot close the drawer', $q$ SELECT rpc_close_register_session(t_get('sess67'), '[{"currency":"TRY","counted_amount":350}]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T67c stock_staff cannot close the drawer', $q$ SELECT rpc_close_register_session(t_get('sess67'), '[{"currency":"TRY","counted_amount":350}]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_err('T67c stock_staff cannot sell on it either', $q$ SELECT rpc_pos_complete_sale(t_get('sess67'), t_json_items('v66b','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T67c other tenant cannot close A''s session', $q$ SELECT rpc_close_register_session(t_get('sess67'), '[{"currency":"TRY","counted_amount":350}]'::jsonb) $q$, 'FORBIDDEN');
+SELECT t_err('T67c other tenant cannot sell on A''s session', $q$ SELECT rpc_pos_complete_sale(t_get('sess67'), t_json_items('v66b','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_check('T67c the cashier''s cash landed in the owner''s drawer',
+  (SELECT count(*) FROM cash_movements WHERE register_session_id = t_get('sess67') AND movement_type = 'sale_cash' AND amount = 250) = 1);
+SELECT t_check('T67c refused closes/sales left the session open and the counts untouched',
+  (SELECT status::text FROM register_sessions WHERE id = t_get('sess67')) = 'open'
+  AND (SELECT counted_amount IS NULL FROM register_session_currency_counts WHERE register_session_id = t_get('sess67') AND currency = 'TRY')
+  AND (SELECT count(*) FROM sales) = (SELECT sales FROM _t67_base) + 1);
+SELECT t_login('u1');
+SELECT t_ok('T67d owner closes the drawer (expected 350, counted 340)', $q$ SELECT rpc_close_register_session(t_get('sess67'), '[{"currency":"TRY","counted_amount":340}]'::jsonb, 'T67 kapanış') $q$);
+SELECT t_check('T67d closed by owner, expected 350 / counted 340 / variance -10',
+  (SELECT status::text || '/' || closed_by::text FROM register_sessions WHERE id = t_get('sess67')) = 'closed/' || t_get('u1')::text
+  AND (SELECT expected_amount || '/' || counted_amount || '/' || variance_amount FROM register_session_currency_counts WHERE register_session_id = t_get('sess67') AND currency = 'TRY') = '350.00/340.00/-10.00');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T67d sale on the closed session refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess67'), t_json_items('v66b','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'REGISTER_CLOSED');
+SELECT t_logout();
+
+-- manager opens and closes; stock_staff sale on the manager's session refused
+SELECT t_login('u2');
+SELECT t_set('sess67b', rpc_open_register_session(t_get('reg67'), '[]'::jsonb));
+SELECT t_check('T67e manager reopened the register with a new session', (SELECT status::text || '/' || opened_by::text FROM register_sessions WHERE id = t_get('sess67b')) = 'open/' || t_get('u2')::text);
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T67e stock_staff sale on the manager''s session refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess67b'), t_json_items('v66b','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_ok('T67e manager closes it', $q$ SELECT rpc_close_register_session(t_get('sess67b'), '[{"currency":"TRY","counted_amount":0}]'::jsonb) $q$);
+SELECT t_err('T67e closing twice refused', $q$ SELECT rpc_close_register_session(t_get('sess67b'), '[{"currency":"TRY","counted_amount":0}]'::jsonb) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_check('T67e no client write path: register_sessions / currency counts / cash_movements have no INSERT/UPDATE/DELETE policy',
+  (SELECT count(*) FROM pg_policies WHERE tablename IN ('register_sessions','register_session_currency_counts','cash_movements') AND cmd <> 'SELECT') = 0);
+SELECT t_check('T67e the two session RPCs are the only register/session/cash RPCs',
+  (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname LIKE 'rpc_%' AND (p.proname LIKE '%register%' OR p.proname LIKE '%session%' OR p.proname LIKE '%drawer%' OR p.proname LIKE '%cash%')) = 2);
 
 -- ============================================================
 -- SUMMARY
