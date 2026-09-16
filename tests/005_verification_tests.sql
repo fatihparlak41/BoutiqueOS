@@ -2784,6 +2784,199 @@ SELECT t_err('T64h other tenant gets no list totals for A', $q$ SELECT * FROM rp
 SELECT t_logout();
 
 -- ============================================================
+-- T66 — Phase 9A POS foundation: register/session, cashier vs salesperson, role model,
+--        atomic sale via rpc_pos_complete_sale, stock buckets, COGS history, payments,
+--        double submit, zero side effects, immutability, visibility
+-- ============================================================
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'POS Elbise', 'POS-66', 250, 'active') RETURNING id)
+  SELECT t_set('p66', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'POS Etek', 'POS-66E', 400, 'active') RETURNING id)
+  SELECT t_set('p66e', id) FROM x;
+-- A 5 @100 · B 2 · C 1 · D 0 · E damaged only (option values keep the variant fingerprints distinct)
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p66'), 'POS-66-A') RETURNING id) SELECT t_set('v66a', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v66a'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p66'), 'POS-66-B') RETURNING id) SELECT t_set('v66b', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v66b'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p66'), 'POS-66-C') RETURNING id) SELECT t_set('v66c', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v66c'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000003');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p66e'), 'POS-66E-D') RETURNING id) SELECT t_set('v66d', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v66d'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p66e'), 'POS-66E-E') RETURNING id) SELECT t_set('v66e', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v66e'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+INSERT INTO barcodes (variant_id, barcode, barcode_type, symbology, is_primary) VALUES (t_get('v66a'), '0066000000019', 'supplier', 'EAN13', true);
+WITH x AS (INSERT INTO branches (business_id, name, code) VALUES (t_get('biz'), 'POS Şubesi', 'POS') RETURNING id) SELECT t_set('br66', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name, device_ref) VALUES (t_get('biz'), t_get('br66'), 'Kasa 66', 'tablet-66') RETURNING id) SELECT t_set('reg66', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('biz'), t_get('br1'), 'Kasa 66 diğer şube') RETURNING id) SELECT t_set('reg66b', id) FROM x;
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('biz'), 'POS Müşteri', '+90 555 066 0066') RETURNING id) SELECT t_set('cust66', id) FROM x;
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('bizB'), 'B Müşteri', '+90 555 066 0099') RETURNING id) SELECT t_set('custB', id) FROM x;
+
+SELECT t_login('u2');
+SELECT t_ok('T66 fixture stock: A 5@100, B 2@80, C 1@60, E damaged 3', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br66'), t_get('v66a'), 'sellable', 5, 'pos fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br66'), t_get('v66b'), 'sellable', 2, 'pos fixture', 'manual_cost', 80);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br66'), t_get('v66c'), 'sellable', 1, 'pos fixture', 'manual_cost', 60);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br66'), t_get('v66e'), 'damaged', 3, 'pos fixture', 'manual_cost', 50) $q$);
+-- session opened by the MANAGER; the cashier below is sales_staff
+SELECT t_set('sess66', rpc_open_register_session(t_get('reg66'), '[{"currency":"TRY","amount":300}]'::jsonb));
+SELECT t_set('sess66b', rpc_open_register_session(t_get('reg66b'), '[]'::jsonb));
+SELECT t_logout();
+
+CREATE TEMP TABLE _t66_base AS
+SELECT (SELECT count(*) FROM sales) AS sales, (SELECT count(*) FROM sale_items) AS items, (SELECT count(*) FROM sale_payments) AS pays,
+       (SELECT count(*) FROM inventory_movements) AS movements, (SELECT count(*) FROM inventory_movement_costs) AS mcosts,
+       (SELECT count(*) FROM cash_movements) AS cash, (SELECT count(*) FROM sale_item_costs) AS sic,
+       (SELECT COALESCE(sum(on_hand_qty),0) FROM variant_cost_pools WHERE branch_id = t_get('br66')) AS on_hand;
+GRANT SELECT ON _t66_base TO authenticated;
+CREATE FUNCTION t66_unchanged() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT (SELECT count(*) FROM sales) = (SELECT sales FROM _t66_base)
+     AND (SELECT count(*) FROM sale_items) = (SELECT items FROM _t66_base)
+     AND (SELECT count(*) FROM sale_payments) = (SELECT pays FROM _t66_base)
+     AND (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t66_base)
+     AND (SELECT count(*) FROM inventory_movement_costs) = (SELECT mcosts FROM _t66_base)
+     AND (SELECT count(*) FROM cash_movements) = (SELECT cash FROM _t66_base)
+     AND (SELECT count(*) FROM sale_item_costs) = (SELECT sic FROM _t66_base)
+     AND (SELECT COALESCE(sum(on_hand_qty),0) FROM variant_cost_pools WHERE branch_id = t_get('br66')) = (SELECT on_hand FROM _t66_base) $$;
+
+-- A) privileges + role model
+SELECT t_check('T66a privileges: POS RPCs to authenticated only, cores hidden',
+  has_function_privilege('authenticated', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_pos_members(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_sale_core(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz,jsonb,jsonb,discount_reason,text,numeric,uuid,uuid,text,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_sale_core(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz,jsonb,jsonb,discount_reason,text,numeric,uuid,uuid,text)', 'EXECUTE'));
+SELECT t_login('u4');
+SELECT t_check('T66a stock_staff sees the open session (operational) …', t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess66') $q$) = 1);
+SELECT t_err('T66a …but cannot complete a sale', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'stock_staff cannot complete sales');
+SELECT t_err('T66a …nor through the older rpc_process_sale', $q$ SELECT rpc_process_sale(t_get('biz'), t_get('br66'), t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250)) $q$, 'stock_staff cannot complete sales');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T66a other tenant cannot sell on A''s session', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_check('T66a other tenant sees no registers/sessions of A', t_count($q$ SELECT count(*) FROM cash_registers WHERE business_id = t_get('biz') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM register_sessions WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_logout();
+SELECT t_check('T66a nothing written by the refused attempts', t66_unchanged());
+
+-- B) sales_staff cashier: session visibility, member directory, validation failures (all zero side effect)
+SELECT t_login('u3');
+SELECT t_check('T66b cashier sees the session the manager opened', t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess66') AND status = 'open' $q$) = 1);
+SELECT t_check('T66b …but not the manager''s drawer counts', t_count($q$ SELECT count(*) FROM register_session_currency_counts WHERE register_session_id = t_get('sess66') $q$) = 0);
+SELECT t_check('T66b member directory: names + can_sell only (stock_staff cannot be credited)',
+  (SELECT count(*) FILTER (WHERE can_sell) >= 3 AND count(*) FILTER (WHERE NOT can_sell AND user_id = t_get('u4')) = 1 FROM rpc_pos_members(t_get('biz')))
+  AND t_count($q$ SELECT count(*) FROM business_members WHERE business_id = t_get('biz') $q$) = 1);
+SELECT t_err('T66b client_transaction_id is mandatory on the POS entry point', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), NULL) $q$, 'CLIENT_TRANSACTION_REQUIRED');
+SELECT t_err('T66b unknown session', $q$ SELECT rpc_pos_complete_sale(gen_random_uuid(), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'INVALID_REGISTER_SESSION');
+SELECT t_err('T66b variant of another tenant', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('vB','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'INVALID_VARIANT');
+SELECT t_err('T66b out of stock (D has 0)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66d','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_err('T66b damaged-only stock is not sellable (E)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66e','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_err('T66b more than available (A has 5)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','6',NULL), t_pay('cash','TRY',1500), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_err('T66b payment short', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',200), gen_random_uuid()) $q$, 'PAYMENT_SHORT');
+SELECT t_err('T66b card overpayment has no change', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('card','TRY',300), gen_random_uuid()) $q$, 'PAYMENT_MISMATCH');
+SELECT t_err('T66b zero-amount payment', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',0), gen_random_uuid()) $q$, 'INVALID_PAYMENT');
+SELECT t_err('T66b client cannot lower the price (0% discount authority)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1','200'), t_pay('cash','TRY',200), gen_random_uuid()) $q$, 'DISCOUNT_NOT_AUTHORIZED');
+SELECT t_err('T66b client cannot raise the price', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1','300'), t_pay('cash','TRY',300), gen_random_uuid()) $q$, 'INVALID_PRICE');
+SELECT t_err('T66b stale client price refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), jsonb_build_array(jsonb_build_object('variant_id', t_get('v66a'), 'quantity', 1, 'expected_list_price', 240)), t_pay('cash','TRY',240), gen_random_uuid()) $q$, 'PRICE_CHANGED');
+SELECT t_err('T66b empty cart', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), '[]'::jsonb, t_pay('cash','TRY',1), gen_random_uuid()) $q$, 'EMPTY_CART');
+SELECT t_err('T66b duplicate lines must be merged', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL) || t_json_items('v66a','1',NULL), t_pay('cash','TRY',500), gen_random_uuid()) $q$, 'DUPLICATE_ITEM');
+SELECT t_err('T66b salesperson must be a selling member (stock_staff refused)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid(), NULL, t_get('u4')) $q$, 'INVALID_SALESPERSON');
+SELECT t_err('T66b salesperson from another tenant refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid(), NULL, t_get('u5')) $q$, 'INVALID_SALESPERSON');
+SELECT t_err('T66b customer of another tenant refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid(), t_get('custB')) $q$, 'INVALID_CUSTOMER');
+SELECT t_err('T66b sales_staff cannot insert a sale directly', $q$ INSERT INTO sales (business_id, branch_id, register_session_id, sale_number, subtotal, total, sold_by, salesperson_id) VALUES (t_get('biz'), t_get('br66'), t_get('sess66'), 'S-X', 1, 1, t_get('u3'), t_get('u3')) $q$, '42501');
+SELECT t_check('T66b every refused sale left nothing behind (atomicity)', t66_unchanged());
+
+-- C) cash sale, cashier ≠ salesperson, COGS at MWA 100
+SELECT t_set('ct66a', gen_random_uuid());
+CREATE TEMP TABLE _t66_r1 AS SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','2',NULL), t_pay('cash','TRY',500), t_get('ct66a'), t_get('cust66'), t_get('u2')) AS r;
+GRANT SELECT ON _t66_r1 TO authenticated;
+SELECT t_set('sale66a', (SELECT (r ->> 'sale_id')::uuid FROM _t66_r1));
+SELECT t_check('T66c cash sale completed: total 500, no change, not replayed', (SELECT (r ->> 'total')::numeric = 500 AND (r ->> 'change_given')::numeric = 0 AND (r ->> 'replayed')::boolean = false FROM _t66_r1));
+SELECT t_check('T66c cashier = sales_staff actor, salesperson = the manager chosen',
+  (SELECT sold_by = t_get('u3') AND salesperson_id = t_get('u2') AND customer_id = t_get('cust66') AND status = 'completed' FROM sales WHERE id = t_get('sale66a')));
+SELECT t_check('T66c sales_staff sees no cost of its own sale', t_count($q$ SELECT count(*) FROM sale_item_costs $q$) = 0 AND t_count($q$ SELECT count(*) FROM sale_costs $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM inventory_movement_costs $q$) = 0 AND t_count($q$ SELECT count(*) FROM variant_cost_pools $q$) = 0);
+-- N) double submit: same client_transaction_id + same payload replays, nothing new written
+CREATE TEMP TABLE _t66_pre_dup AS SELECT (SELECT count(*) FROM sales) AS sales, (SELECT count(*) FROM inventory_movements) AS movements;
+GRANT SELECT ON _t66_pre_dup TO authenticated;
+CREATE TEMP TABLE _t66_dup AS SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','2',NULL), t_pay('cash','TRY',500), t_get('ct66a'), t_get('cust66'), t_get('u2')) AS r;
+GRANT SELECT ON _t66_dup TO authenticated;
+SELECT t_check('T66n double submit replays the first result', (SELECT (r ->> 'replayed')::boolean AND (r ->> 'sale_id')::uuid = t_get('sale66a') FROM _t66_dup));
+SELECT t_check('T66n …and wrote nothing', (SELECT count(*) FROM sales) = (SELECT sales FROM _t66_pre_dup) AND (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t66_pre_dup));
+SELECT t_err('T66n same client_transaction_id with a different cart refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), t_get('ct66a'), t_get('cust66'), t_get('u2')) $q$, 'IDEMPOTENCY_CONFLICT');
+-- split payment 600 cash + 400 card on B ×1 (250 → no: B is 250 list; use A ×4? A has 3 left) → B ×2 = 500 + A ×2 = 500 → 1000
+SELECT t_set('ct66s', gen_random_uuid());
+CREATE TEMP TABLE _t66_r2 AS SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','2',NULL,'v66b','2',NULL), t_pay('cash','TRY',600) || t_pay('card','TRY',400), t_get('ct66s')) AS r;
+GRANT SELECT ON _t66_r2 TO authenticated;
+SELECT t_set('sale66s', (SELECT (r ->> 'sale_id')::uuid FROM _t66_r2));
+SELECT t_check('T66c split payment 600 cash + 400 card on a 1000 sale', (SELECT (r ->> 'total')::numeric = 1000 FROM _t66_r2)
+  AND (SELECT string_agg(method::text || '=' || amount::text, ',' ORDER BY amount) FROM sale_payments WHERE sale_id = t_get('sale66s')) = 'card=400.00,cash=600.00');
+SELECT t_check('T66c salesperson defaults to the cashier', (SELECT sold_by = t_get('u3') AND salesperson_id = t_get('u3') FROM sales WHERE id = t_get('sale66s')));
+-- I) exact last unit, then out of stock; cash change
+SELECT t_set('ct66c', gen_random_uuid());
+CREATE TEMP TABLE _t66_r3 AS SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66c','1',NULL), t_pay('cash','TRY',300), t_get('ct66c')) AS r;
+GRANT SELECT ON _t66_r3 TO authenticated;
+SELECT t_check('T66i last unit of C sold, 50 change', (SELECT (r ->> 'total')::numeric = 250 AND (r ->> 'change_given')::numeric = 50 FROM _t66_r3));
+SELECT t_err('T66i C is now out of stock', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66c','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_err('T66i A: 1 left, 2 requested', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','2',NULL), t_pay('cash','TRY',500), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+-- O) completed sale mutation attempts by sales_staff (RLS: no write policy → 0 rows / 42501)
+SELECT t_check('T66o sales_staff cannot change a completed sale (RLS 0 rows)',
+  t_count($q$ WITH u AS (UPDATE sales SET note = 'x' WHERE id = t_get('sale66a') RETURNING 1) SELECT count(*) FROM u $q$) = 0
+  AND t_count($q$ WITH u AS (UPDATE sale_items SET quantity = 9 WHERE sale_id = t_get('sale66a') RETURNING 1) SELECT count(*) FROM u $q$) = 0
+  AND t_count($q$ WITH u AS (UPDATE sale_payments SET amount = 1 WHERE sale_id = t_get('sale66a') RETURNING 1) SELECT count(*) FROM u $q$) = 0
+  AND t_count($q$ WITH u AS (DELETE FROM sale_items WHERE sale_id = t_get('sale66a') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_err('T66o sales_staff cannot void', $q$ SELECT rpc_void_sale(t_get('sale66a'), 'deneme') $q$, '42501');
+SELECT t_check('T66o sale visible to its cashier', t_count($q$ SELECT count(*) FROM sales WHERE id = t_get('sale66a') $q$) = 1);
+SELECT t_logout();
+
+-- D) manager side: COGS captured at sale-time MWA; visibility for the salesperson
+SELECT t_login('u2');
+SELECT t_check('T66d revenue 500, COGS 200 (2 × MWA 100) on the first sale',
+  (SELECT total FROM sales WHERE id = t_get('sale66a')) = 500
+  AND (SELECT unit_cost_at_sale || '/' || line_cost_base FROM sale_item_costs c JOIN sale_items i ON i.id = c.sale_item_id WHERE i.sale_id = t_get('sale66a')) = '100.000000/200.000000'
+  AND (SELECT total_cost_base FROM sale_costs WHERE sale_id = t_get('sale66a')) = 200);
+SELECT t_check('T66d the manager sees the sale it was credited with (salesperson visibility)', t_count($q$ SELECT count(*) FROM sales WHERE salesperson_id = t_get('u2') AND id = t_get('sale66a') $q$) = 1);
+SELECT t_check('T66d pools after sales: A 1@100, B 0, C 0', (SELECT string_agg(pv.sku || '=' || p.on_hand_qty || '@' || COALESCE(round(p.total_value_base / nullif(p.on_hand_qty,0), 2)::text, '-'), ',' ORDER BY pv.sku)
+  FROM variant_cost_pools p JOIN product_variants pv ON pv.id = p.variant_id WHERE p.branch_id = t_get('br66') AND pv.sku LIKE 'POS-66-%') = 'POS-66-A=1@100.00,POS-66-B=0@-,POS-66-C=0@-');
+-- later receipt moves A's MWA (1@100 + 4@300 → 5@260); the sale's COGS must not move
+SELECT t_set('gr66', rpc_create_goods_receipt(t_get('br66'), t_get('sup1'), 'TRY', 1, CURRENT_DATE, 'INV-66', NULL));
+SELECT t_ok('T66d later receipt raises the MWA', $q$ SELECT rpc_goods_receipt_upsert_line(t_get('gr66'), t_get('v66a'), 4, 300); SELECT * FROM rpc_goods_receipt_review(t_get('gr66')); SELECT rpc_post_goods_receipt(t_get('gr66')) $q$);
+SELECT t_check('T66d A now 5 @ 260', (SELECT on_hand_qty || '@' || round(total_value_base / on_hand_qty, 2)::text FROM variant_cost_pools WHERE branch_id = t_get('br66') AND variant_id = t_get('v66a')) = '5@260.00');
+SELECT t_check('T66d historical COGS unchanged: still 100 / 200', (SELECT unit_cost_at_sale || '/' || line_cost_base FROM sale_item_costs c JOIN sale_items i ON i.id = c.sale_item_id WHERE i.sale_id = t_get('sale66a')) = '100.000000/200.000000');
+SELECT t_set('ct66m', gen_random_uuid());
+SELECT t_set('sale66m', (rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('card','TRY',250), t_get('ct66m')) ->> 'sale_id')::uuid);
+SELECT t_check('T66d a new sale of A carries the new MWA 260', (SELECT unit_cost_at_sale FROM sale_item_costs c JOIN sale_items i ON i.id = c.sale_item_id WHERE i.sale_id = t_get('sale66m')) = 260);
+-- discounts: manager may discount within limit; sale-level reason recorded
+SELECT t_set('ct66d', gen_random_uuid());
+SELECT t_set('sale66d', (rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1','200'), t_pay('cash','TRY',200), t_get('ct66d'), NULL, NULL, 'manager_discount') ->> 'sale_id')::uuid);
+SELECT t_check('T66d manager discount 250 → 200 recorded as line discount with reason', (SELECT discount_amount || '/' || discount_reason::text FROM sales WHERE id = t_get('sale66d')) = '50.00/manager_discount'
+  AND (SELECT list_price || '/' || unit_price_at_sale || '/' || discount_amount FROM sale_items WHERE sale_id = t_get('sale66d')) = '250.00/200.00/50.00');
+SELECT t_set('ct66v', gen_random_uuid());
+SELECT t_set('sale66v', (rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), t_get('ct66v'), NULL, t_get('u3')) ->> 'sale_id')::uuid);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T66d a sale the manager rang up for the salesperson is visible to that salesperson (own scope)',
+  (SELECT sold_by = t_get('u2') AND salesperson_id = t_get('u3') FROM sales WHERE id = t_get('sale66v'))
+  AND t_count($q$ SELECT count(*) FROM sale_items WHERE sale_id = t_get('sale66v') $q$) = 1
+  AND t_count($q$ SELECT count(*) FROM sale_payments WHERE sale_id = t_get('sale66v') $q$) = 1);
+SELECT t_check('T66d …and a sale by others for others stays hidden from sales_staff', t_count($q$ SELECT count(*) FROM sales WHERE id = t_get('sale66a') AND salesperson_id = t_get('u2') AND sold_by = t_get('u3') $q$) = 1
+  AND t_count($q$ SELECT count(*) FROM sales WHERE sold_by = t_get('u2') AND salesperson_id = t_get('u2') AND branch_id = t_get('br66') $q$) = 0);
+SELECT t_logout();
+
+-- E) closed session / other-branch session / immutability as postgres
+SELECT t_login('u2');
+SELECT t_ok('T66e manager closes the drawer', $q$ SELECT rpc_close_register_session(t_get('sess66'), '[{"currency":"TRY","counted_amount":1600}]'::jsonb, 'pos test') $q$);
+SELECT t_err('T66e sale on a closed session refused', $q$ SELECT rpc_pos_complete_sale(t_get('sess66'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'REGISTER_CLOSED');
+SELECT t_err('T66e sale on another branch''s session cannot reach this branch''s stock (br1 session, POS-66 stock lives in br66)', $q$ SELECT rpc_pos_complete_sale(t_get('sess66b'), t_json_items('v66a','1',NULL), t_pay('cash','TRY',250), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T66e closed session no longer visible to the cashier who did not open it', t_count($q$ SELECT count(*) FROM register_sessions WHERE id = t_get('sess66') $q$) = 0);
+SELECT t_logout();
+SELECT t_err('T66e completed sale immutable even for an RLS-bypassing role', $q$ UPDATE sale_items SET quantity = 9 WHERE sale_id = t_get('sale66a') $q$, 'IMMUTABLE');
+SELECT t_err('T66e sale header frozen except void', $q$ UPDATE sales SET total = 1 WHERE id = t_get('sale66a') $q$, 'IMMUTABLE');
+SELECT t_err('T66e payments frozen', $q$ DELETE FROM sale_payments WHERE sale_id = t_get('sale66a') $q$, 'IMMUTABLE');
+SELECT t_check('T66e ledger: sale movements are sellable −qty referencing sale_items', t_count($q$ SELECT count(*) FROM inventory_movements m JOIN sale_items i ON i.id = m.reference_id AND m.reference_type = 'sale_item' WHERE i.sale_id IN (t_get('sale66a'), t_get('sale66s')) AND m.bucket = 'sellable' AND m.quantity < 0 $q$) = 3);
+SELECT t_check('T66e cash drawer: cash tenders in, 50 change out', (SELECT string_agg(movement_type::text || '=' || amount::text, ',' ORDER BY amount) FROM cash_movements WHERE register_session_id = t_get('sess66') AND reference_type = 'sale') LIKE '%change_out=-50.00%sale_cash=600.00%');
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$

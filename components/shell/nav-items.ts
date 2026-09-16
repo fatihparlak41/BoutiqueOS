@@ -39,7 +39,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Satış",
     items: [
-      { label: "Kasa", icon: ScanLine },
+      { label: "Kasa", icon: ScanLine, href: "/app/pos" },
       { label: "Müşteriler", icon: Users },
       { label: "Rezervasyonlar", icon: BookmarkCheck },
     ],
