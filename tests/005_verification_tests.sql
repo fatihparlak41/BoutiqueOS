@@ -3467,11 +3467,13 @@ SELECT t_ok('T69c sales_staff edits operational fields', $q$ UPDATE customers SE
 SELECT t_check('T69c edit normalised again', (SELECT instagram = 'ayse_yeni' AND instagram_normalized = 'ayse_yeni' FROM customers WHERE id = t_get('c69a')));
 SELECT t_err('T69c sales_staff cannot touch the sale caches', $q$ UPDATE customers SET total_spent = 999 WHERE id = t_get('c69a') $q$, '42501');
 SELECT t_err('T69c customers are never deleted', $q$ DELETE FROM customers WHERE id = t_get('c69dup') $q$, '42501');
+SELECT t_err('T69c sales_staff cannot archive a customer (20260916220000)', $q$ UPDATE customers SET is_active = false WHERE id = t_get('c69dup') $q$, 'archive or restore');
 SELECT t_err('T69c sales_staff cannot add a tenant source', $q$ INSERT INTO customer_sources (business_id, code, label) VALUES (t_get('biz'), 'fuar', 'Fuar') $q$, '42501');
 SELECT t_logout();
 SELECT t_login('u2');
 SELECT t_ok('T69c manager adds a tenant source', $q$ INSERT INTO customer_sources (business_id, code, label) VALUES (t_get('biz'), 'fuar', 'Fuar') $q$);
 SELECT t_ok('T69c …and a customer may use it', $q$ UPDATE customers SET source = 'fuar' WHERE id = t_get('c69b') $q$);
+SELECT t_ok('T69c manager archives and restores a customer', $q$ UPDATE customers SET is_active = false WHERE id = t_get('c69dup'); UPDATE customers SET is_active = true WHERE id = t_get('c69dup') $q$);
 SELECT t_logout();
 SELECT t_login('u4');
 SELECT t_check('T69d stock_staff has no CRM: 0 customers, 0 sources of the tenant beyond defaults', t_count($q$ SELECT count(*) FROM customers $q$) = 0);
