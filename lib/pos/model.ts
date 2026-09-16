@@ -87,6 +87,8 @@ export type PosCaps = {
   canManageRegisters: boolean;
   /** owner | manager: unlimited; sales_staff: business_members.max_discount_pct > 0 */
   canDiscount: boolean;
+  /** owner | manager — complete a return / exchange (financial reversal); sales_staff only prepares */
+  canCompleteReturns: boolean;
   /** 0–100; the server enforces it, the UI only stops obvious mistakes early */
   maxDiscountPct: number;
 };
@@ -98,6 +100,7 @@ export function posCaps(role: UserRole, maxDiscountPct: number): PosCaps {
     canSell: seller,
     canManageRegisters: managerPlus,
     canDiscount: managerPlus || (role === "sales_staff" && maxDiscountPct > 0),
+    canCompleteReturns: managerPlus,
     maxDiscountPct: managerPlus ? 100 : maxDiscountPct,
   };
 }

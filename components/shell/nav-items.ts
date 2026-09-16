@@ -5,6 +5,7 @@ import {
   Truck,
   PackagePlus,
   ScanLine,
+  Undo2,
   Users,
   BookmarkCheck,
   BarChart3,
@@ -40,6 +41,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Satış",
     items: [
       { label: "Kasa", icon: ScanLine, href: "/app/pos" },
+      { label: "İade / Değişim", icon: Undo2, href: "/app/pos/iade" },
       { label: "Müşteriler", icon: Users },
       { label: "Rezervasyonlar", icon: BookmarkCheck },
     ],

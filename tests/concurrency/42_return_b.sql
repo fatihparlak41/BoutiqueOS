@@ -1,0 +1,18 @@
+-- Session B: a DIFFERENT terminal exchanges the same unit while A is open (expect OVER_RETURN after A commits) ...
+\set ON_ERROR_STOP off
+SELECT v AS sale FROM zz_cc_ctx WHERE k = 'sale' \gset
+SELECT v AS sale_item FROM zz_cc_ctx WHERE k = 'sale_item' \gset
+SELECT v AS variant2 FROM zz_cc_ctx WHERE k = 'variant2' \gset
+SELECT v AS session FROM zz_cc_ctx WHERE k = 'session' \gset
+SELECT md5(:'sale'::text || 'ret-b')::uuid AS ctid \gset
+BEGIN;
+SELECT set_config('request.jwt.claims', '{"sub":"cccccccc-0000-4000-8000-000000000001","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+\echo [B] a DIFFERENT terminal exchanges the same unit while A is open (expect OVER_RETURN after A commits) ...
+SELECT clock_timestamp() AS started;
+SELECT rpc_pos_exchange(:'session', :'sale',
+  jsonb_build_array(jsonb_build_object('sale_item_id', :'sale_item', 'quantity', 1)),
+  jsonb_build_array(jsonb_build_object('variant_id', :'variant2', 'quantity', 1)),
+  '[]'::jsonb, :'ctid') AS b_result;
+SELECT clock_timestamp() AS finished;
+COMMIT;

@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 54 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 54,
+SELECT t_check('T01 all 56 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 56,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -354,10 +354,14 @@ SELECT t_check('T15 full depletion => pool v2 qty 0 AND value exactly 0', (t_poo
 -- T24–T29  returns / exchanges
 -- ============================================================
 SELECT t_login('u3');
+SELECT t_err('T24z sales_staff cannot complete a return (9B: owner/manager)', $q$ SELECT rpc_process_exchange(t_get('biz'), t_get('br1'), t_get('sess1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), t_json_items('v1','1',NULL), '[]'::jsonb, gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_err('T24z …nor a plain return', $q$ SELECT rpc_process_return(t_get('biz'), t_get('br1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), 'refund', 'x', t_get('sess1'), 'cash') $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u2');
 SELECT t_err('T28a refund rejected by policy', $q$ SELECT rpc_process_return(t_get('biz'), t_get('br1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), 'refund', 'x', t_get('sess1'), 'cash') $q$, 'REFUND_NOT_ALLOWED');
 SELECT t_err('T28b store credit rejected by policy', $q$ SELECT rpc_process_return(t_get('biz'), t_get('br1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), 'store_credit', 'x') $q$, 'STORE_CREDIT_NOT_ALLOWED');
 SELECT t_err('T28c bare exchange return must use rpc_process_exchange', $q$ SELECT rpc_process_return(t_get('biz'), t_get('br1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), 'exchange', 'x') $q$, 'USE_EXCHANGE_RPC');
-SELECT t_err('T24a sales_staff cannot choose sellable disposition', $q$ SELECT rpc_process_exchange(t_get('biz'), t_get('br1'), t_get('sess1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1, 'disposition', 'sellable')), t_json_items('v1','1',NULL), '[]'::jsonb) $q$, 'DISPOSITION_NOT_AUTHORIZED');
+-- (T24a "sales_staff cannot choose sellable disposition" is subsumed by T24z: sales_staff cannot post a return at all)
 SELECT t_set('ctid2', gen_random_uuid());
 SELECT t_set('xch1', (rpc_process_exchange(t_get('biz'), t_get('br1'), t_get('sess1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), t_json_items('v1','1',NULL), '[]'::jsonb, t_get('ctid2'), 'dev-1', date_trunc('hour', now()), 'beden değişimi') ->> 'sale_id')::uuid);
 SELECT t_logout();
@@ -368,7 +372,7 @@ SELECT t_check('T29a exchange linked: group id shared, replacement sale credited
   (SELECT r.exchange_group_id = s.exchange_group_id AND s.credit_applied_base = 1000 AND s.amount_due_base = 0 FROM returns r JOIN sales s ON s.id = r.replacement_sale_id WHERE r.id = t_get('ret1')));
 SELECT t_check('T29b original sale immutable (still completed, 2 units)', (SELECT status = 'completed' FROM sales WHERE id = t_get('sale1')) AND (SELECT quantity FROM sale_items WHERE id = t_get('si1')) = 2);
 SELECT t_check('T29c pool v1 unchanged in value by equal exchange (16 x 130 = 2080)', (t_pool('v1')).on_hand_qty = 16 AND (t_pool('v1')).total_value_base = 2080, (t_pool('v1')).total_value_base::text);
-SELECT t_login('u3');
+SELECT t_login('u2');
 SELECT t_check('T29d exchange replay returns same sale', (SELECT (r->>'replayed')='true' AND (r->>'sale_id')::uuid = t_get('xch1') FROM rpc_process_exchange(t_get('biz'), t_get('br1'), t_get('sess1'), t_get('sale1'), jsonb_build_array(jsonb_build_object('sale_item_id', t_get('si1'), 'quantity', 1)), t_json_items('v1','1',NULL), '[]'::jsonb, t_get('ctid2'), 'dev-1', date_trunc('hour', now()), 'beden değişimi') r));
 SELECT t_logout();
 SELECT t_check('T29e exchange replay did not duplicate the return', (SELECT count(*) FROM returns WHERE original_sale_id = t_get('sale1')) = 1);
@@ -3076,6 +3080,329 @@ SELECT t_check('T67e no client write path: register_sessions / currency counts /
 SELECT t_check('T67e the two session RPCs are the only register/session/cash RPCs',
   (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname LIKE 'rpc_%' AND (p.proname LIKE '%register%' OR p.proname LIKE '%session%' OR p.proname LIKE '%drawer%' OR p.proname LIKE '%cash%')) = 2);
+
+
+-- ============================================================
+-- T68 — Phase 9B returns / exchange foundation: tenant policy, eligibility, partial returns,
+--       conditions, historical COGS, exchange (upgrade / downgrade), refunds, reasons,
+--       idempotency, permissions, cross-tenant, immutability.
+--   Tenant A (biz): legacy keys → exchange-only, 3-day window, downgrade blocked.
+--   Tenant B (bizB): explicit return_policy → cash refunds, 14 days, reason required, downgrade → cash refund.
+-- ============================================================
+SELECT t_logout();
+-- fixture A: branch, register, products (regular / product-excluded / category-excluded / dearer / cheaper)
+WITH x AS (INSERT INTO branches (business_id, name, code) VALUES (t_get('biz'), 'İade Şubesi', 'RET') RETURNING id) SELECT t_set('br68', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('biz'), t_get('br68'), 'Kasa 68') RETURNING id) SELECT t_set('reg68', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), t_get('cat_elbise'), 'İade Elbise', 'RET-68', 250, 'active') RETURNING id) SELECT t_set('p68', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status, is_final_sale) VALUES (t_get('biz'), t_get('cat_elbise'), 'Kesin Satış Ürün', 'RET-68X', 400, 'active', true) RETURNING id) SELECT t_set('p68x', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), t_get('cat_bikini'), 'Kesin Satış Kategori', 'RET-68C', 300, 'active') RETURNING id) SELECT t_set('p68c', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), t_get('cat_elbise'), 'Pahalı Elbise', 'RET-68P', 400, 'active') RETURNING id) SELECT t_set('p68p', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), t_get('cat_elbise'), 'Ucuz Elbise', 'RET-68U', 150, 'active') RETURNING id) SELECT t_set('p68u', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68'), 'RET-68-A') RETURNING id) SELECT t_set('v68a', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v68a'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68'), 'RET-68-B') RETURNING id) SELECT t_set('v68b', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v68b'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68x'), 'RET-68X-A') RETURNING id) SELECT t_set('v68x', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68c'), 'RET-68C-A') RETURNING id) SELECT t_set('v68c', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68p'), 'RET-68P-A') RETURNING id) SELECT t_set('v68p', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p68u'), 'RET-68U-A') RETURNING id) SELECT t_set('v68u', id) FROM x;
+INSERT INTO barcodes (variant_id, barcode, barcode_type, symbology, is_primary) VALUES (t_get('v68a'), '0068000000018', 'supplier', 'EAN13', true);
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('biz'), 'İade Müşterisi', '+90 555 068 0068') RETURNING id) SELECT t_set('cust68', id) FROM x;
+SELECT t_login('u2');
+SELECT t_ok('T68 fixture stock (br68): A 10@100, B 5@120, X 3@150, C 3@90, P 5@150, U 5@60', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68a'), 'sellable', 10, 'ret fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68b'), 'sellable', 5, 'ret fixture', 'manual_cost', 120);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68x'), 'sellable', 3, 'ret fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68c'), 'sellable', 3, 'ret fixture', 'manual_cost', 90);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68p'), 'sellable', 5, 'ret fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68u'), 'sellable', 5, 'ret fixture', 'manual_cost', 60) $q$);
+SELECT t_set('sess68', rpc_open_register_session(t_get('reg68'), '[{"currency":"TRY","amount":100}]'::jsonb));
+-- an old sale (4 days ago) through the Rev 3 entry point (POS never backdates)
+SELECT t_set('s68old', (rpc_process_sale(t_get('biz'), t_get('br68'), t_get('sess68'), t_json_items('v68a','1',NULL), t_pay('cash','TRY',250), NULL, NULL, now() - interval '4 days') ->> 'sale_id')::uuid);
+SELECT t_logout();
+-- the cashier (sales_staff) rings up the sales that will come back
+SELECT t_login('u3');
+SELECT t_set('s68', (rpc_pos_complete_sale(t_get('sess68'), t_json_items('v68a','3',NULL), t_pay('cash','TRY',750), gen_random_uuid(), t_get('cust68')) ->> 'sale_id')::uuid);
+SELECT t_set('s68x', (rpc_pos_complete_sale(t_get('sess68'), t_json_items('v68x','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_set('s68c', (rpc_pos_complete_sale(t_get('sess68'), t_json_items('v68c','1',NULL), t_pay('cash','TRY',300), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_set('s68b', (rpc_pos_complete_sale(t_get('sess68'), t_json_items('v68b','2',NULL), t_pay('card','TRY',500), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_logout();
+SELECT t_set('si68', (SELECT id FROM sale_items WHERE sale_id = t_get('s68')));
+SELECT t_set('si68x', (SELECT id FROM sale_items WHERE sale_id = t_get('s68x')));
+SELECT t_set('si68c', (SELECT id FROM sale_items WHERE sale_id = t_get('s68c')));
+SELECT t_set('si68b', (SELECT id FROM sale_items WHERE sale_id = t_get('s68b')));
+SELECT t_set('si68old', (SELECT id FROM sale_items WHERE sale_id = t_get('s68old')));
+CREATE TEMP TABLE _t68_base AS
+SELECT (SELECT count(*) FROM returns) AS returns, (SELECT count(*) FROM return_items) AS items, (SELECT count(*) FROM return_item_costs) AS costs,
+       (SELECT count(*) FROM inventory_movements) AS movements, (SELECT count(*) FROM cash_movements) AS cash, (SELECT count(*) FROM sales) AS sales;
+GRANT SELECT ON _t68_base TO authenticated;
+CREATE FUNCTION t68_unchanged() RETURNS BOOLEAN LANGUAGE sql AS $$
+  SELECT (SELECT count(*) FROM returns) = (SELECT returns FROM _t68_base) AND (SELECT count(*) FROM return_items) = (SELECT items FROM _t68_base)
+     AND (SELECT count(*) FROM return_item_costs) = (SELECT costs FROM _t68_base) AND (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t68_base)
+     AND (SELECT count(*) FROM cash_movements) = (SELECT cash FROM _t68_base) AND (SELECT count(*) FROM sales) = (SELECT sales FROM _t68_base) $$;
+CREATE FUNCTION t68_ret_item(k TEXT, qty INT, disp TEXT DEFAULT NULL) RETURNS JSONB LANGUAGE sql AS $$
+  SELECT jsonb_build_array(jsonb_build_object('sale_item_id', t_get(k), 'quantity', qty) || CASE WHEN disp IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('disposition', disp) END) $$;
+
+-- ---------------------------------------------------------------- policy
+SELECT t_check('T68a tenant A policy resolves from legacy keys: exchange-only, 3 days, downgrade blocked',
+  (SELECT p ->> 'allow_exchange' = 'true' AND p ->> 'allow_cash_refund' = 'false' AND p ->> 'allow_store_credit' = 'false'
+      AND p ->> 'exchange_window_days' = '3' AND p ->> 'receipt_required' = 'true' AND p ->> 'reason_required' = 'false' AND p ->> 'downgrade_treatment' = 'block'
+   FROM fn_return_policy(t_get('biz')) p));
+UPDATE businesses SET settings = settings || jsonb_build_object(
+  'accepted_currencies', jsonb_build_array('TRY'),
+  'return_policy', jsonb_build_object('allow_exchange', true, 'allow_cash_refund', true, 'allow_store_credit', false,
+                                      'exchange_window_days', 14, 'receipt_required', true, 'reason_required', true, 'downgrade_treatment', 'cash_refund'))
+WHERE id = t_get('bizB');
+SELECT t_check('T68a tenant B policy is explicit: cash refunds, 14 days, reason required, downgrade → cash refund',
+  (SELECT p ->> 'allow_cash_refund' = 'true' AND p ->> 'exchange_window_days' = '14' AND p ->> 'reason_required' = 'true' AND p ->> 'downgrade_treatment' = 'cash_refund'
+   FROM fn_return_policy(t_get('bizB')) p));
+SELECT t_check('T68a policy helper is internal', (SELECT NOT has_function_privilege('authenticated', 'fn_return_policy(uuid)', 'EXECUTE')));
+SELECT t_check('T68a default reasons seeded (6, platform-wide)', (SELECT count(*) FROM return_reasons WHERE business_id IS NULL AND is_active) = 6);
+
+-- ---------------------------------------------------------------- eligibility + lookup (sales_staff prepares)
+SELECT t_login('u3');
+SELECT t_check('T68b eligibility: regular sale → 1 line ELIGIBLE, 3 returnable, policy flags exposed',
+  (SELECT e -> 'lines' -> 0 ->> 'status' = 'ELIGIBLE' AND (e -> 'lines' -> 0 ->> 'returnable_quantity')::int = 3
+      AND (e -> 'lines' -> 0 ->> 'returned_quantity')::int = 0 AND e -> 'policy' ->> 'allow_cash_refund' = 'false'
+      AND e -> 'policy' ->> 'window_expired' = 'false' AND jsonb_array_length(e -> 'reasons') = 6
+      AND e -> 'sale' ->> 'customer_name' = 'İade Müşterisi'
+   FROM rpc_return_eligibility(t_get('s68')) e));
+SELECT t_check('T68b eligibility: product-level final sale → EXCLUDED (product), 0 returnable',
+  (SELECT e -> 'lines' -> 0 ->> 'status' = 'EXCLUDED' AND e -> 'lines' -> 0 ->> 'excluded_by' = 'product' AND (e -> 'lines' -> 0 ->> 'returnable_quantity')::int = 0
+   FROM rpc_return_eligibility(t_get('s68x')) e));
+SELECT t_check('T68b eligibility: category final sale → EXCLUDED (category)',
+  (SELECT e -> 'lines' -> 0 ->> 'status' = 'EXCLUDED' AND e -> 'lines' -> 0 ->> 'excluded_by' = 'category' FROM rpc_return_eligibility(t_get('s68c')) e));
+SELECT t_check('T68b eligibility: 4-day-old sale → WINDOW_EXPIRED, days_left 0',
+  (SELECT e -> 'lines' -> 0 ->> 'status' = 'WINDOW_EXPIRED' AND e -> 'policy' ->> 'window_expired' = 'true' AND (e -> 'policy' ->> 'days_left')::int = 0
+   FROM rpc_return_eligibility(t_get('s68old')) e));
+SELECT t_check('T68b eligibility carries no cost key', (SELECT NOT (e::text ~ 'cost') FROM rpc_return_eligibility(t_get('s68')) e));
+SELECT t_check('T68b lookup by receipt number', (SELECT jsonb_array_length(r) = 1 AND r -> 0 ->> 'sale_number' = (SELECT sale_number FROM sales WHERE id = t_get('s68'))
+  FROM rpc_pos_find_sales(t_get('biz'), 'sale_number', lower((SELECT sale_number FROM sales WHERE id = t_get('s68')))) r));
+SELECT t_check('T68b lookup by barcode (recent sales containing it, across the own scope)', (SELECT jsonb_array_length(r) >= 1 AND EXISTS (SELECT 1 FROM jsonb_array_elements(r) x WHERE (x ->> 'id')::uuid = t_get('s68'))
+  FROM rpc_pos_find_sales(t_get('biz'), 'barcode', '0068000000018') r));
+SELECT t_check('T68b lookup by customer', (SELECT jsonb_array_length(r) = 1 AND r -> 0 ->> 'customer_name' = 'İade Müşterisi' AND (r -> 0 ->> 'item_count')::int = 3
+  FROM rpc_pos_find_sales(t_get('biz'), 'customer', '068 0068') r));
+SELECT t_check('T68b lookup: too short → nothing', (SELECT jsonb_array_length(r) = 0 FROM rpc_pos_find_sales(t_get('biz'), 'customer', 'a') r));
+SELECT t_check('T68b lookup carries no cost key', (SELECT NOT (r::text ~ 'cost') FROM rpc_pos_find_sales(t_get('biz'), 'sale_number', (SELECT sale_number FROM sales WHERE id = t_get('s68'))) r));
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T68b stock_staff cannot read eligibility', $q$ SELECT rpc_return_eligibility(t_get('s68')) $q$, 'FORBIDDEN');
+SELECT t_err('T68b stock_staff cannot look up sales', $q$ SELECT rpc_pos_find_sales(t_get('biz'), 'sale_number', 'S-2026-000001') $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T68b other tenant: eligibility of A''s sale → NOT_FOUND', $q$ SELECT rpc_return_eligibility(t_get('s68')) $q$, 'NOT_FOUND');
+SELECT t_err('T68b other tenant: lookup with A''s business_id → FORBIDDEN', $q$ SELECT rpc_pos_find_sales(t_get('biz'), 'customer', 'İade') $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- posting authority
+SELECT t_login('u3');
+SELECT t_err('T68c sales_staff cannot complete an exchange', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_err('T68c sales_staff cannot complete a return', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'refund', gen_random_uuid(), NULL, NULL, t_get('sess68'), 'cash') $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T68c stock_staff cannot complete an exchange', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_err('T68c stock_staff cannot complete a return', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'refund', gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T68c other tenant cannot return A''s sale', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'refund', gen_random_uuid()) $q$, 'NOT_FOUND');
+SELECT t_err('T68c other tenant cannot exchange on A''s session', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'INVALID_REGISTER_SESSION');
+SELECT t_logout();
+SELECT t_check('T68c refused attempts wrote nothing', t68_unchanged());
+
+-- ---------------------------------------------------------------- manager: policy refusals on tenant A
+SELECT t_login('u2');
+SELECT t_err('T68d exchange-only tenant: cash refund refused', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'refund', gen_random_uuid(), NULL, NULL, t_get('sess68'), 'cash') $q$, 'REFUND_NOT_ALLOWED');
+SELECT t_err('T68d store credit disabled', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'store_credit', gen_random_uuid()) $q$, 'STORE_CREDIT_NOT_ALLOWED');
+SELECT t_err('T68d exchange must go through rpc_pos_exchange', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'exchange', gen_random_uuid()) $q$, 'USE_EXCHANGE_RPC');
+SELECT t_err('T68d client_transaction_id is mandatory (return)', $q$ SELECT rpc_pos_return(t_get('s68'), t68_ret_item('si68', 1), 'refund', NULL) $q$, 'CLIENT_TRANSACTION_REQUIRED');
+SELECT t_err('T68d client_transaction_id is mandatory (exchange)', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), NULL) $q$, 'CLIENT_TRANSACTION_REQUIRED');
+SELECT t_err('T68d expired window', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68old'), t68_ret_item('si68old', 1), t_json_items('v68b','1',NULL), '[]'::jsonb, gen_random_uuid()) $q$, 'EXCHANGE_WINDOW_EXPIRED');
+SELECT t_err('T68d product-level final sale', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68x'), t68_ret_item('si68x', 1), t_json_items('v68p','1',NULL), '[]'::jsonb, gen_random_uuid()) $q$, 'FINAL_SALE');
+SELECT t_err('T68d category-level final sale', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68c'), t68_ret_item('si68c', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',100), gen_random_uuid()) $q$, 'FINAL_SALE');
+SELECT t_err('T68d downgrade blocked by policy (credit 250 > replacement 150)', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68u','1',NULL), '[]'::jsonb, gen_random_uuid()) $q$, 'EXCHANGE_DOWNGRADE_BLOCKED');
+SELECT t_err('T68d invalid reason code', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid(), 'yok_boyle') $q$, 'INVALID_REASON');
+SELECT t_err('T68d sale item of another sale injected', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68b', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'INVALID_ITEM');
+SELECT t_err('T68d replacement variant of another tenant', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('vB','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'INVALID_VARIANT');
+SELECT t_err('T68d foreign customer on the replacement sale', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid(), NULL, NULL, t_get('custB')) $q$, 'INVALID_CUSTOMER');
+SELECT t_err('T68d session of another branch', $q$ SELECT rpc_pos_exchange(t_get('sess66b'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'BRANCH_MISMATCH');
+SELECT t_err('T68d over-return (4 of 3)', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 4), t_json_items('v68p','4',NULL), t_pay('cash','TRY',600), gen_random_uuid()) $q$, 'OVER_RETURN');
+SELECT t_err('T68d payment short on the difference', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',100), gen_random_uuid()) $q$, 'PAYMENT_SHORT');
+SELECT t_logout();
+SELECT t_check('T68d every refusal was side-effect free', t68_unchanged());
+
+-- ---------------------------------------------------------------- J: exchange to a dearer item (1 of 3, default quarantine)
+SELECT t_login('u2');
+SELECT t_set('ct68j', gen_random_uuid());
+CREATE TEMP TABLE _t68_j AS SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), t_get('ct68j'), 'beden_olmadi', 'ilk değişim') AS r;
+SELECT t_logout();
+SELECT t_set('xs68j', (SELECT (r ->> 'sale_id')::uuid FROM _t68_j));
+SELECT t_set('ret68j', (SELECT (r -> 'return' ->> 'return_id')::uuid FROM _t68_j));
+SELECT t_check('T68e exchange result: credit 250 applied, replacement 400, due 150, no refund',
+  (SELECT (r ->> 'total')::numeric = 400 AND (r ->> 'amount_due')::numeric = 150 AND (r ->> 'credit_applied')::numeric = 250
+      AND (r ->> 'refund_amount_base')::numeric = 0 AND (r ->> 'replayed')::boolean = false FROM _t68_j));
+SELECT t_check('T68e return document: exchange, credit 250, refund 0, linked to the replacement sale, reason recorded',
+  (SELECT return_type = 'exchange' AND credit_value_base = 250 AND refund_amount_base = 0 AND refund_method IS NULL
+      AND replacement_sale_id = t_get('xs68j') AND exchange_group_id = (SELECT exchange_group_id FROM sales WHERE id = t_get('xs68j'))
+      AND reason_code = 'beden_olmadi' AND note = 'ilk değişim' AND customer_id = t_get('cust68') AND processed_by = t_get('u2')
+   FROM returns WHERE id = t_get('ret68j')));
+SELECT t_check('T68e return item: 1 × A at the original 250, default condition quarantine, reason on the line',
+  (SELECT quantity = 1 AND unit_price_at_sale = 250 AND disposition = 'quarantine' AND reason_code = 'beden_olmadi' AND sale_item_id = t_get('si68') AND variant_id = t_get('v68a')
+   FROM return_items WHERE return_id = t_get('ret68j')));
+SELECT t_check('T68e ledger: +1 A quarantine at branch br68 referencing the return item',
+  (SELECT m.quantity = 1 AND m.bucket = 'quarantine' AND m.branch_id = t_get('br68') AND m.reference_type = 'return_item'
+   FROM inventory_movements m WHERE m.reference_id = (SELECT id FROM return_items WHERE return_id = t_get('ret68j')) AND m.reason = 'customer_return'));
+SELECT t_check('T68e replacement sale: total 400, credit 250, cash 150 in the drawer, same exchange group, original sale untouched',
+  (SELECT total = 400 AND credit_applied_base = 250 AND amount_due_base = 150 AND status = 'completed' FROM sales WHERE id = t_get('xs68j'))
+  AND (SELECT count(*) FROM cash_movements WHERE reference_id = t_get('xs68j') AND movement_type = 'sale_cash' AND amount = 150) = 1
+  AND (SELECT status = 'completed' AND total = 750 FROM sales WHERE id = t_get('s68')) AND (SELECT quantity FROM sale_items WHERE id = t_get('si68')) = 3);
+SELECT t_login('u3');
+SELECT t_check('T68e eligibility now: returned 1, returnable 2', (SELECT (e -> 'lines' -> 0 ->> 'returned_quantity')::int = 1 AND (e -> 'lines' -> 0 ->> 'returnable_quantity')::int = 2 AND jsonb_array_length(e -> 'returns') = 1
+  FROM rpc_return_eligibility(t_get('s68')) e));
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T68e return document RPC resolves names and lines',
+  (SELECT d ->> 'return_number' = (SELECT return_number FROM returns WHERE id = t_get('ret68j')) AND d ->> 'reason_label' = 'Beden olmadı'
+      AND d ->> 'replacement_sale_number' = (SELECT sale_number FROM sales WHERE id = t_get('xs68j')) AND jsonb_array_length(d -> 'items') = 1
+   FROM rpc_return_document(t_get('ret68j')) d));
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- historical COGS: the MWA moves, the return still reverses 100
+SELECT t_login('u2');
+SELECT t_ok('T68f later receipt moves A''s MWA (adjustment +5 @ 200)', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br68'), t_get('v68a'), 'sellable', 5, 'mwa shift', 'manual_cost', 200) $q$);
+SELECT t_logout();
+SELECT t_check('T68f A''s MWA is now above 100', (SELECT total_value_base / on_hand_qty > 100 FROM variant_cost_pools WHERE variant_id = t_get('v68a') AND branch_id = t_get('br68')));
+CREATE TEMP TABLE _t68_pool AS SELECT on_hand_qty, total_value_base FROM variant_cost_pools WHERE variant_id = t_get('v68a') AND branch_id = t_get('br68');
+SELECT t_login('u2');
+SELECT t_set('ct68j2', gen_random_uuid());
+CREATE TEMP TABLE _t68_j2 AS SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1, 'sellable'), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), t_get('ct68j2'), 'musteri_tercihi') AS r;
+SELECT t_logout();
+SELECT t_set('ret68j2', (SELECT (r -> 'return' ->> 'return_id')::uuid FROM _t68_j2));
+SELECT t_check('T68f second partial return re-enters at the historical 100, not the current MWA',
+  (SELECT c.unit_cost_at_sale = 100 AND c.line_cost_base = 100 FROM return_item_costs c JOIN return_items ri ON ri.id = c.return_item_id WHERE ri.return_id = t_get('ret68j2'))
+  AND (SELECT mc.unit_cost_base = 100 FROM inventory_movements m JOIN inventory_movement_costs mc ON mc.movement_id = m.id
+       WHERE m.reference_id = (SELECT id FROM return_items WHERE return_id = t_get('ret68j2')) AND m.reason = 'customer_return'));
+SELECT t_check('T68f pool: +1 unit, value +100 exactly (cost-pool model consistent with the reversed COGS)',
+  (SELECT p.on_hand_qty = b.on_hand_qty + 1 AND p.total_value_base = b.total_value_base + 100
+   FROM variant_cost_pools p, _t68_pool b WHERE p.variant_id = t_get('v68a') AND p.branch_id = t_get('br68')));
+SELECT t_check('T68f condition sellable honoured (manager) → ledger sellable bucket', (SELECT bucket = 'sellable' FROM inventory_movements WHERE reference_id = (SELECT id FROM return_items WHERE return_id = t_get('ret68j2'))));
+SELECT t_check('T68f original sale COGS record unchanged (3 × 100)', (SELECT line_cost_base = 300 AND unit_cost_at_sale = 100 FROM sale_item_costs WHERE sale_item_id = t_get('si68')));
+
+-- ---------------------------------------------------------------- idempotency + last unit + over-return + damaged condition
+SELECT t_login('u2');
+SELECT t_check('T68g exchange double submit replays (same id, same payload)',
+  (SELECT (r ->> 'replayed')::boolean AND (r ->> 'sale_id')::uuid = t_get('xs68j') AND (r -> 'return' ->> 'return_id')::uuid = t_get('ret68j')
+   FROM rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), t_get('ct68j'), 'beden_olmadi', 'ilk değişim') r));
+SELECT t_err('T68g same id with a different payload refused', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), t_get('ct68j'), 'diger') $q$, 'IDEMPOTENCY_CONFLICT');
+SELECT t_set('ct68j3', gen_random_uuid());
+CREATE TEMP TABLE _t68_j3 AS SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1, 'damaged'), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), t_get('ct68j3'), 'kusurlu_urun') AS r;
+SELECT t_set('ret68j3', (SELECT (r -> 'return' ->> 'return_id')::uuid FROM _t68_j3));
+SELECT t_err('T68g nothing left: fourth unit refused', $q$ SELECT rpc_pos_exchange(t_get('sess68'), t_get('s68'), t68_ret_item('si68', 1), t_json_items('v68p','1',NULL), t_pay('cash','TRY',150), gen_random_uuid()) $q$, 'OVER_RETURN');
+SELECT t_logout();
+SELECT t_check('T68g replay wrote nothing: exactly 3 returns / 3 items / 3 cost rows / 3 replacement sales for the sale',
+  (SELECT count(*) FROM returns WHERE original_sale_id = t_get('s68')) = 3 AND (SELECT count(*) FROM return_items WHERE sale_item_id = t_get('si68')) = 3
+  AND (SELECT count(*) FROM return_item_costs c JOIN return_items ri ON ri.id = c.return_item_id WHERE ri.sale_item_id = t_get('si68')) = 3
+  AND (SELECT count(*) FROM sales WHERE exchange_group_id IN (SELECT exchange_group_id FROM returns WHERE original_sale_id = t_get('s68'))) = 3
+  AND (SELECT returned_quantity FROM v_sale_item_returned WHERE sale_item_id = t_get('si68')) = 3);
+SELECT t_check('T68g damaged condition → ledger damaged bucket', (SELECT bucket = 'damaged' FROM inventory_movements WHERE reference_id = (SELECT id FROM return_items WHERE return_id = t_get('ret68j3'))));
+SELECT t_login('u3');
+SELECT t_check('T68g eligibility: NOTHING_LEFT', (SELECT e -> 'lines' -> 0 ->> 'status' = 'NOTHING_LEFT' FROM rpc_return_eligibility(t_get('s68')) e));
+SELECT t_logout();
+SELECT t_check('T68g buckets: A quarantine 1 / sellable +1 / damaged 1 from the three returns',
+  t_bucket('v68a', 'quarantine', 'br68') = 1 AND t_bucket('v68a', 'damaged', 'br68') = 1);
+SELECT t_login('u2');
+SELECT t_err('T68g original sale can no longer be voided (has returns)', $q$ SELECT rpc_void_sale(t_get('s68'), 'deneme iptal') $q$, 'VOID_BLOCKED');
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- tenant-extensible reasons
+SELECT t_login('u2');
+SELECT t_ok('T68h manager adds a tenant reason', $q$ INSERT INTO return_reasons (business_id, code, label, sort_order) VALUES (t_get('biz'), 'etiket_hatasi', 'Etiket hatası', 60) $q$);
+SELECT t_check('T68h tenant reason is offered together with the defaults (7)', (SELECT jsonb_array_length(e -> 'reasons') = 7 FROM rpc_return_eligibility(t_get('s68b')) e));
+SELECT t_set('ct68h', gen_random_uuid());
+SELECT t_set('si68b_ret', (SELECT (r -> 'return' ->> 'return_id')::uuid FROM rpc_pos_exchange(t_get('sess68'), t_get('s68b'), t68_ret_item('si68b', 1), t_json_items('v68a','1',NULL), '[]'::jsonb, t_get('ct68h'), 'etiket_hatasi') r));
+SELECT t_check('T68h tenant reason accepted on a return (equal exchange, no payment)', (SELECT reason_code = 'etiket_hatasi' AND credit_value_base = 250 FROM returns WHERE id = t_get('si68b_ret')));
+SELECT t_err('T68h a reason of another tenant is refused', $q$ INSERT INTO return_reasons (business_id, code, label) VALUES (t_get('bizB'), 'hile', 'x') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T68h sales_staff cannot add reasons', $q$ INSERT INTO return_reasons (business_id, code, label) VALUES (t_get('biz'), 'staff_reason', 'x') $q$, '42501');
+SELECT t_check('T68h …but reads them', t_count($q$ SELECT count(*) FROM return_reasons $q$) = 7);
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- tenant B: cash refunds, partial returns, reason required, downgrade → cash refund
+SELECT t_login('u5');
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('bizB'), 'Other Dear', 'OP-02', 25, 'active') RETURNING id) SELECT t_set('pB2', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pB2'), 'OP-02-STD') RETURNING id) SELECT t_set('vB2', id) FROM x;
+SELECT t_ok('T68i tenant B stock: vB 10@4, vB2 3@12', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('bizB'), t_get('brB'), t_get('vB'), 'sellable', 10, 'ret fixture', 'manual_cost', 4);
+  SELECT rpc_post_inventory_adjustment(t_get('bizB'), t_get('brB'), t_get('vB2'), 'sellable', 3, 'ret fixture', 'manual_cost', 12) $q$);
+SELECT t_set('sessB68', rpc_open_register_session(t_get('regB'), '[{"currency":"TRY","amount":50}]'::jsonb));
+SELECT t_set('sB1', (rpc_pos_complete_sale(t_get('sessB68'), t_json_items('vB','3',NULL), t_pay('cash','TRY',30), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_set('sB2', (rpc_pos_complete_sale(t_get('sessB68'), t_json_items('vB2','1',NULL), t_pay('card','TRY',25), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_set('siB1', (SELECT id FROM sale_items WHERE sale_id = t_get('sB1')));
+SELECT t_set('siB2', (SELECT id FROM sale_items WHERE sale_id = t_get('sB2')));
+SELECT t_err('T68i reason required by policy', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), NULL, NULL, t_get('sessB68'), 'cash') $q$, 'REASON_REQUIRED');
+SELECT t_err('T68i cash refund needs the refund method', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), 'diger', NULL, t_get('sessB68'), NULL) $q$, 'REFUND_METHOD_REQUIRED');
+SELECT t_err('T68i cash refund needs an open session', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), 'diger', NULL, NULL, 'cash') $q$, 'REGISTER_REQUIRED');
+SELECT t_err('T68i cash refund on a session of another tenant', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), 'diger', NULL, t_get('sess68'), 'cash') $q$, 'REGISTER_REQUIRED');
+SELECT t_err('T68i store credit disabled on B too', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'store_credit', gen_random_uuid(), 'diger') $q$, 'STORE_CREDIT_NOT_ALLOWED');
+SELECT t_set('ctB1', gen_random_uuid());
+CREATE TEMP TABLE _t68_b1 AS SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', t_get('ctB1'), 'diger', 'para iadesi', t_get('sessB68'), 'cash') AS r;
+SELECT t_set('retB1', (SELECT (r ->> 'return_id')::uuid FROM _t68_b1));
+SELECT t_check('T68i A. partial cash refund: 1 of 3, refund 10, cash out −10 referencing the return',
+  (SELECT (r ->> 'credit_value_base')::numeric = 10 AND (r ->> 'refund_amount_base')::numeric = 10 AND NOT (r ->> 'replayed')::boolean FROM _t68_b1)
+  AND (SELECT return_type = 'refund' AND refund_method = 'cash' AND refund_amount_base = 10 AND reason_code = 'diger' FROM returns WHERE id = t_get('retB1'))
+  AND (SELECT count(*) FROM cash_movements WHERE reference_type = 'return' AND reference_id = t_get('retB1') AND movement_type = 'refund_cash_out' AND amount = -10 AND register_session_id = t_get('sessB68')) = 1
+  AND (SELECT returned_quantity FROM v_sale_item_returned WHERE sale_item_id = t_get('siB1')) = 1);
+SELECT t_check('T68i plain return double submit replays', (SELECT (r ->> 'replayed')::boolean AND (r ->> 'return_id')::uuid = t_get('retB1')
+  FROM rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', t_get('ctB1'), 'diger', 'para iadesi', t_get('sessB68'), 'cash') r));
+SELECT t_err('T68i plain return: same id, different quantity refused', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 2), 'refund', t_get('ctB1'), 'diger', NULL, t_get('sessB68'), 'cash') $q$, 'IDEMPOTENCY_CONFLICT');
+SELECT t_check('T68i replay left one return / one refund movement', (SELECT count(*) FROM returns WHERE original_sale_id = t_get('sB1')) = 1 AND (SELECT count(*) FROM cash_movements WHERE reference_id = t_get('retB1')) = 1);
+SELECT t_set('retB2', (SELECT (r ->> 'return_id')::uuid FROM rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), 'diger', NULL, NULL, 'card') r));
+SELECT t_check('T68i B. second partial refund to the original card: recorded, no cash movement, returned 2 of 3',
+  (SELECT refund_method = 'card' AND refund_amount_base = 10 FROM returns WHERE id = t_get('retB2'))
+  AND (SELECT count(*) FROM cash_movements WHERE reference_id = t_get('retB2')) = 0
+  AND (SELECT returned_quantity FROM v_sale_item_returned WHERE sale_item_id = t_get('siB1')) = 2);
+SELECT t_err('T68i C. over-return: 2 requested, 1 left', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 2), 'refund', gen_random_uuid(), 'diger', NULL, t_get('sessB68'), 'cash') $q$, 'OVER_RETURN');
+SELECT t_set('ctB3', gen_random_uuid());
+CREATE TEMP TABLE _t68_b3 AS SELECT rpc_pos_exchange(t_get('sessB68'), t_get('sB2'), t68_ret_item('siB2', 1, 'sellable'), t_json_items('vB','1',NULL), '[]'::jsonb, t_get('ctB3'), 'renk_degisimi') AS r;
+SELECT t_set('retB3', (SELECT (r -> 'return' ->> 'return_id')::uuid FROM _t68_b3));
+SELECT t_check('T68i D. downgrade under cash_refund policy: credit 25, replacement 10 → applied 10, refund 15 in cash, due 0',
+  (SELECT (r ->> 'total')::numeric = 10 AND (r ->> 'amount_due')::numeric = 0 AND (r ->> 'credit_applied')::numeric = 10 AND (r ->> 'refund_amount_base')::numeric = 15 FROM _t68_b3)
+  AND (SELECT return_type = 'exchange' AND credit_value_base = 25 AND refund_amount_base = 15 AND refund_method = 'cash' FROM returns WHERE id = t_get('retB3'))
+  AND (SELECT count(*) FROM cash_movements WHERE reference_id = t_get('retB3') AND movement_type = 'refund_cash_out' AND amount = -15) = 1
+  AND (SELECT credit_applied_base = 10 AND total = 10 AND amount_due_base = 0 FROM sales WHERE id = (SELECT replacement_sale_id FROM returns WHERE id = t_get('retB3'))));
+SELECT t_check('T68i drawer arithmetic: 50 open + 30 sale − 10 refund − 15 refund = 55 expected',
+  (SELECT 50 + COALESCE(SUM(amount), 0) FROM cash_movements WHERE register_session_id = t_get('sessB68') AND currency = 'TRY') = 55);
+SELECT t_ok('T68i owner closes B''s drawer', $q$ SELECT rpc_close_register_session(t_get('sessB68'), '[{"currency":"TRY","counted_amount":55}]'::jsonb) $q$);
+SELECT t_err('T68i cash refund after close refused', $q$ SELECT rpc_pos_return(t_get('sB1'), t68_ret_item('siB1', 1), 'refund', gen_random_uuid(), 'diger', NULL, t_get('sessB68'), 'cash') $q$, 'REGISTER_REQUIRED');
+SELECT t_err('T68i exchange on the closed session refused', $q$ SELECT rpc_pos_exchange(t_get('sessB68'), t_get('sB1'), t68_ret_item('siB1', 1), t_json_items('vB','1',NULL), '[]'::jsonb, gen_random_uuid(), 'diger') $q$, 'REGISTER_CLOSED');
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- visibility + immutability
+SELECT t_login('u3');
+SELECT t_check('T68j cashier sees the returns of their own sale but no COGS reversal',
+  t_count($q$ SELECT count(*) FROM returns WHERE original_sale_id = t_get('s68') $q$) = 3 AND t_count($q$ SELECT count(*) FROM return_item_costs $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM return_items WHERE sale_item_id = t_get('si68') $q$) = 3);
+SELECT t_check('T68j cashier reads the return document (no cost inside)', (SELECT d IS NOT NULL AND NOT (d::text ~ 'cost') FROM rpc_return_document(t_get('ret68j')) d));
+SELECT t_err('T68j cashier cannot insert a return', $q$ INSERT INTO returns (business_id, branch_id, original_sale_id, return_number, return_type, processed_by) VALUES (t_get('biz'), t_get('br68'), t_get('s68'), 'R-HACK', 'refund', t_get('u3')) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_check('T68j stock_staff sees no return document', (SELECT d IS NULL FROM rpc_return_document(t_get('ret68j')) d) AND t_count($q$ SELECT count(*) FROM return_item_costs $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T68j other tenant sees nothing of A''s returns', t_count($q$ SELECT count(*) FROM returns WHERE business_id = t_get('biz') $q$) = 0 AND (SELECT d IS NULL FROM rpc_return_document(t_get('ret68j')) d));
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_check('T68j manager reads the COGS reversal rows', t_count($q$ SELECT count(*) FROM return_item_costs WHERE business_id = t_get('biz') $q$) >= 4);
+SELECT t_logout();
+SELECT t_err('T68j return header immutable', $q$ UPDATE returns SET credit_value_base = 1 WHERE id = t_get('ret68j') $q$, 'IMMUTABLE');
+SELECT t_err('T68j return items immutable', $q$ DELETE FROM return_items WHERE return_id = t_get('ret68j') $q$, 'IMMUTABLE');
+SELECT t_err('T68j COGS reversal record immutable', $q$ UPDATE return_item_costs SET line_cost_base = 0 WHERE business_id = t_get('biz') $q$, 'IMMUTABLE');
+SELECT t_err('T68j replacement sale immutable', $q$ UPDATE sales SET total = 1 WHERE id = t_get('xs68j') $q$, 'IMMUTABLE');
+SELECT t_check('T68j privileges: POS return RPCs to authenticated, cores hidden',
+  has_function_privilege('authenticated', 'rpc_pos_return(uuid,jsonb,return_type,uuid,text,text,uuid,payment_method)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_pos_exchange(uuid,uuid,jsonb,jsonb,jsonb,uuid,text,text,uuid,uuid,text)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_return_core_ext(uuid,uuid,uuid,jsonb,return_type,text,text,uuid,uuid,uuid,payment_method,text,uuid,text,numeric)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_sale_quote(uuid,jsonb)', 'EXECUTE'));
 
 -- ============================================================
 -- SUMMARY

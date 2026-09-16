@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getSaleReceipt, loadPosContext } from "@/lib/pos/queries";
+import { getExchangeOrigin, listReturnsOfSale } from "@/lib/pos/returns-queries";
+import { RETURN_TYPE_LABELS } from "@/lib/pos/returns-model";
 import { PAYMENT_LABELS } from "@/lib/pos/model";
 import { formatDateTime, formatMoney, formatQuantity } from "@/lib/receiving/format";
 import { ProductThumb } from "@/components/catalog/product-thumb";
@@ -22,6 +24,7 @@ export default async function SaleReceiptPage({ params }: { params: Promise<{ id
   if (!caps.canSell) redirect("/app");
   const sale = await getSaleReceipt(id);
   if (!sale) notFound();
+  const [returns, origin] = await Promise.all([listReturnsOfSale(id), getExchangeOrigin(id)]);
 
   const methodLabel = (m: string) => (m === "bank_transfer" ? "Havale" : PAYMENT_LABELS[m as keyof typeof PAYMENT_LABELS] ?? m);
 
@@ -84,7 +87,31 @@ export default async function SaleReceiptPage({ params }: { params: Promise<{ id
       </dl>
       {sale.note ? <p className="text-xs text-ink-70">{sale.note}</p> : null}
 
-      <Link href="/app/pos" className="inline-flex h-11 items-center border border-line-strong px-4 text-sm sm:h-9">Yeni satış</Link>
+      {origin ? (
+        <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70" data-testid="receipt-exchange-origin">
+          Değişim fişi: <Link href={`/app/pos/iade/${origin.return_id}`} className="underline-offset-2 hover:underline" data-numeric>{origin.return_number}</Link> ile{" "}
+          <Link href={`/app/pos/satis/${origin.original_sale_id}`} className="underline-offset-2 hover:underline" data-numeric>{origin.original_sale_number}</Link> satışından geldi.
+        </p>
+      ) : null}
+      {returns.length > 0 ? (
+        <div className="space-y-1 text-xs" data-testid="receipt-returns">
+          <p className="text-muted">Bu satışın iadeleri</p>
+          <ul className="divide-y divide-line border-y border-line">
+            {returns.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+                <Link href={`/app/pos/iade/${r.id}`} className="underline-offset-2 hover:underline" data-numeric>{r.return_number}</Link>
+                <span className="text-muted">{RETURN_TYPE_LABELS[r.return_type as keyof typeof RETURN_TYPE_LABELS] ?? r.return_type} · <span data-numeric>{formatDateTime(r.created_at)}</span></span>
+                <span data-numeric>{money(r.credit_value_base)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Link href="/app/pos" className="inline-flex h-11 items-center border border-line-strong px-4 text-sm sm:h-9">Yeni satış</Link>
+        {sale.status === "completed" ? <Link href={`/app/pos/iade?satis=${sale.id}`} className="inline-flex h-11 items-center border border-line-strong px-4 text-sm sm:h-9" data-testid="receipt-return-link">İade / Değişim</Link> : null}
+      </div>
     </div>
   );
 }
