@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 56 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 56,
+SELECT t_check('T01 all 57 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 57,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -2855,8 +2855,8 @@ CREATE FUNCTION t66_unchanged() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER AS
 
 -- A) privileges + role model
 SELECT t_check('T66a privileges: POS RPCs to authenticated only, cores hidden',
-  has_function_privilege('authenticated', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text)', 'EXECUTE')
-  AND NOT has_function_privilege('anon', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text)', 'EXECUTE')
+  has_function_privilege('authenticated', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text,uuid)', 'EXECUTE')
   AND has_function_privilege('authenticated', 'rpc_pos_members(uuid)', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'fn_sale_core(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz,jsonb,jsonb,discount_reason,text,numeric,uuid,uuid,text,uuid)', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'fn_sale_core(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz,jsonb,jsonb,discount_reason,text,numeric,uuid,uuid,text)', 'EXECUTE'));
@@ -3403,6 +3403,216 @@ SELECT t_check('T68j privileges: POS return RPCs to authenticated, cores hidden'
   AND has_function_privilege('authenticated', 'rpc_pos_exchange(uuid,uuid,jsonb,jsonb,jsonb,uuid,text,text,uuid,uuid,text)', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'fn_return_core_ext(uuid,uuid,uuid,jsonb,return_type,text,text,uuid,uuid,uuid,payment_method,text,uuid,text,numeric)', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'fn_sale_quote(uuid,jsonb)', 'EXECUTE'));
+
+
+-- ============================================================
+-- T69 — Phase 10A customers + reservations: normalisation, duplicates as warnings, search,
+--       PII roles, reservation hold/availability (no movement), create/edit/cancel/expire,
+--       POS fulfilment in one transaction, immutability, cross-tenant.
+-- ============================================================
+SELECT t_logout();
+WITH x AS (INSERT INTO branches (business_id, name, code) VALUES (t_get('biz'), 'Rezervasyon Şubesi', 'RSV') RETURNING id) SELECT t_set('br69', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('biz'), t_get('br69'), 'Kasa 69') RETURNING id) SELECT t_set('reg69', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, category_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), t_get('cat_elbise'), 'Rezervasyon Elbise', 'RSV-69', 300, 'active') RETURNING id) SELECT t_set('p69', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p69'), 'RSV-69-S') RETURNING id) SELECT t_set('v69s', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v69s'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p69'), 'RSV-69-M') RETURNING id) SELECT t_set('v69m', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v69m'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku, status) VALUES (t_get('p69'), 'RSV-69-L', 'archived') RETURNING id) SELECT t_set('v69l', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v69l'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000003');
+SELECT t_login('u2');
+SELECT t_ok('T69 fixture stock (br69): S 3@100, M 1@100', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br69'), t_get('v69s'), 'sellable', 3, 'rsv fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br69'), t_get('v69m'), 'sellable', 1, 'rsv fixture', 'manual_cost', 100) $q$);
+SELECT t_set('sess69', rpc_open_register_session(t_get('reg69'), '[]'::jsonb));
+SELECT t_logout();
+CREATE TEMP TABLE _t69_base AS SELECT (SELECT count(*) FROM inventory_movements) AS movements, (SELECT on_hand_qty FROM variant_cost_pools WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69')) AS s_on_hand;
+GRANT SELECT ON _t69_base TO authenticated;
+
+-- ---------------------------------------------------------------- customers: create (sales_staff), normalisation, source
+SELECT t_login('u3');
+WITH x AS (INSERT INTO customers (business_id, full_name, phone, email, instagram, source, notes) VALUES (t_get('biz'), 'Ayşe Rezerve', '0555 123 45 67', ' Ayse@Test.COM ', '@Ayse_T', 'instagram', 'DM ile ulaştı') RETURNING id) SELECT t_set('c69a', id) FROM x;
+SELECT t_check('T69a sales_staff created a customer: phone/email/instagram normalised, display kept, created_by stamped',
+  (SELECT phone = '0555 123 45 67' AND phone_normalized = '905551234567' AND email = 'Ayse@Test.COM' AND email_normalized = 'ayse@test.com'
+      AND instagram = 'Ayse_T' AND instagram_normalized = 'ayse_t' AND source = 'instagram' AND created_by = t_get('u3') AND is_active
+   FROM customers WHERE id = t_get('c69a')));
+WITH x AS (INSERT INTO customers (business_id, full_name, source) VALUES (t_get('biz'), 'Elif Telefonsuz', 'walk_in') RETURNING id) SELECT t_set('c69b', id) FROM x;
+SELECT t_check('T69a phone and email are optional', (SELECT phone IS NULL AND phone_normalized IS NULL AND email IS NULL FROM customers WHERE id = t_get('c69b')));
+SELECT t_err('T69a unknown source refused', $q$ INSERT INTO customers (business_id, full_name, source) VALUES (t_get('biz'), 'X', 'tiktok') $q$, 'INVALID_SOURCE');
+SELECT t_err('T69a malformed email refused', $q$ INSERT INTO customers (business_id, full_name, email) VALUES (t_get('biz'), 'X', 'not-an-email') $q$, 'chk_customer_email');
+SELECT t_err('T69a empty name refused', $q$ INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('biz'), '  ', '0555') $q$, 'chk_customer_name');
+SELECT t_check('T69a phone normalisation cases',
+  fn_normalize_phone('+90 (555) 123 45 67') = '905551234567' AND fn_normalize_phone('5551234567') = '905551234567' AND fn_normalize_phone('05551234567') = '905551234567'
+  AND fn_normalize_phone('00905551234567') = '905551234567' AND fn_normalize_phone('+44 20 7946 0958') = '442079460958' AND fn_normalize_phone('   ') IS NULL
+  AND fn_normalize_instagram('@@Ayse_T ') = 'ayse_t' AND fn_normalize_instagram('') IS NULL);
+-- duplicates are a warning, never a constraint: the same normalised phone may be stored twice
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('biz'), 'Ayşe İkinci', '+90 555 123 45 67') RETURNING id) SELECT t_set('c69dup', id) FROM x;
+SELECT t_check('T69b same normalised phone stored (intentional duplicate possible), probe reports it',
+  (SELECT phone_normalized FROM customers WHERE id = t_get('c69dup')) = '905551234567'
+  AND (SELECT jsonb_array_length(d) = 2 AND (SELECT bool_and(x ->> 'match' = 'phone') FROM jsonb_array_elements(d) x) FROM rpc_customer_duplicates(t_get('biz'), '5551234567') d));
+SELECT t_check('T69b probe by email / instagram / exclude self',
+  (SELECT jsonb_array_length(d) = 1 AND d -> 0 ->> 'match' = 'email' FROM rpc_customer_duplicates(t_get('biz'), NULL, 'AYSE@test.com') d)
+  AND (SELECT jsonb_array_length(d) = 1 AND d -> 0 ->> 'match' = 'instagram' FROM rpc_customer_duplicates(t_get('biz'), NULL, NULL, '@AYSE_t') d)
+  AND (SELECT jsonb_array_length(d) = 1 FROM rpc_customer_duplicates(t_get('biz'), '0555 123 45 67', NULL, NULL, t_get('c69a')) d)
+  AND (SELECT jsonb_array_length(d) = 0 FROM rpc_customer_duplicates(t_get('biz'), '0555 999 99 99') d));
+SELECT t_check('T69c search by name / phone fragment / email / instagram, limited, short query empty',
+  (SELECT jsonb_array_length(r) >= 1 AND r -> 0 ->> 'full_name' LIKE 'Ayşe%' FROM rpc_customer_search(t_get('biz'), 'ayşe') r)
+  AND (SELECT jsonb_array_length(r) = 2 FROM rpc_customer_search(t_get('biz'), '555 123') r)
+  AND (SELECT jsonb_array_length(r) = 1 AND (r -> 0 ->> 'id')::uuid = t_get('c69a') FROM rpc_customer_search(t_get('biz'), 'ayse@test') r)
+  AND (SELECT jsonb_array_length(r) = 1 FROM rpc_customer_search(t_get('biz'), '@ayse_t') r)
+  AND (SELECT jsonb_array_length(r) = 0 FROM rpc_customer_search(t_get('biz'), 'a') r)
+  AND (SELECT jsonb_array_length(r) = 1 FROM rpc_customer_search(t_get('biz'), 'ayşe', 1) r));
+SELECT t_check('T69c search results carry no cost / cache-of-money beyond order_count', (SELECT NOT (r::text ~ 'cost|total_spent') FROM rpc_customer_search(t_get('biz'), 'ayşe') r));
+SELECT t_ok('T69c sales_staff edits operational fields', $q$ UPDATE customers SET notes = 'beden M', instagram = '@ayse_yeni' WHERE id = t_get('c69a') $q$);
+SELECT t_check('T69c edit normalised again', (SELECT instagram = 'ayse_yeni' AND instagram_normalized = 'ayse_yeni' FROM customers WHERE id = t_get('c69a')));
+SELECT t_err('T69c sales_staff cannot touch the sale caches', $q$ UPDATE customers SET total_spent = 999 WHERE id = t_get('c69a') $q$, '42501');
+SELECT t_err('T69c customers are never deleted', $q$ DELETE FROM customers WHERE id = t_get('c69dup') $q$, '42501');
+SELECT t_err('T69c sales_staff cannot add a tenant source', $q$ INSERT INTO customer_sources (business_id, code, label) VALUES (t_get('biz'), 'fuar', 'Fuar') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u2');
+SELECT t_ok('T69c manager adds a tenant source', $q$ INSERT INTO customer_sources (business_id, code, label) VALUES (t_get('biz'), 'fuar', 'Fuar') $q$);
+SELECT t_ok('T69c …and a customer may use it', $q$ UPDATE customers SET source = 'fuar' WHERE id = t_get('c69b') $q$);
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_check('T69d stock_staff has no CRM: 0 customers, 0 sources of the tenant beyond defaults', t_count($q$ SELECT count(*) FROM customers $q$) = 0);
+SELECT t_err('T69d stock_staff cannot create a customer', $q$ INSERT INTO customers (business_id, full_name) VALUES (t_get('biz'), 'Depo') $q$, '42501');
+SELECT t_err('T69d stock_staff cannot search', $q$ SELECT rpc_customer_search(t_get('biz'), 'ayşe') $q$, 'FORBIDDEN');
+SELECT t_err('T69d stock_staff cannot probe duplicates', $q$ SELECT rpc_customer_duplicates(t_get('biz'), '0555') $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T69d other tenant reads nothing', t_count($q$ SELECT count(*) FROM customers WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_err('T69d other tenant cannot search A (business_id tampering)', $q$ SELECT rpc_customer_search(t_get('biz'), 'ayşe') $q$, 'FORBIDDEN');
+SELECT t_err('T69d other tenant cannot insert into A', $q$ INSERT INTO customers (business_id, full_name) VALUES (t_get('biz'), 'Hile') $q$, '42501');
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- reservations: hold without movement
+SELECT t_login('u3');
+CREATE TEMP TABLE _t69_r1 AS SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69s','1',NULL,'v69s','1',NULL,'v69m','1',NULL), NULL, 'akşam gelecek', 'whatsapp') AS r;
+SELECT t_set('rv1', (SELECT (r ->> 'reservation_id')::uuid FROM _t69_r1));
+SELECT t_check('T69e reservation created by sales_staff: RV number, default expiry ≈ 48 h, lines merged (S×2, M×1)',
+  (SELECT (r ->> 'reservation_number') LIKE 'RV-%' AND (r ->> 'expires_at')::timestamptz BETWEEN now() + interval '47 hours' AND now() + interval '49 hours' AND jsonb_array_length(r -> 'lines') = 2 FROM _t69_r1)
+  AND (SELECT status = 'active' AND customer_id = t_get('c69a') AND source = 'whatsapp' AND note = 'akşam gelecek' AND created_by = t_get('u3') FROM reservations WHERE id = t_get('rv1'))
+  AND (SELECT quantity FROM reservation_items WHERE reservation_id = t_get('rv1') AND variant_id = t_get('v69s')) = 2);
+SELECT t_check('T69e availability: S 3 on hand → 1 available, M 1 → 0; on_hand and the ledger untouched',
+  (SELECT sellable_quantity = 3 AND reserved_quantity = 2 AND available_quantity = 1 FROM v_stock_available WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69'))
+  AND (SELECT available_quantity = 0 FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')));
+SELECT t_logout();
+SELECT t_check('T69e no inventory movement, pool unchanged', (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t69_base) AND (SELECT on_hand_qty FROM variant_cost_pools WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69')) = (SELECT s_on_hand FROM _t69_base));
+SELECT t_login('u3');
+SELECT t_err('T69f second hold beyond availability (S 2 requested, 1 available)', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69b'), t_json_items('v69s','2',NULL)) $q$, 'INSUFFICIENT_AVAILABLE_STOCK');
+SELECT t_err('T69f held-out variant (M available 0)', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69b'), t_json_items('v69m','1',NULL)) $q$, 'INSUFFICIENT_AVAILABLE_STOCK');
+SELECT t_err('T69f foreign customer', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('custB'), t_json_items('v69s','1',NULL)) $q$, 'INVALID_CUSTOMER');
+SELECT t_err('T69f customer required', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), NULL, t_json_items('v69s','1',NULL)) $q$, 'INVALID_CUSTOMER');
+SELECT t_err('T69f foreign branch', $q$ SELECT rpc_pos_reservation_create(t_get('brB'), t_get('c69a'), t_json_items('v69s','1',NULL)) $q$, 'INVALID_BRANCH');
+SELECT t_err('T69f foreign variant', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('vB','1',NULL)) $q$, 'INVALID_VARIANT');
+SELECT t_err('T69f archived variant', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69l','1',NULL)) $q$, 'VARIANT_NOT_SELLABLE');
+SELECT t_err('T69f expiry in the past', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69s','1',NULL), now() - interval '1 hour') $q$, 'INVALID_EXPIRY');
+SELECT t_err('T69f expiry beyond 90 days', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69s','1',NULL), now() + interval '91 days') $q$, 'INVALID_EXPIRY');
+SELECT t_err('T69f empty items', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), '[]'::jsonb) $q$, 'EMPTY_RESERVATION');
+SELECT t_err('T69f zero quantity', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69s','0',NULL)) $q$, 'INVALID_QTY');
+SELECT t_err('T69f direct insert refused', $q$ INSERT INTO reservations (business_id, branch_id, reservation_number, customer_id, expires_at) VALUES (t_get('biz'), t_get('br69'), 'RV-HACK', t_get('c69a'), now() + interval '1 day') $q$, '42501');
+SELECT t_logout();
+SELECT t_check('T69f refused holds wrote nothing', (SELECT count(*) FROM reservations WHERE business_id = t_get('biz') AND branch_id = t_get('br69')) = 1);
+SELECT t_login('u4');
+SELECT t_err('T69f stock_staff cannot reserve', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('c69a'), t_json_items('v69s','1',NULL)) $q$, 'FORBIDDEN');
+SELECT t_check('T69f stock_staff sees no reservations', t_count($q$ SELECT count(*) FROM reservations $q$) = 0 AND t_count($q$ SELECT count(*) FROM reservation_items $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T69f other tenant cannot reserve on A''s branch', $q$ SELECT rpc_pos_reservation_create(t_get('br69'), t_get('custB'), t_json_items('v69s','1',NULL)) $q$, 'INVALID_BRANCH');
+SELECT t_err('T69f other tenant cannot cancel A''s reservation', $q$ SELECT rpc_reservation_cancel(t_get('rv1'), 'x') $q$, 'NOT_FOUND');
+SELECT t_err('T69f other tenant cannot edit A''s reservation', $q$ SELECT rpc_reservation_update(t_get('rv1'), t_json_items('v69s','1',NULL)) $q$, 'NOT_FOUND');
+SELECT t_check('T69f other tenant sees none of A''s reservations', t_count($q$ SELECT count(*) FROM reservations WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_logout();
+
+-- POS respects other customers' holds
+SELECT t_login('u3');
+SELECT t_err('T69g plain POS sale cannot take held stock (S: 3 on hand, 1 available, 2 requested)', $q$ SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69s','2',NULL), t_pay('cash','TRY',600), gen_random_uuid()) $q$, 'INSUFFICIENT_STOCK');
+SELECT t_set('s69free', (rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69s','1',NULL), t_pay('cash','TRY',300), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_check('T69g …the free unit sells; available now 0, hold intact', (SELECT available_quantity = 0 AND reserved_quantity = 2 AND sellable_quantity = 2 FROM v_stock_available WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69')));
+
+-- edit
+SELECT t_err('T69h edit beyond availability (S 3 requested, 2 sellable) rejected', $q$ SELECT rpc_reservation_update(t_get('rv1'), t_json_items('v69s','3',NULL,'v69m','1',NULL)) $q$, 'INSUFFICIENT_AVAILABLE_STOCK');
+SELECT t_check('T69h rejected edit left the items untouched (atomic)', (SELECT quantity FROM reservation_items WHERE reservation_id = t_get('rv1') AND variant_id = t_get('v69s')) = 2 AND (SELECT count(*) FROM reservation_items WHERE reservation_id = t_get('rv1')) = 2);
+CREATE TEMP TABLE _t69_upd AS SELECT rpc_reservation_update(t_get('rv1'), t_json_items('v69s','1',NULL), now() + interval '3 days', 'yarın alacak') AS r;
+SELECT t_check('T69h edit down to S×1, drop M, new expiry + note',
+  (SELECT jsonb_array_length(r -> 'lines') = 1 FROM _t69_upd)
+  AND (SELECT count(*) FROM reservation_items WHERE reservation_id = t_get('rv1')) = 1
+  AND (SELECT note = 'yarın alacak' AND expires_at BETWEEN now() + interval '71 hours' AND now() + interval '73 hours' AND updated_by = t_get('u3') FROM reservations WHERE id = t_get('rv1'))
+  AND (SELECT available_quantity = 1 FROM v_stock_available WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69'))
+  AND (SELECT available_quantity = 1 FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')),
+  (SELECT 'items=' || (SELECT count(*) FROM reservation_items WHERE reservation_id = t_get('rv1')) || ' note=' || coalesce(note,'-') || ' exp=' || expires_at || ' ub=' || coalesce(updated_by::text,'-') || ' availS=' || (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69')) || ' availM=' || (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')) FROM reservations WHERE id = t_get('rv1')));
+SELECT t_err('T69h edit with a foreign variant', $q$ SELECT rpc_reservation_update(t_get('rv1'), t_json_items('vB','1',NULL)) $q$, 'INVALID_VARIANT');
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- cancel releases; expiry releases without cleanup
+SELECT t_login('u3');
+SELECT t_set('rv2', (rpc_pos_reservation_create(t_get('br69'), t_get('c69b'), t_json_items('v69m','1',NULL), now() + interval '2 hours', NULL, 'instagram') ->> 'reservation_id')::uuid);
+SELECT t_check('T69i second hold takes M', (SELECT available_quantity = 0 FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')));
+CREATE TEMP TABLE _t69_cnl AS SELECT rpc_reservation_cancel(t_get('rv2'), 'müşteri vazgeçti') AS r;
+SELECT t_check('T69i cancel releases at once, records actor/time/reason',
+  (SELECT r ->> 'status' = 'cancelled' FROM _t69_cnl)
+  AND (SELECT status = 'cancelled' AND cancelled_by = t_get('u3') AND cancelled_at IS NOT NULL AND cancel_reason = 'müşteri vazgeçti' FROM reservations WHERE id = t_get('rv2'))
+  AND (SELECT available_quantity = 1 FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')),
+  (SELECT status::text || ' cb=' || coalesce(cancelled_by::text,'-') || ' reason=' || coalesce(cancel_reason,'-') || ' availM=' || (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')) FROM reservations WHERE id = t_get('rv2')));
+SELECT t_err('T69i cancelled cannot be cancelled again', $q$ SELECT rpc_reservation_cancel(t_get('rv2'), 'x') $q$, 'INVALID_STATE');
+SELECT t_err('T69i cancelled cannot be edited', $q$ SELECT rpc_reservation_update(t_get('rv2'), t_json_items('v69m','1',NULL)) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_check('T69i no movement from hold + cancel', (SELECT count(*) FROM inventory_movements) = (SELECT movements FROM _t69_base) + 1);
+SELECT t_err('T69i cancelled reservation frozen (maintenance role too)', $q$ UPDATE reservations SET note = 'x' WHERE id = t_get('rv2') $q$, 'IMMUTABLE');
+SELECT t_err('T69i items of a cancelled reservation frozen', $q$ DELETE FROM reservation_items WHERE reservation_id = t_get('rv2') $q$, 'IMMUTABLE');
+SELECT t_err('T69i reservations are never deleted', $q$ DELETE FROM reservations WHERE id = t_get('rv2') $q$, 'IMMUTABLE');
+-- expiry: the row stays ACTIVE (no cleanup ran) but no longer holds stock
+SELECT t_login('u3');
+SELECT t_set('rv3', (rpc_pos_reservation_create(t_get('br69'), t_get('c69b'), t_json_items('v69m','1',NULL), now() + interval '1 hour') ->> 'reservation_id')::uuid);
+SELECT t_logout();
+UPDATE reservations SET expires_at = now() - interval '1 minute' WHERE id = t_get('rv3');   -- simulate the clock
+SELECT t_check('T69j an expired ACTIVE row no longer reduces availability (no cleanup dependency)',
+  (SELECT status = 'active' FROM reservations WHERE id = t_get('rv3')) AND (SELECT available_quantity = 1 AND reserved_quantity = 0 FROM v_stock_available WHERE variant_id = t_get('v69m') AND branch_id = t_get('br69')));
+SELECT t_login('u3');
+SELECT t_err('T69j expired hold cannot be fulfilled', $q$ SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69m','1',NULL), t_pay('cash','TRY',300), gen_random_uuid(), NULL, NULL, NULL, NULL, NULL, t_get('rv3')) $q$, 'RESERVATION_NOT_ACTIVE');
+SELECT t_err('T69j expired hold cannot be edited', $q$ SELECT rpc_reservation_update(t_get('rv3'), t_json_items('v69m','1',NULL)) $q$, 'RESERVATION_EXPIRED');
+CREATE TEMP TABLE _t69_exp AS SELECT rpc_reservations_expire(t_get('biz')) AS n;
+SELECT t_check('T69j cleanup marks it EXPIRED (1 row)', (SELECT n = 1 FROM _t69_exp) AND (SELECT status = 'expired' FROM reservations WHERE id = t_get('rv3')), (SELECT status::text || ' exp=' || expires_at FROM reservations WHERE id = t_get('rv3')));
+SELECT t_err('T69j expired cannot be cancelled', $q$ SELECT rpc_reservation_cancel(t_get('rv3'), 'x') $q$, 'INVALID_STATE');
+SELECT t_check('T69j cleanup is idempotent', rpc_reservations_expire(t_get('biz')) = 0);
+SELECT t_logout();
+
+-- ---------------------------------------------------------------- fulfil through the POS in one transaction
+SELECT t_login('u3');
+SELECT t_err('T69k cart missing the held item → RESERVATION_MISMATCH', $q$ SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69m','1',NULL), t_pay('cash','TRY',300), gen_random_uuid(), NULL, NULL, NULL, NULL, NULL, t_get('rv1')) $q$, 'RESERVATION_MISMATCH');
+SELECT t_err('T69k session of another branch → INVALID_RESERVATION', $q$ SELECT rpc_pos_complete_sale(t_get('sess66b'), t_json_items('v69s','1',NULL), t_pay('cash','TRY',300), gen_random_uuid(), NULL, NULL, NULL, NULL, NULL, t_get('rv1')) $q$, 'INVALID_RESERVATION');
+SELECT t_err('T69k reservation of another tenant → INVALID_RESERVATION', $q$ SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69s','1',NULL), t_pay('cash','TRY',300), gen_random_uuid(), NULL, NULL, NULL, NULL, NULL, gen_random_uuid()) $q$, 'INVALID_RESERVATION');
+SELECT t_check('T69k refused fulfilments left the hold active', (SELECT status = 'active' FROM reservations WHERE id = t_get('rv1')));
+CREATE TEMP TABLE _t69_sale AS SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69s','1',NULL,'v69m','1',NULL), t_pay('cash','TRY',600), gen_random_uuid(), NULL, NULL, NULL, 'rezervasyon teslim', NULL, t_get('rv1')) AS r;
+SELECT t_set('s69rv', (SELECT (r ->> 'sale_id')::uuid FROM _t69_sale));
+SELECT t_logout();
+SELECT t_check('T69k fulfilled: sale completed with the held item + an extra, customer taken from the hold, reservation converted and linked in the same transaction',
+  (SELECT status = 'completed' AND total = 600 AND customer_id = t_get('c69a') AND sold_by = t_get('u3') FROM sales WHERE id = t_get('s69rv'))
+  AND (SELECT status = 'converted' AND converted_to_sale_id = t_get('s69rv') AND fulfilled_at IS NOT NULL AND fulfilled_by = t_get('u3') FROM reservations WHERE id = t_get('rv1'))
+  AND (SELECT count(*) FROM inventory_movements WHERE reference_type = 'sale_item' AND reference_id IN (SELECT id FROM sale_items WHERE sale_id = t_get('s69rv'))) = 2
+  AND (SELECT sellable_quantity = 1 AND reserved_quantity = 0 AND available_quantity = 1 FROM v_stock_available WHERE variant_id = t_get('v69s') AND branch_id = t_get('br69')));
+SELECT t_check('T69k customer history: 1 order / 600 spent from the fulfilled sale', (SELECT order_count = 1 AND total_spent = 600 AND last_purchase_at IS NOT NULL FROM customers WHERE id = t_get('c69a')), (SELECT order_count || '/' || total_spent FROM customers WHERE id = t_get('c69a')));
+SELECT t_login('u3');
+SELECT t_err('T69l fulfilled reservation cannot be cancelled', $q$ SELECT rpc_reservation_cancel(t_get('rv1'), 'x') $q$, 'INVALID_STATE');
+SELECT t_err('T69l fulfilled reservation cannot be edited', $q$ SELECT rpc_reservation_update(t_get('rv1'), t_json_items('v69s','1',NULL)) $q$, 'INVALID_STATE');
+SELECT t_err('T69l fulfilled reservation cannot be fulfilled twice', $q$ SELECT rpc_pos_complete_sale(t_get('sess69'), t_json_items('v69s','1',NULL), t_pay('cash','TRY',300), gen_random_uuid(), NULL, NULL, NULL, NULL, NULL, t_get('rv1')) $q$, 'RESERVATION_NOT_ACTIVE');
+SELECT t_logout();
+SELECT t_err('T69l fulfilled reservation frozen', $q$ UPDATE reservations SET note = 'x' WHERE id = t_get('rv1') $q$, 'IMMUTABLE');
+SELECT t_login('u3');
+SELECT t_set('rv4', (rpc_pos_reservation_create(t_get('br69'), t_get('c69b'), t_json_items('v69s','1',NULL)) ->> 'reservation_id')::uuid);
+SELECT t_logout();
+SELECT t_err('T69l a linked sale cannot be faked onto an active reservation', $q$ UPDATE reservations SET converted_to_sale_id = t_get('s69free') WHERE id = t_get('rv4') $q$, 'INTEGRITY');
+SELECT t_err('T69l fulfilled status without a sale refused', $q$ UPDATE reservations SET status = 'converted' WHERE id = t_get('rv4') $q$, 'INTEGRITY');
+SELECT t_check('T69l privileges: new POS signature to authenticated, old one gone, cores internal',
+  has_function_privilege('authenticated', 'rpc_pos_complete_sale(uuid,jsonb,jsonb,uuid,uuid,uuid,discount_reason,text,text,uuid)', 'EXECUTE')
+  AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'rpc_pos_complete_sale' AND pronargs = 9)
+  AND NOT has_function_privilege('authenticated', 'fn_reservation_hold(uuid,uuid,uuid,jsonb)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_pos_reservation_create(uuid,uuid,jsonb,timestamptz,text,text)', 'EXECUTE'));
+SELECT t_login('u2');
+SELECT t_check('T69m manager sees customers, reservations and the sale of the hold', t_count($q$ SELECT count(*) FROM customers WHERE business_id = t_get('biz') $q$) >= 3
+  AND t_count($q$ SELECT count(*) FROM reservations WHERE business_id = t_get('biz') AND branch_id = t_get('br69') $q$) = 4
+  AND t_count($q$ SELECT count(*) FROM sales WHERE id = t_get('s69rv') $q$) = 1);
+SELECT t_logout();
 
 -- ============================================================
 -- SUMMARY

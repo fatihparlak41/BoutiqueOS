@@ -72,6 +72,18 @@ const RPC_MESSAGES: Array<[string, string]> = [
   ["purchase cost is entered by", "Birim maliyeti yalnız işletme sahibi ya da yönetici girebilir."],
   ["charge allocation is set by", "Dağıtım yöntemini yalnız işletme sahibi ya da yönetici değiştirebilir."],
   ["INVALID_COST", "Birim maliyet negatif olamaz."],
+  // customers / reservations (20260916210000 + Rev 3 reservations)
+  ["INSUFFICIENT_AVAILABLE_STOCK", "Yeterli müsait stok yok: ürün başka bir rezervasyonda ya da satılmış olabilir."],
+  ["RESERVATION_NOT_ACTIVE", "Rezervasyon artık aktif değil (teslim edilmiş, iptal ya da süresi dolmuş)."],
+  ["RESERVATION_MISMATCH", "Sepet rezervasyondaki her ürünü en az ayrılan adette içermeli."],
+  ["INVALID_RESERVATION", "Rezervasyon bulunamadı ya da bu şubeye ait değil."],
+  ["RESERVATION_EXPIRED", "Rezervasyonun süresi dolmuş; yeni bir rezervasyon açın."],
+  ["INVALID_EXPIRY", "Son tarih ileride ve en fazla 90 gün sonrası olmalı."],
+  ["EMPTY_RESERVATION", "Rezervasyon için en az bir ürün seçin."],
+  ["INVALID_SOURCE", "Kaynak tanınmadı. Listeden seçin."],
+  ["chk_customer_email", "E-posta biçimi geçersiz."],
+  ["chk_customer_name", "Ad Soyad gerekli."],
+  ["INVALID_STATE: reservation", "Rezervasyon bu durumda değiştirilemez."],
   // returns / exchange (20260916190000 + Rev 3 return core) — operator wording, never DB text
   ["EXCHANGE_WINDOW_EXPIRED", "Değişim süresi dolmuş."],
   ["FINAL_SALE", "Bu ürün değişim kapsamı dışında."],

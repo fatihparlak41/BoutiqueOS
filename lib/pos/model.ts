@@ -57,6 +57,17 @@ export type SalePayload = {
   customer_id: string | null;
   salesperson_id: string | null;
   note: string | null;
+  /** an ACTIVE reservation being fulfilled by this sale (converted in the same transaction) */
+  reservation_id: string | null;
+};
+
+/** A reservation handed to the terminal: its lines are pre-loaded and pinned, its customer is the sale's customer. */
+export type PosReservation = {
+  id: string;
+  reservation_number: string;
+  expires_at: string;
+  customer: PosCustomer | null;
+  lines: Array<{ item: PosItem; quantity: number }>;
 };
 
 export type SaleResult = { sale_id: string; sale_number: string; total: number; change_given: number; replayed: boolean };

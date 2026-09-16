@@ -22,6 +22,7 @@ import {
   type PosCustomer,
   type PosItem,
   type PosMember,
+  type PosReservation,
   type Register,
 } from "@/lib/pos/model";
 import { formatMoney } from "@/lib/receiving/format";
@@ -44,15 +45,15 @@ const money = (n: number) => formatMoney(n, "TRY");
 type Payment = { id: string; method: PaymentMethod; amount: string };
 type Stage = "items" | "cart" | "pay";
 
-export function PosTerminal({ registers, members, caps }: { registers: Register[]; members: PosMember[]; caps: PosCaps }) {
+export function PosTerminal({ registers, members, caps, reservation = null }: { registers: Register[]; members: PosMember[]; caps: PosCaps; reservation?: PosReservation | null }) {
   const router = useRouter();
   const openRegisters = registers.filter((r) => r.open_session);
   const [registerId, setRegisterId] = useState(openRegisters[0]?.id ?? "");
   const register = openRegisters.find((r) => r.id === registerId) ?? openRegisters[0];
   const session = register?.open_session ?? null;
 
-  const [stage, setStage] = useState<Stage>("items");
-  const [lines, setLines] = useState<CartLine[]>([]);
+  const [stage, setStage] = useState<Stage>(reservation ? "cart" : "items");
+  const [lines, setLines] = useState<CartLine[]>(() => (reservation ? reservation.lines.map((l) => ({ item: l.item, quantity: l.quantity, unit_price: l.item.price })) : []));
   const [last, setLast] = useState<PosItem | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
@@ -61,7 +62,9 @@ export function PosTerminal({ registers, members, caps }: { registers: Register[
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<PosItem[] | null>(null);
   const [searching, setSearching] = useState(false);
-  const [customer, setCustomer] = useState<PosCustomer | null>(null);
+  const [customer, setCustomer] = useState<PosCustomer | null>(reservation?.customer ?? null);
+  // a held line cannot go below its held quantity or leave the cart: the sale must cover the hold
+  const heldQty = (variantId: string) => reservation?.lines.find((l) => l.item.variant_id === variantId)?.quantity ?? 0;
   const [customerTerm, setCustomerTerm] = useState("");
   const [customerResults, setCustomerResults] = useState<PosCustomer[] | null>(null);
   const self = members.find((m) => m.is_self);
@@ -108,13 +111,14 @@ export function PosTerminal({ registers, members, caps }: { registers: Register[
     setError(null);
   }
   function setQty(variantId: string, quantity: number) {
-    setLines((prev) => prev.map((l) => (l.item.variant_id === variantId ? { ...l, quantity: Math.max(1, Math.min(9999, quantity)) } : l)));
+    setLines((prev) => prev.map((l) => (l.item.variant_id === variantId ? { ...l, quantity: Math.max(1, heldQty(variantId), Math.min(9999, quantity)) } : l)));
   }
   function setPrice(variantId: string, raw: string) {
     const v = parseAmount(raw);
     setLines((prev) => prev.map((l) => (l.item.variant_id === variantId ? { ...l, unit_price: v === null ? l.unit_price : Math.min(l.item.price, v) } : l)));
   }
   function removeLine(variantId: string) {
+    if (heldQty(variantId) > 0) return;
     setLines((prev) => prev.filter((l) => l.item.variant_id !== variantId));
   }
   function undoLast() {
@@ -189,6 +193,7 @@ export function PosTerminal({ registers, members, caps }: { registers: Register[
         customer_id: customer?.id ?? null,
         salesperson_id: salespersonId || null,
         note: note || null,
+        reservation_id: reservation?.id ?? null,
       });
       if (!res.ok) {
         setError(res.error);
@@ -458,6 +463,12 @@ export function PosTerminal({ registers, members, caps }: { registers: Register[
   return (
     <div className="space-y-4">
       <SessionBar register={register} registers={registers} selectedId={register.id} onSelect={setRegisterId} caps={caps} />
+      {reservation ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border border-success/30 bg-success-muted/40 px-3 py-2 text-xs" data-testid="pos-reservation-banner">
+          <span>Rezervasyon <strong data-numeric>{reservation.reservation_number}</strong> teslim ediliyor{reservation.customer ? ` · ${reservation.customer.full_name}` : ""}. Ayrılan ürünler sepette; satış tamamlanınca rezervasyon kapanır.</span>
+          <a href="/app/pos" className="underline-offset-2 hover:underline">Vazgeç</a>
+        </div>
+      ) : null}
 
       {/* desktop / tablet */}
       <div className="hidden gap-6 lg:grid lg:grid-cols-[1fr_1.15fr_1fr]">

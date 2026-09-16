@@ -147,6 +147,11 @@ async function toPosItems(variantIds: string[]): Promise<PosItem[]> {
   return out.sort((a, b) => a.product_name.localeCompare(b.product_name, "tr") || a.sku.localeCompare(b.sku, "tr"));
 }
 
+/** POS items for known variants (reservation fulfilment). */
+export async function posItemsFor(variantIds: string[]): Promise<PosItem[]> {
+  return toPosItems(variantIds);
+}
+
 /** Exact barcode match inside the tenant (RLS + business filter); leading zeros are part of the code. */
 export async function lookupBarcode(code: string): Promise<PosItem | null> {
   const barcode = code.trim();

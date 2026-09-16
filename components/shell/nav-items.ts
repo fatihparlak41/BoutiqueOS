@@ -42,8 +42,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Kasa", icon: ScanLine, href: "/app/pos" },
       { label: "İade / Değişim", icon: Undo2, href: "/app/pos/iade" },
-      { label: "Müşteriler", icon: Users },
-      { label: "Rezervasyonlar", icon: BookmarkCheck },
+      { label: "Müşteriler", icon: Users, href: "/app/musteriler" },
+      { label: "Rezervasyonlar", icon: BookmarkCheck, href: "/app/rezervasyonlar" },
     ],
   },
   {

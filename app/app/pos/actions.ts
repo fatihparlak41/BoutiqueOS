@@ -140,6 +140,7 @@ export async function completeSaleAction(payload: SalePayload): Promise<Result<S
   }
   const customerId = payload.customer_id && UUID.test(payload.customer_id) ? payload.customer_id : null;
   const salespersonId = payload.salesperson_id && UUID.test(payload.salesperson_id) ? payload.salesperson_id : null;
+  const reservationId = payload.reservation_id && UUID.test(payload.reservation_id) ? payload.reservation_id : null;
 
   const { data, error } = await supabase.rpc("rpc_pos_complete_sale", {
     p_register_session_id: payload.register_session_id,
@@ -158,11 +159,14 @@ export async function completeSaleAction(payload: SalePayload): Promise<Result<S
     p_discount_reason: payload.lines.some((l) => l.unit_price < l.expected_list_price) ? "negotiated" : null,
     p_note: payload.note?.trim().slice(0, 300) || null,
     p_device_id: null,
+    // fulfilment: the sale core validates the hold and converts it in this same transaction
+    p_reservation_id: reservationId,
   });
   if (error) return { ok: false, error: reportDbError("completeSale", error) };
   const r = (data ?? {}) as Record<string, unknown>;
   revalidatePath("/app/pos");
   revalidatePath("/app/stok");
+  if (reservationId) revalidatePath("/app/rezervasyonlar");
   return {
     ok: true,
     data: {
