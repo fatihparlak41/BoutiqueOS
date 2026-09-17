@@ -63,7 +63,7 @@ export default async function StockReportPage({ searchParams }: { searchParams: 
             {report.valuation ? <Kpi label="Stok değeri" value={fmtMoneyShort(report.valuation.total_value_base)} hint={`${fmtInt(report.valuation.on_hand_qty)} adet, mevcut maliyet havuzu`} /> : null}
           </KpiStrip>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <section className="space-y-3">
               <SectionHeader title="Stoku biten varyantlar" meta={t.out_of_stock > 100 ? `ilk 100 / ${fmtInt(t.out_of_stock)}` : `${fmtInt(t.out_of_stock)}`} />
               {report.out_of_stock.length === 0 ? (

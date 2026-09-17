@@ -85,7 +85,7 @@ export default async function ProductsReportPage({ searchParams }: { searchParam
         />
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section className="space-y-3">
           <SectionHeader title="En çok satan bedenler" />
           {report.top_sizes.length === 0 ? (

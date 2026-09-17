@@ -38,7 +38,7 @@ export default async function ReturnsReportPage({ searchParams }: { searchParams
             {fin ? <Kpi label="Geri gelen maliyet" value={fmtMoneyShort(t.returned_cogs)} hint="tarihsel, havuza döner" /> : null}
           </KpiStrip>
 
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <section className="space-y-3">
               <SectionHeader title="Nedene göre" />
               <ul className="divide-y divide-border rounded border border-border text-sm">
@@ -74,7 +74,7 @@ export default async function ReturnsReportPage({ searchParams }: { searchParams
             </section>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <section className="space-y-3">
               <SectionHeader title="Ürüne göre iade oranı" meta="dönemde satılan adede göre" />
               <RateTable rows={report.rate_by_product.map((r) => ({ key: r.product_id, label: r.product, ...r }))} header="Ürün" />
