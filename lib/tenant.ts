@@ -37,6 +37,8 @@ export type Membership = {
   business_name: string;
   business_code: string;
   role: UserRole;
+  /** settings.timezone (IANA), or null when the tenant has not set one — reports then use the platform default. */
+  timezone: string | null;
   /** Branch pinned on the membership row, or null when the member is not branch-scoped. */
   membership_branch_id: string | null;
   branches: Branch[];
@@ -60,7 +62,7 @@ export type TenantContext = {
  * expresses a *preference* between memberships that were proven server-side.
  */
 type EmbeddedBranch = { id: string; name: string; code: string; is_default: boolean; status: string };
-type EmbeddedBusiness = { id: string; name: string; code: string; status: string; branches: EmbeddedBranch[] | null };
+type EmbeddedBusiness = { id: string; name: string; code: string; status: string; timezone: string | null; branches: EmbeddedBranch[] | null };
 type MemberRow = { business_id: string; role: UserRole; branch_id: string | null; businesses: EmbeddedBusiness | null };
 
 export const loadMemberships = cache(async () => {
@@ -91,7 +93,7 @@ export const loadMemberships = cache(async () => {
       supabase.from("profiles").select("full_name").eq("id", userId).maybeSingle(),
       supabase
         .from("business_members")
-        .select("business_id, role, branch_id, businesses!inner(id, name, code, status, branches(id, name, code, is_default, status))")
+        .select("business_id, role, branch_id, businesses!inner(id, name, code, status, timezone:settings->>timezone, branches(id, name, code, is_default, status))")
         .eq("user_id", userId)
         .eq("is_active", true)
         .eq("businesses.status", "active")
@@ -111,6 +113,7 @@ export const loadMemberships = cache(async () => {
         business_name: business.name,
         business_code: business.code,
         role: m.role,
+        timezone: business.timezone ?? null,
         membership_branch_id: m.branch_id ?? null,
         branches: (business.branches ?? [])
           .filter((br) => br.status === "active")

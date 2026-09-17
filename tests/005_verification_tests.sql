@@ -3617,6 +3617,375 @@ SELECT t_check('T69m manager sees customers, reservations and the sale of the ho
 SELECT t_logout();
 
 -- ============================================================
+-- T70 — Phase 10B reporting foundation: tenant timezone, window semantics, one-RPC-per-
+--        surface aggregates proven against independently computed expectations, historical
+--        COGS through returns/exchanges, payment vs drawer semantics, role model (financial
+--        keys absent for sales_staff, stock_staff refused, other tenant refused).
+-- Fixture: an isolated tenant (bizR) so every number is known in advance.
+-- ============================================================
+SELECT t_logout();
+SELECT t_set('bizR', 'b0000000-0000-4000-8000-00000000000c');
+INSERT INTO businesses (id, name, code, settings) VALUES (t_get('bizR'), 'Rapor Butik', 'RPT', jsonb_build_object(
+  'accepted_currencies', jsonb_build_array('TRY'), 'sales_visibility_scope', 'own',
+  'money_refund_allowed', true, 'store_credit_allowed', false, 'exchange_window_days', 14));
+WITH x AS (INSERT INTO branches (business_id, name, code, is_default) VALUES (t_get('bizR'), 'Rapor Merkez', 'RM', true) RETURNING id) SELECT t_set('brR', id) FROM x;
+INSERT INTO business_members (business_id, user_id, role) VALUES
+  (t_get('bizR'), t_get('u1'), 'owner'), (t_get('bizR'), t_get('u2'), 'manager'),
+  (t_get('bizR'), t_get('u3'), 'sales_staff'), (t_get('bizR'), t_get('u4'), 'stock_staff');
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizR'), 'Elbise', 'elbise') RETURNING id) SELECT t_set('catR1', id) FROM x;
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizR'), 'Çanta', 'canta') RETURNING id) SELECT t_set('catR2', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizR'), 'Beden', 'size', 10) RETURNING id) SELECT t_set('optR_size', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizR'), 'Renk', 'color', 5) RETURNING id) SELECT t_set('optR_color', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optR_size'), 'S', 'S', 1) RETURNING id) SELECT t_set('ovR_s', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optR_size'), 'M', 'M', 2) RETURNING id) SELECT t_set('ovR_m', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optR_color'), 'Siyah', 'SYH', 1) RETURNING id) SELECT t_set('ovR_syh', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optR_color'), 'Kırmızı', 'KRM', 2) RETURNING id) SELECT t_set('ovR_krm', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizR'), 'Rapor Elbise', 'RP1', 500, t_get('catR1'), 'active') RETURNING id) SELECT t_set('pR1', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizR'), 'Rapor Çanta', 'RP2', 200, t_get('catR2'), 'active') RETURNING id) SELECT t_set('pR2', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pR1'), 'RP1-S-SYH') RETURNING id) SELECT t_set('vR1s', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vR1s'), t_get('optR_size'), t_get('ovR_s')), (t_get('vR1s'), t_get('optR_color'), t_get('ovR_syh'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pR1'), 'RP1-M-SYH') RETURNING id) SELECT t_set('vR1m', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vR1m'), t_get('optR_size'), t_get('ovR_m')), (t_get('vR1m'), t_get('optR_color'), t_get('ovR_syh'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pR1'), 'RP1-M-KRM') RETURNING id) SELECT t_set('vR1k', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vR1k'), t_get('optR_size'), t_get('ovR_m')), (t_get('vR1k'), t_get('optR_color'), t_get('ovR_krm'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pR2'), 'RP2-STD') RETURNING id) SELECT t_set('vR2', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('bizR'), t_get('brR'), 'Rapor Kasa') RETURNING id) SELECT t_set('regR', id) FROM x;
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('bizR'), 'Rapor Müşteri A', '+90 555 070 0001') RETURNING id) SELECT t_set('cR1', id) FROM x;
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('bizR'), 'Rapor Müşteri B', '+90 555 070 0002') RETURNING id) SELECT t_set('cR2', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizR'), 'Rapor Tedarikçi', 'TRY') RETURNING id) SELECT t_set('supR', id) FROM x;
+
+-- A) privileges + timezone setting
+SELECT t_check('T70a privileges: report RPCs to authenticated only, line sources and helpers internal',
+  has_function_privilege('authenticated', 'rpc_report_overview(uuid,date,date,uuid,date,date)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_report_overview(uuid,date,date,uuid,date,date)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_sales(uuid,date,date,uuid,uuid,uuid,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_products(uuid,date,date,uuid,text,uuid,integer)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_staff(uuid,date,date,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_payments(uuid,date,date,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_stock(uuid,uuid,integer)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_receiving(uuid,date,date,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_customers(uuid,date,date,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_report_returns(uuid,date,date,uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_business_set_timezone(uuid,text)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_report_sale_lines(uuid,timestamptz,timestamptz,uuid,uuid,uuid,uuid,boolean,uuid,text,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_report_return_lines(uuid,timestamptz,timestamptz,uuid,uuid,uuid,uuid,boolean,uuid,text,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_report_access(uuid,boolean)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_report_window(uuid,date,date)', 'EXECUTE'));
+SELECT t_check('T70a timezone default when the key is absent: Europe/Istanbul', fn_business_timezone(t_get('bizR')) = 'Europe/Istanbul');
+SELECT t_err('T70a settings guard: an invalid timezone is refused on direct write',
+  $q$ UPDATE businesses SET settings = settings || '{"timezone":"Mars/Olympus"}'::jsonb WHERE id = t_get('bizR') $q$, 'INVALID_TIMEZONE');
+SELECT t_login('u3');
+SELECT t_err('T70a sales_staff cannot set the timezone', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Asia/Nicosia') $q$, 'FORBIDDEN');
+SELECT t_login('u5');
+SELECT t_err('T70a other tenant cannot set the timezone', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Asia/Nicosia') $q$, 'FORBIDDEN');
+SELECT t_login('u1');
+SELECT t_err('T70a owner: invalid zone refused', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Europe/Lefkosa') $q$, 'INVALID_TIMEZONE');
+SELECT t_ok('T70a owner sets Asia/Nicosia', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Asia/Nicosia') $q$);
+SELECT t_logout();
+SELECT t_check('T70a timezone stored and read back', fn_business_timezone(t_get('bizR')) = 'Asia/Nicosia'
+  AND (SELECT settings ->> 'timezone' FROM businesses WHERE id = t_get('bizR')) = 'Asia/Nicosia');
+SELECT t_check('T70a window: local calendar days in the tenant zone, [from, to+1) half-open',
+  (SELECT ts_from = '2026-03-29 00:00 Asia/Nicosia'::timestamptz AND ts_to = '2026-03-31 00:00 Asia/Nicosia'::timestamptz AND tz = 'Asia/Nicosia'
+   FROM fn_report_window(t_get('bizR'), '2026-03-29', '2026-03-30')));
+SELECT t_check('T70a window crosses DST correctly (29 March 2026: 23-hour day)',
+  (SELECT ts_to - ts_from = interval '23 hours' FROM fn_report_window(t_get('bizR'), '2026-03-29', '2026-03-29')));
+SELECT t_err('T70a window: reversed range refused', $q$ SELECT * FROM fn_report_window(t_get('bizR'), '2026-03-30', '2026-03-29') $q$, 'INVALID_RANGE');
+SELECT t_err('T70a window: > 366 days refused', $q$ SELECT * FROM fn_report_window(t_get('bizR'), '2025-01-01', '2026-06-01') $q$, 'RANGE_TOO_LONG');
+
+-- B) fixture through the legitimate flows (stock with known costs, sales, hold, returns, exchange)
+SELECT t_login('u2');
+SELECT t_ok('T70b stock: RP1-S 5@200, RP1-M-SYH 5@220, RP1-M-KRM 3@210, RP2 4@80', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('bizR'), t_get('brR'), t_get('vR1s'), 'sellable', 5, 'rapor fixture', 'manual_cost', 200);
+  SELECT rpc_post_inventory_adjustment(t_get('bizR'), t_get('brR'), t_get('vR1m'), 'sellable', 5, 'rapor fixture', 'manual_cost', 220);
+  SELECT rpc_post_inventory_adjustment(t_get('bizR'), t_get('brR'), t_get('vR1k'), 'sellable', 3, 'rapor fixture', 'manual_cost', 210);
+  SELECT rpc_post_inventory_adjustment(t_get('bizR'), t_get('brR'), t_get('vR2'),  'sellable', 4, 'rapor fixture', 'manual_cost', 80) $q$);
+SELECT t_set('sessR', rpc_open_register_session(t_get('regR'), '[{"currency":"TRY","amount":1000}]'::jsonb));
+-- S1: manager cashier, salesperson u3, customer A, 2 × RP1-S @500 cash
+SELECT t_set('sR1', (rpc_pos_complete_sale(t_get('sessR'), t_json_items('vR1s','2',NULL), t_pay('cash','TRY',1000), gen_random_uuid(), t_get('cR1'), t_get('u3')) ->> 'sale_id')::uuid);
+SELECT t_logout();
+SELECT t_login('u3');
+-- S2: sales_staff sells (cashier = salesperson = u3), walk-in, RP1-M-SYH @500 + RP2 @200, card 700
+SELECT t_set('sR2', (rpc_pos_complete_sale(t_get('sessR'), t_json_items('vR1m','1',NULL, 'vR2','1',NULL), t_pay('card','TRY',700), gen_random_uuid()) ->> 'sale_id')::uuid);
+SELECT t_logout();
+SELECT t_login('u2');
+-- S3: customer B, RP1-M-KRM discounted to 450 (list 500), split cash 300 + card 150, salesperson u2
+SELECT t_set('sR3', (rpc_pos_complete_sale(t_get('sessR'), t_json_items('vR1k','1','450'), t_pay('cash','TRY',300) || t_pay('card','TRY',150), gen_random_uuid(), t_get('cR2'), t_get('u2'), 'loyalty') ->> 'sale_id')::uuid);
+-- S4: customer A again, RP2 @200, cash 250 → change 50
+SELECT t_set('sR4', (rpc_pos_complete_sale(t_get('sessR'), t_json_items('vR2','1',NULL), t_pay('cash','TRY',250), gen_random_uuid(), t_get('cR1'), t_get('u2')) ->> 'sale_id')::uuid);
+-- reservation for customer B on RP1-S, fulfilled as S5 (salesperson u3)
+SELECT t_set('rvR', (rpc_pos_reservation_create(t_get('brR'), t_get('cR2'), t_json_items('vR1s','1',NULL)) ->> 'reservation_id')::uuid);
+SELECT t_set('sR5', (rpc_pos_complete_sale(t_get('sessR'), t_json_items('vR1s','1',NULL), t_pay('cash','TRY',500), gen_random_uuid(), t_get('cR2'), t_get('u3'), NULL, NULL, NULL, t_get('rvR')) ->> 'sale_id')::uuid);
+SELECT t_check('T70b five sales through the POS, hold fulfilled', (SELECT count(*) FROM sales WHERE business_id = t_get('bizR') AND status = 'completed') = 5
+  AND (SELECT status = 'converted' FROM reservations WHERE id = t_get('rvR')));
+-- R1: refund 1 × RP1-S from S1, back to SELLABLE, reason beden_olmadi, cash
+SELECT t_set('siR1', (SELECT id FROM sale_items WHERE sale_id = t_get('sR1')));
+SELECT t_set('rR1', (rpc_pos_return(t_get('sR1'), t68_ret_item('siR1', 1, 'sellable'), 'refund', gen_random_uuid(), 'beden_olmadi', NULL, t_get('sessR'), 'cash') ->> 'return_id')::uuid);
+-- R2: exchange from S2: RP1-M-SYH (500) comes back DAMAGED, RP1-M-KRM @500 + RP2 @200 go out, cash 200 for the difference (S6, salesperson u2)
+SELECT t_set('siR2m', (SELECT id FROM sale_items WHERE sale_id = t_get('sR2') AND variant_id = t_get('vR1m')));
+SELECT t_set('siR4', (SELECT id FROM sale_items WHERE sale_id = t_get('sR4')));
+CREATE TEMP TABLE _t70_x AS SELECT rpc_pos_exchange(t_get('sessR'), t_get('sR2'), t68_ret_item('siR2m', 1, 'damaged'), t_json_items('vR1k','1',NULL, 'vR2','1',NULL), t_pay('cash','TRY',200), gen_random_uuid(), 'renk_degisimi', NULL, NULL, t_get('u2')) AS j;
+SELECT t_set('rR2', (SELECT (j ->> 'return_id')::uuid FROM _t70_x));
+SELECT t_set('sR6', (SELECT (j ->> 'sale_id')::uuid FROM _t70_x));
+-- R3: refund RP2 from S4 into QUARANTINE, card, reason kusurlu_urun
+SELECT t_set('rR3', (rpc_pos_return(t_get('sR4'), t68_ret_item('siR4', 1, 'quarantine'), 'refund', gen_random_uuid(), 'kusurlu_urun', NULL, t_get('sessR'), 'card') ->> 'return_id')::uuid);
+SELECT t_logout();
+SELECT t_check('T70b three returns (1 exchange with its replacement sale)', (SELECT count(*) FROM returns WHERE business_id = t_get('bizR')) = 3
+  AND (SELECT count(*) FROM sales WHERE business_id = t_get('bizR') AND status = 'completed') = 6
+  AND (SELECT credit_applied_base = 500 AND total = 700 FROM sales WHERE id = t_get('sR6')));
+-- posted receipt for the purchasing report: 2 × RP2 @ 90 + 10 TRY charge
+SELECT t_login('u2');
+SELECT t_set('grR', rpc_create_goods_receipt(t_get('brR'), t_get('supR'), 'TRY', 1, CURRENT_DATE, 'RPT-INV-1', NULL));
+SELECT t_ok('T70b receipt posted', $q$
+  SELECT rpc_goods_receipt_upsert_line(t_get('grR'), t_get('vR2'), 2, 90);
+  INSERT INTO goods_receipt_charges (goods_receipt_id, kind, description, amount, currency, exchange_rate, include_in_landed, liability_mode) VALUES (t_get('grR'), 'freight', 'nakliye', 10, 'TRY', 1, true, 'add_to_invoice');
+  SELECT * FROM rpc_goods_receipt_review(t_get('grR'));
+  SELECT rpc_post_goods_receipt(t_get('grR')) $q$);
+SELECT t_logout();
+
+-- the report day, in the tenant zone
+CREATE FUNCTION t70_today() RETURNS DATE LANGUAGE sql STABLE AS $$ SELECT (now() AT TIME ZONE 'Asia/Nicosia')::date $$;
+
+-- C) manager overview: every figure against the hand-computed expectation AND an independent SQL sum
+SELECT t_login('u2');
+CREATE TEMP TABLE _t70_ov AS SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today(), NULL, t70_today() - 1, t70_today() - 1) AS j;
+GRANT SELECT ON _t70_ov TO authenticated;
+SELECT t_check('T70c overview counts: 6 transactions, 9 units, 3 returns (1 exchange), 3 returned units',
+  (SELECT (j -> 'current' ->> 'transactions')::int = 6 AND (j -> 'current' ->> 'units')::int = 9 AND (j -> 'current' ->> 'returns_count')::int = 3
+      AND (j -> 'current' ->> 'exchanges_count')::int = 1 AND (j -> 'current' ->> 'returned_units')::int = 3 FROM _t70_ov),
+  (SELECT j -> 'current' FROM _t70_ov)::text);
+SELECT t_check('T70c overview money: gross 3600, discounts 50, net 3550, returns 1200, net after returns 2350, basket 591.67',
+  (SELECT (j -> 'current' ->> 'gross_sales')::numeric = 3600 AND (j -> 'current' ->> 'discounts')::numeric = 50 AND (j -> 'current' ->> 'net_sales')::numeric = 3550
+      AND (j -> 'current' ->> 'returns_value')::numeric = 1200 AND (j -> 'current' ->> 'net_sales_after_returns')::numeric = 2350
+      AND (j -> 'current' ->> 'avg_basket')::numeric = 591.67 FROM _t70_ov),
+  (SELECT j -> 'current' FROM _t70_ov)::text);
+SELECT t_check('T70c overview profit: COGS 1480 (historical), returned COGS 500, gross profit 1370, margin 58.30 %',
+  (SELECT (j -> 'current' ->> 'cogs')::numeric = 1480 AND (j -> 'current' ->> 'returned_cogs')::numeric = 500
+      AND (j -> 'current' ->> 'gross_profit')::numeric = 1370 AND (j -> 'current' ->> 'gross_margin_pct')::numeric = 58.30 FROM _t70_ov),
+  (SELECT j -> 'current' FROM _t70_ov)::text);
+SELECT t_logout();
+SELECT t_check('T70c independent cross-check: report equals raw sums over sales / sale_items / sale_costs / returns / return_item_costs',
+  (SELECT (j -> 'current' ->> 'net_sales')::numeric = (SELECT sum(total) FROM sales WHERE business_id = t_get('bizR') AND status = 'completed')
+      AND (j -> 'current' ->> 'gross_sales')::numeric = (SELECT sum(list_price * quantity) FROM sale_items WHERE business_id = t_get('bizR'))
+      AND (j -> 'current' ->> 'discounts')::numeric = (SELECT sum(discount_amount) FROM sale_items WHERE business_id = t_get('bizR'))
+      AND (j -> 'current' ->> 'cogs')::numeric = (SELECT round(sum(total_cost_base), 2) FROM sale_costs WHERE business_id = t_get('bizR'))
+      AND (j -> 'current' ->> 'returns_value')::numeric = (SELECT sum(credit_value_base) FROM returns WHERE business_id = t_get('bizR'))
+      AND (j -> 'current' ->> 'returned_cogs')::numeric = (SELECT round(sum(line_cost_base), 2) FROM return_item_costs WHERE business_id = t_get('bizR'))
+   FROM _t70_ov));
+SELECT t_check('T70c overview: previous period exists but is empty (no fabricated comparison), timezone reported, daily has exactly one day',
+  (SELECT (j -> 'previous' ->> 'transactions')::int = 0 AND (j -> 'previous' ->> 'net_sales')::numeric = 0
+      AND j -> 'period' ->> 'timezone' = 'Asia/Nicosia' AND (j -> 'period' ->> 'timezone_set')::boolean
+      AND jsonb_array_length(j -> 'daily') = 1 AND (j -> 'daily' -> 0 ->> 'date')::date = t70_today()
+      AND (j -> 'daily' -> 0 ->> 'net_sales')::numeric = 3550 AND (j -> 'daily' -> 0 ->> 'gross_profit')::numeric = 1370
+      AND (j ->> 'financial')::boolean AND j ->> 'scope' = 'business' FROM _t70_ov));
+
+-- D) timezone semantics: the same instants land on the tenant's local day, not the server's
+SELECT t_login('u1');
+SELECT t_ok('T70d owner moves the tenant to UTC-12', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Etc/GMT+12') $q$);
+SELECT t_check('T70d reports follow the tenant day at UTC-12 (today there holds the 6 sales; the next day none)',
+  (rpc_report_overview(t_get('bizR'), (now() AT TIME ZONE 'Etc/GMT+12')::date, (now() AT TIME ZONE 'Etc/GMT+12')::date) -> 'current' ->> 'transactions')::int = 6
+  AND (rpc_report_overview(t_get('bizR'), (now() AT TIME ZONE 'Etc/GMT+12')::date + 1, (now() AT TIME ZONE 'Etc/GMT+12')::date + 1) -> 'current' ->> 'transactions')::int = 0);
+SELECT t_ok('T70d owner moves the tenant to UTC+14', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Etc/GMT-14') $q$);
+SELECT t_check('T70d reports follow the tenant day at UTC+14 as well (and the previous day is empty)',
+  (rpc_report_overview(t_get('bizR'), (now() AT TIME ZONE 'Etc/GMT-14')::date, (now() AT TIME ZONE 'Etc/GMT-14')::date) -> 'current' ->> 'transactions')::int = 6
+  AND (rpc_report_overview(t_get('bizR'), (now() AT TIME ZONE 'Etc/GMT-14')::date - 1, (now() AT TIME ZONE 'Etc/GMT-14')::date - 1) -> 'current' ->> 'transactions')::int = 0);
+SELECT t_ok('T70d back to Asia/Nicosia', $q$ SELECT rpc_business_set_timezone(t_get('bizR'), 'Asia/Nicosia') $q$);
+SELECT t_logout();
+
+-- E) sales report filters
+SELECT t_login('u2');
+SELECT t_check('T70e sales by salesperson u3: 3 sales (S1, S2, S5), 5 units, net 2200, returns 1000 (R1 + R2 come from their sales)',
+  (SELECT (j -> 'totals' ->> 'transactions')::int = 3 AND (j -> 'totals' ->> 'units')::int = 5 AND (j -> 'totals' ->> 'net_sales')::numeric = 2200
+      AND (j -> 'totals' ->> 'returns_value')::numeric = 1000 AND (j -> 'totals' ->> 'discounts')::numeric = 0
+   FROM (SELECT rpc_report_sales(t_get('bizR'), t70_today(), t70_today(), NULL, t_get('u3')) AS j) x));
+SELECT t_check('T70e sales by category Çanta: 3 units, net 600, returns 200; by product RP1: 6 units, net 2950, COGS 1240',
+  (SELECT (j -> 'totals' ->> 'units')::int = 3 AND (j -> 'totals' ->> 'net_sales')::numeric = 600 AND (j -> 'totals' ->> 'returns_value')::numeric = 200
+   FROM (SELECT rpc_report_sales(t_get('bizR'), t70_today(), t70_today(), NULL, NULL, t_get('catR2')) AS j) x)
+  AND (SELECT (j -> 'totals' ->> 'units')::int = 6 AND (j -> 'totals' ->> 'net_sales')::numeric = 2950 AND (j -> 'totals' ->> 'cogs')::numeric = 1240
+       FROM (SELECT rpc_report_sales(t_get('bizR'), t70_today(), t70_today(), NULL, NULL, NULL, t_get('pR1')) AS j) x));
+SELECT t_check('T70e sales by branch row + a branch filter of another tenant is refused',
+  (SELECT jsonb_array_length(j -> 'by_branch') = 1 AND (j -> 'by_branch' -> 0 ->> 'net_sales')::numeric = 3550
+   FROM (SELECT rpc_report_sales(t_get('bizR'), t70_today(), t70_today()) AS j) x));
+SELECT t_err('T70e branch of another tenant → INVALID_BRANCH', $q$ SELECT rpc_report_sales(t_get('bizR'), t70_today(), t70_today(), t_get('brB')) $q$, 'INVALID_BRANCH');
+
+-- F) products: product / category / size / color, out-of-stock with sales
+CREATE TEMP TABLE _t70_pr AS SELECT rpc_report_products(t_get('bizR'), t70_today(), t70_today(), NULL, 'product', NULL, 50) AS j;
+GRANT SELECT ON _t70_pr TO authenticated;
+SELECT t_check('T70f by product: RP1 6 units / 2950 net / 2 returns (1000) / GP 1130; RP2 3 units / 600 / 1 return (200) / GP 240',
+  (SELECT r0 ->> 'label' = 'Rapor Elbise' AND (r0 ->> 'units')::int = 6 AND (r0 ->> 'net_sales')::numeric = 2950 AND (r0 ->> 'returns_count')::int = 2
+      AND (r0 ->> 'returns_value')::numeric = 1000 AND (r0 ->> 'cogs')::numeric = 1240 AND (r0 ->> 'returned_cogs')::numeric = 420
+      AND (r0 ->> 'gross_profit')::numeric = 1130
+      AND r1 ->> 'label' = 'Rapor Çanta' AND (r1 ->> 'units')::int = 3 AND (r1 ->> 'net_sales')::numeric = 600 AND (r1 ->> 'returns_value')::numeric = 200
+      AND (r1 ->> 'gross_profit')::numeric = 240
+   FROM (SELECT j -> 'rows' -> 0 AS r0, j -> 'rows' -> 1 AS r1 FROM _t70_pr) x),
+  (SELECT j -> 'rows' FROM _t70_pr)::text);
+SELECT t_check('T70f by category: Elbise 6 / 2950, Çanta 3 / 600',
+  (SELECT r0 ->> 'label' = 'Elbise' AND (r0 ->> 'units')::int = 6 AND r1 ->> 'label' = 'Çanta' AND (r1 ->> 'net_sales')::numeric = 600
+   FROM (SELECT j -> 'rows' -> 0 AS r0, j -> 'rows' -> 1 AS r1 FROM (SELECT rpc_report_products(t_get('bizR'), t70_today(), t70_today(), NULL, 'category') AS j) y) x));
+SELECT t_check('T70f sizes: S 3 units / 1500, M 3 units / 1450; colours: Siyah 4 / 2000, Kırmızı 2 / 950 (the bag has neither and is left out)',
+  (SELECT (SELECT count(*) FROM jsonb_array_elements(j -> 'top_sizes')) = 2
+      AND (j -> 'top_sizes' -> 0 ->> 'label') = 'S' AND (j -> 'top_sizes' -> 0 ->> 'units')::int = 3 AND (j -> 'top_sizes' -> 0 ->> 'net_sales')::numeric = 1500
+      AND (j -> 'top_sizes' -> 1 ->> 'label') = 'M' AND (j -> 'top_sizes' -> 1 ->> 'units')::int = 3 AND (j -> 'top_sizes' -> 1 ->> 'net_sales')::numeric = 1450
+      AND (SELECT count(*) FROM jsonb_array_elements(j -> 'top_colors')) = 2
+      AND (j -> 'top_colors' -> 0 ->> 'label') = 'Siyah' AND (j -> 'top_colors' -> 0 ->> 'units')::int = 4 AND (j -> 'top_colors' -> 0 ->> 'net_sales')::numeric = 2000
+      AND (j -> 'top_colors' -> 1 ->> 'label') = 'Kırmızı' AND (j -> 'top_colors' -> 1 ->> 'units')::int = 2
+   FROM _t70_pr), (SELECT j -> 'top_sizes' FROM _t70_pr)::text || (SELECT j -> 'top_colors' FROM _t70_pr)::text);
+SELECT t_check('T70f out-of-stock with sales: none yet (RP1-M-KRM still has 1)', (SELECT jsonb_array_length(j -> 'out_of_stock_with_sales') = 0 FROM _t70_pr));
+SELECT t_err('T70f unknown grouping refused', $q$ SELECT rpc_report_products(t_get('bizR'), t70_today(), t70_today(), NULL, 'brand') $q$, 'INVALID_GROUP');
+
+-- G) staff: salesperson attribution separate from the cashier
+CREATE TEMP TABLE _t70_st AS SELECT rpc_report_staff(t_get('bizR'), t70_today(), t70_today()) AS j;
+GRANT SELECT ON _t70_st TO authenticated;
+SELECT t_check('T70g salespeople: u3 3 sales / 5 units / 2200 net / returns 1000; u2 3 sales / 4 units / 1350 net / returns 200',
+  (SELECT (SELECT count(*) FROM jsonb_array_elements(j -> 'salespeople')) = 2
+      AND (j -> 'salespeople' -> 0 ->> 'user_id')::uuid = t_get('u3') AND (j -> 'salespeople' -> 0 ->> 'transactions')::int = 3
+      AND (j -> 'salespeople' -> 0 ->> 'units')::int = 5 AND (j -> 'salespeople' -> 0 ->> 'net_sales')::numeric = 2200
+      AND (j -> 'salespeople' -> 0 ->> 'returns_value')::numeric = 1000 AND (j -> 'salespeople' -> 0 ->> 'avg_basket')::numeric = 733.33
+      AND (j -> 'salespeople' -> 1 ->> 'user_id')::uuid = t_get('u2') AND (j -> 'salespeople' -> 1 ->> 'transactions')::int = 3
+      AND (j -> 'salespeople' -> 1 ->> 'net_sales')::numeric = 1350 AND (j -> 'salespeople' -> 1 ->> 'returns_value')::numeric = 200
+   FROM _t70_st), (SELECT j -> 'salespeople' FROM _t70_st)::text);
+SELECT t_check('T70g cashiers: u2 rang up 5 sales, u3 1',
+  (SELECT (j -> 'cashiers' -> 0 ->> 'user_id')::uuid = t_get('u2') AND (j -> 'cashiers' -> 0 ->> 'transactions')::int = 5
+      AND (j -> 'cashiers' -> 1 ->> 'user_id')::uuid = t_get('u3') AND (j -> 'cashiers' -> 1 ->> 'transactions')::int = 1 FROM _t70_st),
+  (SELECT j -> 'cashiers' FROM _t70_st)::text);
+
+-- H) payments: tender by method vs money that moved vs drawer
+CREATE TEMP TABLE _t70_pay AS SELECT rpc_report_payments(t_get('bizR'), t70_today(), t70_today()) AS j;
+GRANT SELECT ON _t70_pay TO authenticated;
+SELECT t_check('T70h by method: cash 2250 over 5 payments, card 850 over 2; one split-payment sale; change 50; exchange credit 500',
+  (SELECT (SELECT sum((m ->> 'amount_base')::numeric) FROM jsonb_array_elements(j -> 'by_method') m WHERE m ->> 'method' = 'cash') = 2250
+      AND (SELECT sum((m ->> 'payments')::int) FROM jsonb_array_elements(j -> 'by_method') m WHERE m ->> 'method' = 'cash') = 5
+      AND (SELECT sum((m ->> 'amount_base')::numeric) FROM jsonb_array_elements(j -> 'by_method') m WHERE m ->> 'method' = 'card') = 850
+      AND (j -> 'sales' ->> 'split_payment_sales')::int = 1 AND (j -> 'sales' ->> 'change_given')::numeric = 50
+      AND (j -> 'sales' ->> 'credit_applied')::numeric = 500 AND (j -> 'sales' ->> 'tendered_base')::numeric = 3100
+      AND (j -> 'sales' ->> 'net_sales')::numeric = 3550 FROM _t70_pay), (SELECT j FROM _t70_pay)::text);
+SELECT t_check('T70h identity: net sales = tendered − change + exchange credit (3550 = 3100 − 50 + 500)',
+  (SELECT (j -> 'sales' ->> 'net_sales')::numeric = (j -> 'sales' ->> 'tendered_base')::numeric - (j -> 'sales' ->> 'change_given')::numeric + (j -> 'sales' ->> 'credit_applied')::numeric FROM _t70_pay));
+SELECT t_check('T70h refunds: cash 500 + card 200 = 700; net payment movement 2350 = 3100 − 50 − 700',
+  (SELECT (j ->> 'refund_total')::numeric = 700 AND (j ->> 'net_payment_movement')::numeric = 2350
+      AND (SELECT (r ->> 'amount_base')::numeric FROM jsonb_array_elements(j -> 'refunds') r WHERE r ->> 'method' = 'cash') = 500
+      AND (SELECT (r ->> 'amount_base')::numeric FROM jsonb_array_elements(j -> 'refunds') r WHERE r ->> 'method' = 'card') = 200 FROM _t70_pay));
+SELECT t_check('T70h drawer is a different thing: sale_cash +2250, change_out −50, refund_cash_out −500 (card never touches it)',
+  (SELECT (SELECT (d ->> 'amount_base')::numeric FROM jsonb_array_elements(j -> 'drawer') d WHERE d ->> 'movement_type' = 'sale_cash') = 2250
+      AND (SELECT (d ->> 'amount_base')::numeric FROM jsonb_array_elements(j -> 'drawer') d WHERE d ->> 'movement_type' = 'change_out') = -50
+      AND (SELECT (d ->> 'amount_base')::numeric FROM jsonb_array_elements(j -> 'drawer') d WHERE d ->> 'movement_type' = 'refund_cash_out') = -500
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'drawer') d WHERE d ->> 'movement_type' NOT IN ('sale_cash','change_out','refund_cash_out'))
+   FROM _t70_pay), (SELECT j -> 'drawer' FROM _t70_pay)::text);
+SELECT t_check('T70h drawer cross-check against cash_movements', (SELECT (SELECT sum((d ->> 'amount_base')::numeric) FROM jsonb_array_elements(j -> 'drawer') d) FROM _t70_pay)
+  = (SELECT sum(amount_base) FROM cash_movements WHERE business_id = t_get('bizR')));
+
+-- I) stock + valuation
+CREATE TEMP TABLE _t70_stk AS SELECT rpc_report_stock(t_get('bizR'), t_get('brR'), 2) AS j;
+GRANT SELECT ON _t70_stk TO authenticated;
+SELECT t_check('T70i stock: sellable 11 (incl. the RP2 receipt), reserved 0, damaged 1, quarantine 1, low-stock 1 (RP1-M-KRM=1), none out',
+  (SELECT (j -> 'totals' ->> 'sellable')::int = 11 AND (j -> 'totals' ->> 'reserved')::int = 0 AND (j -> 'totals' ->> 'available')::int = 11
+      AND (j -> 'totals' ->> 'damaged')::int = 1 AND (j -> 'totals' ->> 'quarantine')::int = 1
+      AND (j -> 'totals' ->> 'out_of_stock')::int = 0 AND (j -> 'totals' ->> 'low_stock')::int = 1
+      AND (j -> 'low_stock' -> 0 ->> 'sku') = 'RP1-M-KRM' AND (j -> 'low_stock' -> 0 ->> 'available')::int = 1 FROM _t70_stk),
+  (SELECT j -> 'totals' FROM _t70_stk)::text);
+SELECT t_check('T70i valuation (manager): pool on-hand 13, value 2260 (600 + 1100 + 210 + 160 + 2 × 95 landed), equal to the pools',
+  (SELECT (j -> 'valuation' ->> 'on_hand_qty')::int = 13 AND (j -> 'valuation' ->> 'total_value_base')::numeric = 2260 FROM _t70_stk)
+  AND (SELECT (j -> 'valuation' ->> 'total_value_base')::numeric = (SELECT round(sum(total_value_base), 2) FROM variant_cost_pools WHERE business_id = t_get('bizR')) FROM _t70_stk),
+  (SELECT j -> 'valuation' FROM _t70_stk)::text);
+
+-- J) receiving (posted only), customers, returns
+SELECT t_check('T70j receiving: 1 posted receipt, 2 units, purchase 180, charges 10, landed 190, liability 190',
+  (SELECT (j -> 'totals' ->> 'receipts')::int = 1 AND (j -> 'totals' ->> 'units')::int = 2 AND (j -> 'totals' ->> 'purchase_value_base')::numeric = 180
+      AND (j -> 'totals' ->> 'charges_base')::numeric = 10 AND (j -> 'totals' ->> 'landed_total_base')::numeric = 190
+      AND (j -> 'totals' ->> 'liability_base')::numeric = 190 AND (j -> 'by_supplier' -> 0 ->> 'supplier') = 'Rapor Tedarikçi'
+      AND (j -> 'reversals' ->> 'count')::int = 0
+   FROM (SELECT rpc_report_receiving(t_get('bizR'), t70_today(), t70_today()) AS j) x));
+CREATE TEMP TABLE _t70_cu AS SELECT rpc_report_customers(t_get('bizR'), t70_today(), t70_today()) AS j;
+GRANT SELECT ON _t70_cu TO authenticated;
+SELECT t_check('T70j customers: 6 sales, 4 identified, 2 walk-in, 2 customers, 2 repeat, top A 1200 / B 950, A returned 700',
+  (SELECT (j -> 'totals' ->> 'sales')::int = 6 AND (j -> 'totals' ->> 'identified_sales')::int = 4 AND (j -> 'totals' ->> 'walk_in_sales')::int = 2
+      AND (j -> 'totals' ->> 'customers_with_sale')::int = 2 AND (j -> 'totals' ->> 'repeat_customers')::int = 2
+      AND (j -> 'totals' ->> 'identified_net_sales')::numeric = 2150 AND (j -> 'totals' ->> 'walk_in_net_sales')::numeric = 1400
+      AND (j -> 'top' -> 0 ->> 'name') = 'Rapor Müşteri A' AND (j -> 'top' -> 0 ->> 'net_spend')::numeric = 1200 AND (j -> 'top' -> 0 ->> 'sales')::int = 2
+      AND (j -> 'top' -> 0 ->> 'returns_value')::numeric = 700
+      AND (j -> 'top' -> 1 ->> 'name') = 'Rapor Müşteri B' AND (j -> 'top' -> 1 ->> 'net_spend')::numeric = 950
+      AND (j -> 'top' -> 0) ? 'name' AND NOT ((j -> 'top' -> 0) ? 'phone') FROM _t70_cu), (SELECT j FROM _t70_cu)::text);
+CREATE TEMP TABLE _t70_ret AS SELECT rpc_report_returns(t_get('bizR'), t70_today(), t70_today()) AS j;
+GRANT SELECT ON _t70_ret TO authenticated;
+SELECT t_check('T70j returns: 3 returns (1 exchange, 2 refunds), 3 units, value 1200, refunded 700, returned COGS 500',
+  (SELECT (j -> 'totals' ->> 'returns')::int = 3 AND (j -> 'totals' ->> 'exchanges')::int = 1 AND (j -> 'totals' ->> 'refunds')::int = 2
+      AND (j -> 'totals' ->> 'returned_units')::int = 3 AND (j -> 'totals' ->> 'returns_value')::numeric = 1200
+      AND (j -> 'totals' ->> 'refund_amount')::numeric = 700 AND (j -> 'totals' ->> 'returned_cogs')::numeric = 500 FROM _t70_ret),
+  (SELECT j -> 'totals' FROM _t70_ret)::text);
+SELECT t_check('T70j returns by reason (labels resolved), by disposition (sellable / damaged / quarantine 1 each), by type',
+  (SELECT (SELECT count(*) FROM jsonb_array_elements(j -> 'by_reason')) = 3
+      AND (SELECT r ->> 'label' FROM jsonb_array_elements(j -> 'by_reason') r WHERE r ->> 'code' = 'beden_olmadi') = 'Beden olmadı'
+      AND (SELECT (r ->> 'value')::numeric FROM jsonb_array_elements(j -> 'by_reason') r WHERE r ->> 'code' = 'renk_degisimi') = 500
+      AND (SELECT count(*) FROM jsonb_array_elements(j -> 'by_disposition')) = 3
+      AND (SELECT (d ->> 'units')::int FROM jsonb_array_elements(j -> 'by_disposition') d WHERE d ->> 'disposition' = 'damaged') = 1
+      AND (SELECT (t ->> 'returns')::int FROM jsonb_array_elements(j -> 'by_type') t WHERE t ->> 'return_type' = 'refund') = 2 FROM _t70_ret),
+  (SELECT j FROM _t70_ret)::text);
+SELECT t_check('T70j return rate: RP1 2 of 6 (33.3 %, not meaningful < 10 sold), RP2 1 of 3; size S 1 of 3, M 1 of 3 — none flagged meaningful',
+  (SELECT (SELECT (p ->> 'rate_pct')::numeric FROM jsonb_array_elements(j -> 'rate_by_product') p WHERE p ->> 'product' = 'Rapor Elbise') = 33.3
+      AND (SELECT (p ->> 'sold_units')::int FROM jsonb_array_elements(j -> 'rate_by_product') p WHERE p ->> 'product' = 'Rapor Elbise') = 6
+      AND (SELECT (p ->> 'rate_pct')::numeric FROM jsonb_array_elements(j -> 'rate_by_product') p WHERE p ->> 'product' = 'Rapor Çanta') = 33.3
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'rate_by_product') p WHERE (p ->> 'meaningful')::boolean)
+      AND (SELECT (s ->> 'returned_units')::int FROM jsonb_array_elements(j -> 'rate_by_size') s WHERE s ->> 'size' = 'S') = 1
+      AND (SELECT (s ->> 'sold_units')::int FROM jsonb_array_elements(j -> 'rate_by_size') s WHERE s ->> 'size' = 'M') = 3 FROM _t70_ret),
+  (SELECT j -> 'rate_by_product' FROM _t70_ret)::text || (SELECT j -> 'rate_by_size' FROM _t70_ret)::text);
+SELECT t_logout();
+
+-- K) role model
+SELECT t_login('u3');
+CREATE TEMP TABLE _t70_s3 AS SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today()) AS j;
+GRANT SELECT ON _t70_s3 TO authenticated;
+SELECT t_check('T70k sales_staff (scope own): sees only what they sold or were attributed — 3 sales / 2200 / returns 1000 — and no financial key at all',
+  (SELECT (j -> 'current' ->> 'transactions')::int = 3 AND (j -> 'current' ->> 'net_sales')::numeric = 2200 AND (j -> 'current' ->> 'returns_value')::numeric = 1000
+      AND NOT ((j -> 'current') ? 'cogs') AND NOT ((j -> 'current') ? 'gross_profit') AND NOT ((j -> 'current') ? 'gross_margin_pct') AND NOT ((j -> 'current') ? 'returned_cogs')
+      AND NOT ((j -> 'daily' -> 0) ? 'gross_profit') AND NOT (j ->> 'financial')::boolean AND j ->> 'scope' = 'own' FROM _t70_s3),
+  (SELECT j FROM _t70_s3)::text);
+SELECT t_check('T70k sales_staff product / staff / customer / returns rows carry no cost, profit or margin keys',
+  (SELECT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'rows') r WHERE r ? 'cogs' OR r ? 'gross_profit' OR r ? 'gross_margin_pct' OR r ? 'returned_cogs')
+      AND jsonb_array_length(j -> 'rows') = 2
+   FROM (SELECT rpc_report_products(t_get('bizR'), t70_today(), t70_today()) AS j) x)
+  AND (SELECT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'salespeople') r WHERE r ? 'gross_profit' OR r ? 'gross_margin_pct')
+       FROM (SELECT rpc_report_staff(t_get('bizR'), t70_today(), t70_today()) AS j) x)
+  AND (SELECT NOT ((j -> 'totals') ? 'returned_cogs') AND (j -> 'totals' ->> 'returns')::int = 2
+       FROM (SELECT rpc_report_returns(t_get('bizR'), t70_today(), t70_today()) AS j) x)
+  AND (SELECT (j -> 'totals' ->> 'sales')::int = 3 FROM (SELECT rpc_report_customers(t_get('bizR'), t70_today(), t70_today()) AS j) x));
+SELECT t_err('T70k sales_staff: payments report FORBIDDEN', $q$ SELECT rpc_report_payments(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k sales_staff: receiving report FORBIDDEN', $q$ SELECT rpc_report_receiving(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_check('T70k sales_staff: stock report has quantities but no valuation',
+  (SELECT (j -> 'totals' ->> 'sellable')::int = 11 AND j -> 'valuation' = 'null'::jsonb AND NOT (j ->> 'financial')::boolean
+   FROM (SELECT rpc_report_stock(t_get('bizR'), t_get('brR')) AS j) x));
+SELECT t_logout();
+-- scope widened to business: the same sales_staff now sees every sale, still without money keys
+UPDATE businesses SET settings = settings || '{"sales_visibility_scope":"business"}'::jsonb WHERE id = t_get('bizR');
+SELECT t_login('u3');
+SELECT t_check('T70k sales_staff under scope=business sees all 6 sales, still no COGS',
+  (SELECT (j -> 'current' ->> 'transactions')::int = 6 AND NOT ((j -> 'current') ? 'cogs') AND j ->> 'scope' = 'business'
+   FROM (SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today()) AS j) x));
+SELECT t_logout();
+UPDATE businesses SET settings = settings || '{"sales_visibility_scope":"own"}'::jsonb WHERE id = t_get('bizR');
+SELECT t_login('u4');
+SELECT t_err('T70k stock_staff: overview FORBIDDEN', $q$ SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k stock_staff: customers FORBIDDEN', $q$ SELECT rpc_report_customers(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k stock_staff: returns FORBIDDEN', $q$ SELECT rpc_report_returns(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k stock_staff: payments FORBIDDEN', $q$ SELECT rpc_report_payments(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k stock_staff: receiving FORBIDDEN', $q$ SELECT rpc_report_receiving(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_check('T70k stock_staff: stock report (operational) allowed, no valuation',
+  (SELECT (j -> 'totals' ->> 'damaged')::int = 1 AND j -> 'valuation' = 'null'::jsonb FROM (SELECT rpc_report_stock(t_get('bizR')) AS j) x));
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T70k other tenant: overview FORBIDDEN (business_id is not an authorisation)', $q$ SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_err('T70k other tenant: stock FORBIDDEN', $q$ SELECT rpc_report_stock(t_get('bizR')) $q$, 'FORBIDDEN');
+SELECT t_err('T70k other tenant: products FORBIDDEN', $q$ SELECT rpc_report_products(t_get('bizR'), t70_today(), t70_today()) $q$, 'FORBIDDEN');
+SELECT t_check('T70k other tenant sees only its own figures (equal to the raw sums of bizB, none of bizR)',
+  (SELECT (j -> 'current' ->> 'transactions')::int = (SELECT count(*) FROM sales WHERE business_id = t_get('bizB') AND status = 'completed')
+      AND (j -> 'current' ->> 'net_sales')::numeric = (SELECT COALESCE(sum(total), 0) FROM sales WHERE business_id = t_get('bizB') AND status = 'completed')
+      AND (j -> 'current' ->> 'net_sales')::numeric <> 3550
+   FROM (SELECT rpc_report_overview(t_get('bizB'), (now() AT TIME ZONE 'Europe/Istanbul')::date, (now() AT TIME ZONE 'Europe/Istanbul')::date) AS j) x));
+SELECT t_logout();
+SELECT t_err('T70k unauthenticated: refused', $q$ SELECT rpc_report_overview(t_get('bizR'), t70_today(), t70_today()) $q$, 'UNAUTHENTICATED');
+SELECT t_check('T70k reporting wrote nothing: sales / returns / movements / pools untouched by every report call',
+  (SELECT count(*) FROM sales WHERE business_id = t_get('bizR')) = 6 AND (SELECT count(*) FROM returns WHERE business_id = t_get('bizR')) = 3
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizR')) = 4 + 8 + 3 + 1);
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$

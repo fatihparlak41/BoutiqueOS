@@ -49,7 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Yönetim",
     items: [
-      { label: "Raporlar", icon: BarChart3 },
+      { label: "Raporlar", icon: BarChart3, href: "/app/raporlar" },
       { label: "Ayarlar", icon: Settings, href: "/app/ayarlar" },
     ],
   },

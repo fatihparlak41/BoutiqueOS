@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Users } from "lucide-react";
+import { BarChart3, ChevronRight, Users } from "lucide-react";
 import { requireTenant } from "@/lib/tenant";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -34,6 +34,23 @@ export default async function SettingsPage() {
                 <span className="block text-sm font-medium text-text-primary">Ekip</span>
                 <span className="mt-0.5 block text-xs leading-relaxed text-text-muted">
                   Çalışanları davet edin, rol ve şube atayın, erişimi açıp kapatın.
+                </span>
+              </span>
+              <ChevronRight aria-hidden className="h-4 w-4 shrink-0 stroke-[1.5] text-text-muted group-hover:text-text-primary" />
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/app/ayarlar/raporlama"
+              className="group flex items-center gap-4 py-4 transition-colors hover:bg-surface-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-2"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-border bg-background text-accent">
+                <BarChart3 aria-hidden className="h-4 w-4 stroke-[1.5]" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-text-primary">Raporlama</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-text-muted">
+                  Raporların gün saydığı saat dilimi.
                 </span>
               </span>
               <ChevronRight aria-hidden className="h-4 w-4 shrink-0 stroke-[1.5] text-text-muted group-hover:text-text-primary" />
