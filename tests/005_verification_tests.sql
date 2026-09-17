@@ -3986,6 +3986,321 @@ SELECT t_check('T70k reporting wrote nothing: sales / returns / movements / pool
   AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizR')) = 4 + 8 + 3 + 1);
 
 -- ============================================================
+-- T71 — Phase 11A fashion intelligence: deterministic signals over an isolated tenant with
+--        six synthetic products (A fast M, B old excess, C broken size run, D colour
+--        imbalance, E size-specific returns, F reserved with no availability). Arrival and
+--        sale dates are backdated on the synthetic rows only (immutability triggers are
+--        switched off for those statements — a test fixture, never a code path).
+-- ============================================================
+SELECT t_logout();
+SELECT t_set('bizF', 'b0000000-0000-4000-8000-00000000000f');
+INSERT INTO businesses (id, name, code, settings) VALUES (t_get('bizF'), 'Moda Zekâsı Butik', 'FSH', jsonb_build_object(
+  'accepted_currencies', jsonb_build_array('TRY'), 'sales_visibility_scope', 'own',
+  'money_refund_allowed', true, 'store_credit_allowed', false, 'exchange_window_days', 60, 'timezone', 'Europe/Istanbul'));
+WITH x AS (INSERT INTO branches (business_id, name, code, is_default) VALUES (t_get('bizF'), 'Moda Merkez', 'FM', true) RETURNING id) SELECT t_set('brF', id) FROM x;
+INSERT INTO business_members (business_id, user_id, role) VALUES
+  (t_get('bizF'), t_get('u1'), 'owner'), (t_get('bizF'), t_get('u2'), 'manager'),
+  (t_get('bizF'), t_get('u3'), 'sales_staff'), (t_get('bizF'), t_get('u4'), 'stock_staff');
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizF'), 'Üst', 'ust') RETURNING id) SELECT t_set('catF1', id) FROM x;
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizF'), 'Alt', 'alt') RETURNING id) SELECT t_set('catF2', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizF'), 'Beden', 'size', 10) RETURNING id) SELECT t_set('optF_size', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizF'), 'Renk', 'color', 5) RETURNING id) SELECT t_set('optF_color', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_size'), 'S', 'S', 1) RETURNING id) SELECT t_set('ovF_s', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_size'), 'M', 'M', 2) RETURNING id) SELECT t_set('ovF_m', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_size'), 'L', 'L', 3) RETURNING id) SELECT t_set('ovF_l', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_size'), 'XL', 'XL', 4) RETURNING id) SELECT t_set('ovF_xl', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_color'), 'Siyah', 'SYH', 1) RETURNING id) SELECT t_set('ovF_syh', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_color'), 'Kırmızı', 'KRM', 2) RETURNING id) SELECT t_set('ovF_krm', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optF_color'), 'Bej', 'BEJ', 3) RETURNING id) SELECT t_set('ovF_bej', id) FROM x;
+-- products
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'A Hızlı Tişört', 'FA', 300, t_get('catF1'), 'active') RETURNING id) SELECT t_set('pFA', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'B Eski Kaban', 'FB', 900, t_get('catF1'), 'active') RETURNING id) SELECT t_set('pFB', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'C Kırık Beden Elbise', 'FC', 600, t_get('catF1'), 'active') RETURNING id) SELECT t_set('pFC', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'D Renk Gömlek', 'FD', 400, t_get('catF1'), 'active') RETURNING id) SELECT t_set('pFD', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'E İade Pantolon', 'FE', 500, t_get('catF2'), 'active') RETURNING id) SELECT t_set('pFE', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, category_id, status) VALUES (t_get('bizF'), 'F Rezerve Çanta', 'FF', 700, t_get('catF2'), 'active') RETURNING id) SELECT t_set('pFF', id) FROM x;
+-- variants (key: v<product><size/colour>)
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFA'), 'FA-S') RETURNING id) SELECT t_set('vFAS', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFAS'), t_get('optF_size'), t_get('ovF_s'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFA'), 'FA-M') RETURNING id) SELECT t_set('vFAM', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFAM'), t_get('optF_size'), t_get('ovF_m'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFA'), 'FA-L') RETURNING id) SELECT t_set('vFAL', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFAL'), t_get('optF_size'), t_get('ovF_l'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFB'), 'FB-STD') RETURNING id) SELECT t_set('vFB', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFB'), t_get('optF_color'), t_get('ovF_bej'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFC'), 'FC-S') RETURNING id) SELECT t_set('vFCS', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFCS'), t_get('optF_size'), t_get('ovF_s'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFC'), 'FC-M') RETURNING id) SELECT t_set('vFCM', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFCM'), t_get('optF_size'), t_get('ovF_m'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFC'), 'FC-L') RETURNING id) SELECT t_set('vFCL', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFCL'), t_get('optF_size'), t_get('ovF_l'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFC'), 'FC-XL') RETURNING id) SELECT t_set('vFCXL', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFCXL'), t_get('optF_size'), t_get('ovF_xl'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFD'), 'FD-M-SYH') RETURNING id) SELECT t_set('vFDS', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFDS'), t_get('optF_size'), t_get('ovF_m')), (t_get('vFDS'), t_get('optF_color'), t_get('ovF_syh'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFD'), 'FD-M-KRM') RETURNING id) SELECT t_set('vFDK', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFDK'), t_get('optF_size'), t_get('ovF_m')), (t_get('vFDK'), t_get('optF_color'), t_get('ovF_krm'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFE'), 'FE-S') RETURNING id) SELECT t_set('vFES', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFES'), t_get('optF_size'), t_get('ovF_s'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFE'), 'FE-M') RETURNING id) SELECT t_set('vFEM', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFEM'), t_get('optF_size'), t_get('ovF_m'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFE'), 'FE-L') RETURNING id) SELECT t_set('vFEL', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFEL'), t_get('optF_size'), t_get('ovF_l'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pFF'), 'FF-STD') RETURNING id) SELECT t_set('vFF', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vFF'), t_get('optF_color'), t_get('ovF_bej'));
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('bizF'), t_get('brF'), 'Moda Kasa') RETURNING id) SELECT t_set('regF', id) FROM x;
+WITH x AS (INSERT INTO customers (business_id, full_name, phone) VALUES (t_get('bizF'), 'Moda Müşteri', '+90 555 071 0001') RETURNING id) SELECT t_set('cF', id) FROM x;
+
+-- sales in the window (each a separate ticket; salesperson = manager)
+CREATE FUNCTION t71_sell(k TEXT, qty INT) RETURNS UUID LANGUAGE plpgsql AS $$
+DECLARE r JSONB; BEGIN
+  r := rpc_pos_complete_sale(t_get('sessF'), t_json_items(k, qty::text, NULL), t_pay('cash','TRY', qty * (SELECT COALESCE(pv.sale_price_override, p.default_sale_price) FROM product_variants pv JOIN products p ON p.id = pv.product_id WHERE pv.id = t_get(k))), gen_random_uuid());
+  RETURN (r ->> 'sale_id')::uuid; END $$;
+-- supply (opening stock with known costs) + sales, all through the RPCs
+SELECT t_login('u2');
+SELECT t_ok('T71 supply: A 5/12/5 @100, B 20 @200, C 4×4 @150, D 10/10 @80, E 12/15/12 @120, F 3 @90', $q$
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFAS'), 'sellable', 5, 'fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFAM'), 'sellable', 12, 'fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFAL'), 'sellable', 5, 'fixture', 'manual_cost', 100);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFB'), 'sellable', 20, 'fixture', 'manual_cost', 200);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFCS'), 'sellable', 4, 'fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFCM'), 'sellable', 4, 'fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFCL'), 'sellable', 4, 'fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFCXL'), 'sellable', 4, 'fixture', 'manual_cost', 150);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFDS'), 'sellable', 10, 'fixture', 'manual_cost', 80);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFDK'), 'sellable', 10, 'fixture', 'manual_cost', 80);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFES'), 'sellable', 12, 'fixture', 'manual_cost', 120);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFEM'), 'sellable', 15, 'fixture', 'manual_cost', 120);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFEL'), 'sellable', 12, 'fixture', 'manual_cost', 120);
+  SELECT rpc_post_inventory_adjustment(t_get('bizF'), t_get('brF'), t_get('vFF'),  'sellable', 3, 'fixture', 'manual_cost', 90) $q$);
+SELECT t_set('sessF', rpc_open_register_session(t_get('regF'), '[]'::jsonb));
+SELECT t_ok('T71 sales: A S1 M10 L1 · C M4 L4 · D Siyah9 Kırmızı1 · E S10 M12 L10 · F 1 · B 1 (to be backdated out of the window)', $q$
+  SELECT t71_sell('vFAS', 1); SELECT t71_sell('vFAM', 2); SELECT t71_sell('vFAM', 2); SELECT t71_sell('vFAM', 2); SELECT t71_sell('vFAM', 2); SELECT t71_sell('vFAM', 2); SELECT t71_sell('vFAL', 1);
+  SELECT t71_sell('vFCM', 2); SELECT t71_sell('vFCM', 2); SELECT t71_sell('vFCL', 2); SELECT t71_sell('vFCL', 2);
+  SELECT t71_sell('vFDS', 3); SELECT t71_sell('vFDS', 3); SELECT t71_sell('vFDS', 3); SELECT t71_sell('vFDK', 1);
+  SELECT t71_sell('vFES', 5); SELECT t71_sell('vFES', 5); SELECT t71_sell('vFEM', 4); SELECT t71_sell('vFEM', 4); SELECT t71_sell('vFEM', 4); SELECT t71_sell('vFEL', 5); SELECT t71_sell('vFEL', 5);
+  SELECT t71_sell('vFF', 1) $q$);
+SELECT t_set('sFB', t71_sell('vFB', 1));
+-- returns on E: M 4 (2 back to sellable, 2 damaged), S 1 quarantine
+SELECT t_set('siFEM1', (SELECT si.id FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.variant_id = t_get('vFEM') ORDER BY s.created_at LIMIT 1));
+SELECT t_set('siFEM2', (SELECT si.id FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.variant_id = t_get('vFEM') ORDER BY s.created_at OFFSET 1 LIMIT 1));
+SELECT t_set('siFES1', (SELECT si.id FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.variant_id = t_get('vFES') ORDER BY s.created_at LIMIT 1));
+SELECT t_ok('T71 returns: E-M 2 sellable + 2 damaged, E-S 1 quarantine', $q$
+  SELECT rpc_pos_return((SELECT sale_id FROM sale_items WHERE id = t_get('siFEM1')), t68_ret_item('siFEM1', 2, 'sellable'), 'refund', gen_random_uuid(), 'beden_olmadi', NULL, t_get('sessF'), 'cash');
+  SELECT rpc_pos_return((SELECT sale_id FROM sale_items WHERE id = t_get('siFEM2')), t68_ret_item('siFEM2', 2, 'damaged'), 'refund', gen_random_uuid(), 'kusurlu_urun', NULL, t_get('sessF'), 'cash');
+  SELECT rpc_pos_return((SELECT sale_id FROM sale_items WHERE id = t_get('siFES1')), t68_ret_item('siFES1', 1, 'quarantine'), 'refund', gen_random_uuid(), 'beden_olmadi', NULL, t_get('sessF'), 'cash') $q$);
+-- reservations on F: two active holds (1 unit each) + one cancelled
+SELECT t_set('rvF1', (rpc_pos_reservation_create(t_get('brF'), t_get('cF'), t_json_items('vFF','1',NULL)) ->> 'reservation_id')::uuid);
+SELECT t_set('rvF2', (rpc_pos_reservation_create(t_get('brF'), t_get('cF'), t_json_items('vFF','1',NULL)) ->> 'reservation_id')::uuid);
+SELECT t_set('rvF3', (rpc_pos_reservation_create(t_get('brF'), t_get('cF'), t_json_items('vFAS','1',NULL)) ->> 'reservation_id')::uuid);
+SELECT t_ok('T71 one hold cancelled', $q$ SELECT rpc_reservation_cancel(t_get('rvF3'), 'vazgeçti') $q$);
+SELECT t_logout();
+
+-- backdate arrivals (A −20, B −150, C −45, D −30, E −25, F −10 days) and B's sale (−40 days): synthetic rows only
+ALTER TABLE inventory_movements DISABLE TRIGGER trg_imm_inventory_movements;
+UPDATE inventory_movements SET occurred_at = now() - interval '20 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id IN (t_get('vFAS'), t_get('vFAM'), t_get('vFAL'));
+UPDATE inventory_movements SET occurred_at = now() - interval '150 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id = t_get('vFB');
+UPDATE inventory_movements SET occurred_at = now() - interval '45 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id IN (t_get('vFCS'), t_get('vFCM'), t_get('vFCL'), t_get('vFCXL'));
+UPDATE inventory_movements SET occurred_at = now() - interval '30 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id IN (t_get('vFDS'), t_get('vFDK'));
+UPDATE inventory_movements SET occurred_at = now() - interval '25 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id IN (t_get('vFES'), t_get('vFEM'), t_get('vFEL'));
+UPDATE inventory_movements SET occurred_at = now() - interval '10 days' WHERE business_id = t_get('bizF') AND reason = 'adjustment' AND variant_id = t_get('vFF');
+ALTER TABLE inventory_movements ENABLE TRIGGER trg_imm_inventory_movements;
+ALTER TABLE sales DISABLE TRIGGER trg_guard_sales;
+UPDATE sales SET occurred_at = now() - interval '40 days' WHERE id = t_get('sFB');
+ALTER TABLE sales ENABLE TRIGGER trg_guard_sales;
+
+-- A) privileges
+SELECT t_check('T71a privileges: intelligence RPCs to authenticated only, facts and helpers internal',
+  has_function_privilege('authenticated', 'rpc_intel_home(uuid,uuid,integer,integer,integer,integer,integer,integer,integer,integer,integer)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_intel_home(uuid,uuid,integer,integer,integer,integer,integer,integer,integer,integer,integer)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_intel_dimensions(uuid,uuid,integer,uuid,uuid,integer)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_intel_product(uuid,integer,integer)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_intel_facts(uuid,uuid,timestamptz,timestamptz,boolean,boolean,boolean,uuid,text,uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_intel_access(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_intel_window(uuid,integer)', 'EXECUTE'));
+
+-- B) manager home
+SELECT t_login('u2');
+CREATE TEMP TABLE _t71 AS SELECT rpc_intel_home(t_get('bizF'), NULL, 30) AS j;
+GRANT SELECT ON _t71 TO authenticated;
+SELECT t_check('T71b summary: 14 variants / 6 products, 12 with stock, 3 out (C-M, C-L, F), 63 sold and 5 returned in the window, 2 active holds, enough data',
+  (SELECT (j -> 'summary' ->> 'variants')::int = 14 AND (j -> 'summary' ->> 'products')::int = 6 AND (j -> 'summary' ->> 'with_stock')::int = 12
+      AND (j -> 'summary' ->> 'out_of_stock')::int = 3 AND (j -> 'summary' ->> 'never_stocked')::int = 0
+      AND (j -> 'summary' ->> 'sold_win')::int = 63 AND (j -> 'summary' ->> 'returned_win')::int = 5 AND (j -> 'summary' ->> 'holds_active')::int = 2
+      AND (j -> 'summary' ->> 'enough_data')::boolean AND (j -> 'window' ->> 'days')::int = 30 AND (j ->> 'financial')::boolean FROM _t71),
+  (SELECT j -> 'summary' FROM _t71)::text);
+SELECT t_check('T71b fast movers by velocity: E 32/26 = 1.23, A 12/21 = 0.57, D 10/30 = 0.33, C 8/30 = 0.27; F (1 unit) and B (0) excluded',
+  (SELECT jsonb_array_length(j -> 'fast_movers') = 4
+      AND (j -> 'fast_movers' -> 0 ->> 'product') = 'E İade Pantolon' AND (j -> 'fast_movers' -> 0 ->> 'velocity')::numeric = 1.23 AND (j -> 'fast_movers' -> 0 ->> 'active_days')::int = 26
+      AND (j -> 'fast_movers' -> 1 ->> 'product') = 'A Hızlı Tişört' AND (j -> 'fast_movers' -> 1 ->> 'velocity')::numeric = 0.57 AND (j -> 'fast_movers' -> 1 ->> 'sold_win')::int = 12
+      AND (j -> 'fast_movers' -> 1 ->> 'sell_through_pct')::numeric = 54.5 AND (j -> 'fast_movers' -> 1 ->> 'days_of_cover')::numeric = 18
+      AND (j -> 'fast_movers' -> 2 ->> 'product') = 'D Renk Gömlek' AND (j -> 'fast_movers' -> 2 ->> 'velocity')::numeric = 0.33
+      AND (j -> 'fast_movers' -> 3 ->> 'product') = 'C Kırık Beden Elbise' AND (j -> 'fast_movers' -> 3 ->> 'velocity')::numeric = 0.27 FROM _t71),
+  (SELECT j -> 'fast_movers' FROM _t71)::text);
+SELECT t_check('T71b slow movers: only B (150 days, 19 available, 0 in window, last sale 40 days ago) with its explanation and value 3800',
+  (SELECT jsonb_array_length(j -> 'slow_movers') = 1 AND (j -> 'slow_movers' -> 0 ->> 'sku') = 'FB-STD' AND (j -> 'slow_movers' -> 0 ->> 'age_days')::int = 150
+      AND (j -> 'slow_movers' -> 0 ->> 'available')::int = 19 AND (j -> 'slow_movers' -> 0 ->> 'days_since_sale')::int = 40
+      AND (j -> 'slow_movers' -> 0 ->> 'sellable_value')::numeric = 3800
+      AND (j -> 'slow_movers' -> 0 ->> 'why') = '150 gündür stokta, 19 adet müsait, son 30 günde 0 adet satıldı, son satış 40 gün önce' FROM _t71),
+  (SELECT j -> 'slow_movers' FROM _t71)::text);
+SELECT t_check('T71b broken size run: only C — S XL available, M L missing (8 sold from the missing sizes), no never-stocked size',
+  (SELECT jsonb_array_length(j -> 'broken_size_runs') = 1 AND (j -> 'broken_size_runs' -> 0 ->> 'product') = 'C Kırık Beden Elbise'
+      AND (j -> 'broken_size_runs' -> 0 ->> 'sizes_available') = 'S XL' AND (j -> 'broken_size_runs' -> 0 ->> 'sizes_missing') = 'M L'
+      AND (j -> 'broken_size_runs' -> 0 -> 'sizes_never_stocked') = 'null'::jsonb
+      AND (j -> 'broken_size_runs' -> 0 ->> 'sold_win_missing_sizes')::int = 8 AND (j -> 'broken_size_runs' -> 0 ->> 'available')::int = 8 FROM _t71),
+  (SELECT j -> 'broken_size_runs' FROM _t71)::text);
+SELECT t_check('T71b out of stock with demand: C-M (4), C-L (4), F (1 sold, 2 holds)',
+  (SELECT jsonb_array_length(j -> 'out_of_stock') = 3
+      AND (SELECT string_agg(x ->> 'sku', ',' ORDER BY (x ->> 'sold_win')::int DESC, x ->> 'sku') FROM jsonb_array_elements(j -> 'out_of_stock') x) = 'FC-L,FC-M,FF-STD'
+      AND (SELECT (x ->> 'holds_active')::int FROM jsonb_array_elements(j -> 'out_of_stock') x WHERE x ->> 'sku' = 'FF-STD') = 2 FROM _t71),
+  (SELECT j -> 'out_of_stock' FROM _t71)::text);
+SELECT t_check('T71b replenishment candidates: A-M (10 sold, 2 left), E-L / E-S (10, 2), D-Siyah (9, 1), C-M (4, 0), C-L (4, 0), F (holds ≥ available) — each with its sentence',
+  (SELECT jsonb_array_length(j -> 'replenishment') = 7
+      AND (j -> 'replenishment' -> 0 ->> 'sku') = 'FA-M' AND (j -> 'replenishment' -> 0 ->> 'why') = 'Son 30 günde 10 adet satıldı, 2 adet müsait kaldı.'
+      AND (j -> 'replenishment' -> 3 ->> 'sku') = 'FD-M-SYH' AND (j -> 'replenishment' -> 3 ->> 'available')::int = 1
+      AND (SELECT string_agg(x ->> 'sku', ',' ORDER BY x ->> 'sku') FROM jsonb_array_elements(j -> 'replenishment') x) = 'FA-M,FC-L,FC-M,FD-M-SYH,FE-L,FE-S,FF-STD'
+      AND (SELECT x ->> 'why' FROM jsonb_array_elements(j -> 'replenishment') x WHERE x ->> 'sku' = 'FF-STD') = 'Son 30 günde 1 adet satıldı, 0 adet müsait, 2 aktif rezervasyon bekliyor.' FROM _t71),
+  (SELECT j -> 'replenishment' FROM _t71)::text);
+SELECT t_check('T71b excess: only B (19 available ≥ 10, 150 days, nothing sold in the window); D-Kırmızı (9, 30 days) is not',
+  (SELECT jsonb_array_length(j -> 'excess') = 1 AND (j -> 'excess' -> 0 ->> 'sku') = 'FB-STD'
+      AND (j -> 'excess' -> 0 ->> 'why') = '19 adet müsait, 150 gündür stokta, son 30 günde hiç satılmadı.' FROM _t71),
+  (SELECT j -> 'excess' FROM _t71)::text);
+SELECT t_check('T71b aging by first arrival: 0–30 = 31 units / 9 variants / 3060; 31–60 = 8 / 2 / 1200; 61–90 0; 91–120 0; 120+ = 19 / 1 / 3800',
+  (SELECT jsonb_array_length(j -> 'aging') = 5
+      AND (j -> 'aging' -> 0 ->> 'units')::int = 31 AND (j -> 'aging' -> 0 ->> 'variants')::int = 9 AND (j -> 'aging' -> 0 ->> 'value')::numeric = 3060
+      AND (j -> 'aging' -> 1 ->> 'units')::int = 8 AND (j -> 'aging' -> 1 ->> 'variants')::int = 2 AND (j -> 'aging' -> 1 ->> 'value')::numeric = 1200
+      AND (j -> 'aging' -> 2 ->> 'units')::int = 0 AND (j -> 'aging' -> 3 ->> 'units')::int = 0
+      AND (j -> 'aging' -> 4 ->> 'bucket') = '120+' AND (j -> 'aging' -> 4 ->> 'units')::int = 19 AND (j -> 'aging' -> 4 ->> 'value')::numeric = 3800
+      AND (j -> 'aging' -> 4 ->> 'no_sale_units')::int = 19 FROM _t71),
+  (SELECT j -> 'aging' FROM _t71)::text);
+SELECT t_check('T71b aging value equals the cost pools (MWA × sellable)',
+  (SELECT (SELECT sum((x ->> 'value')::numeric) FROM jsonb_array_elements(j -> 'aging') x) FROM _t71)
+  = (SELECT round(sum(vcp.total_value_base / vcp.on_hand_qty * (SELECT sum(m.quantity) FROM inventory_movements m WHERE m.variant_id = vcp.variant_id AND m.bucket = 'sellable')), 2)
+     FROM variant_cost_pools vcp WHERE vcp.business_id = t_get('bizF') AND vcp.on_hand_qty > 0));
+SELECT t_check('T71b return signals: E·M size 4/12 = 33.3 % meaningful, E·S 1/10 = 10 % meaningful, product E 5/32 = 15.6 %; nothing for A–D, F',
+  (SELECT (SELECT (x ->> 'rate_pct')::numeric FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'size' AND x ->> 'key' = t_get('pFE')::text || ':M') = 33.3
+      AND (SELECT (x ->> 'meaningful')::boolean FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'size' AND x ->> 'key' = t_get('pFE')::text || ':M')
+      AND (SELECT (x ->> 'rate_pct')::numeric FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'size' AND x ->> 'key' = t_get('pFE')::text || ':S') = 10.0
+      AND (SELECT (x ->> 'rate_pct')::numeric FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'product') = 15.6
+      AND (SELECT (x ->> 'sold_win')::int FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'product') = 32
+      AND (SELECT count(*) FROM jsonb_array_elements(j -> 'return_signals') x WHERE x ->> 'kind' = 'variant') = 2
+      AND (j -> 'return_signals' -> 0 ->> 'rate_pct')::numeric = 33.3 FROM _t71),
+  (SELECT j -> 'return_signals' FROM _t71)::text);
+SELECT t_check('T71b reservation demand: F 2 active holds on 2 sellable → 0 available, low stock; A-S shows the cancelled hold',
+  (SELECT (SELECT (x ->> 'holds_active')::int = 2 AND (x ->> 'reserved')::int = 2 AND (x ->> 'sellable')::int = 2 AND (x ->> 'available')::int = 0 AND (x ->> 'low_stock')::boolean
+          FROM jsonb_array_elements(j -> 'reservation_demand') x WHERE x ->> 'sku' = 'FF-STD')
+      AND (SELECT (x ->> 'cancelled_win')::int = 1 AND (x ->> 'holds_active')::int = 0 FROM jsonb_array_elements(j -> 'reservation_demand') x WHERE x ->> 'sku' = 'FA-S')
+      AND jsonb_array_length(j -> 'reservation_demand') = 2 FROM _t71),
+  (SELECT j -> 'reservation_demand' FROM _t71)::text);
+SELECT t_check('T71b a 7-day window makes B''s 40-day-old sale and the 30-day stocked D still count correctly (window bounded, thresholds echoed)',
+  (SELECT (j -> 'window' ->> 'days')::int = 7 AND (j -> 'thresholds' ->> 'min_sample')::int = 5 AND (j -> 'thresholds' ->> 'slow_age_days')::int = 60
+   FROM (SELECT rpc_intel_home(t_get('bizF'), NULL, 3, 5) AS j) x));
+SELECT t_err('T71b branch of another tenant refused', $q$ SELECT rpc_intel_home(t_get('bizF'), t_get('brB')) $q$, 'INVALID_BRANCH');
+
+-- C) size / colour dimensions
+CREATE TEMP TABLE _t71d AS SELECT rpc_intel_dimensions(t_get('bizF'), NULL, 30) AS j;
+GRANT SELECT ON _t71d TO authenticated;
+SELECT t_check('T71c sizes: S 11 (17.7 %), M 36 (58.1 %), L 15 (24.2 %), XL 0 — over 62 sized units; availability and stockouts per size',
+  (SELECT (j ->> 'sold_sized')::int = 62 AND jsonb_array_length(j -> 'sizes') = 4
+      AND (j -> 'sizes' -> 0 ->> 'value') = 'S' AND (j -> 'sizes' -> 0 ->> 'sold_win')::int = 11 AND (j -> 'sizes' -> 0 ->> 'share_pct')::numeric = 17.7
+      AND (j -> 'sizes' -> 1 ->> 'value') = 'M' AND (j -> 'sizes' -> 1 ->> 'sold_win')::int = 36 AND (j -> 'sizes' -> 1 ->> 'share_pct')::numeric = 58.1
+      AND (j -> 'sizes' -> 1 ->> 'returned_win')::int = 4 AND (j -> 'sizes' -> 1 ->> 'return_rate_pct')::numeric = 11.1
+      AND (j -> 'sizes' -> 1 ->> 'variants_out')::int = 1 AND (j -> 'sizes' -> 1 ->> 'available')::int = 2 + 0 + 1 + 9 + 5
+      AND (j -> 'sizes' -> 2 ->> 'value') = 'L' AND (j -> 'sizes' -> 2 ->> 'share_pct')::numeric = 24.2
+      AND (j -> 'sizes' -> 3 ->> 'value') = 'XL' AND (j -> 'sizes' -> 3 ->> 'sold_win')::int = 0 AND (j -> 'sizes' -> 3 ->> 'share_pct')::numeric = 0 FROM _t71d),
+  (SELECT j -> 'sizes' FROM _t71d)::text);
+SELECT t_check('T71c colours: Siyah 9 (81.8 %), Kırmızı 1 (9.1 %), Bej 1 (9.1 %) over 11 coloured units; Kırmızı 9 available, Siyah 1',
+  (SELECT (j ->> 'sold_colored')::int = 11
+      AND (j -> 'colors' -> 0 ->> 'value') = 'Siyah' AND (j -> 'colors' -> 0 ->> 'share_pct')::numeric = 81.8 AND (j -> 'colors' -> 0 ->> 'available')::int = 1
+      AND (SELECT (x ->> 'available')::int FROM jsonb_array_elements(j -> 'colors') x WHERE x ->> 'value' = 'Kırmızı') = 9
+      AND (SELECT (x ->> 'share_pct')::numeric FROM jsonb_array_elements(j -> 'colors') x WHERE x ->> 'value' = 'Bej') = 9.1
+      AND (SELECT (x ->> 'return_rate_pct') IS NULL FROM jsonb_array_elements(j -> 'colors') x WHERE x ->> 'value' = 'Bej') FROM _t71d),
+  (SELECT j -> 'colors' FROM _t71d)::text);
+SELECT t_check('T71c small sample: category Alt alone has E + F; a product filter on D shows shares (10 units) but no return rate (< 10 per colour)',
+  (SELECT (j -> 'colors' -> 0 ->> 'share_pct')::numeric = 90.0 AND (j -> 'colors' -> 0 ->> 'return_rate_pct') IS NULL AND (j ->> 'sold_colored')::int = 10
+   FROM (SELECT rpc_intel_dimensions(t_get('bizF'), NULL, 30, NULL, t_get('pFD')) AS j) x)
+  AND (SELECT (j ->> 'sold_win')::int = 33 AND (SELECT count(*) FROM jsonb_array_elements(j -> 'sizes')) = 3
+       FROM (SELECT rpc_intel_dimensions(t_get('bizF'), NULL, 30, t_get('catF2')) AS j) x));
+SELECT t_check('T71c below the sample threshold shares are withheld (min_sample 100 → NULL), counts still shown',
+  (SELECT (j -> 'sizes' -> 1 ->> 'share_pct') IS NULL AND (j -> 'sizes' -> 1 ->> 'sold_win')::int = 36
+   FROM (SELECT rpc_intel_dimensions(t_get('bizF'), NULL, 30, NULL, NULL, 100) AS j) x));
+
+-- D) product intelligence
+CREATE TEMP TABLE _t71p AS SELECT rpc_intel_product(t_get('pFA'), 30) AS j;
+GRANT SELECT ON _t71p TO authenticated;
+SELECT t_check('T71d product A: 12 sold / 22 supplied → sell-through 54.5 %, velocity 0.57 over 21 active days, cover 18 days, stock 10, age 20, value 1000',
+  (SELECT (j ->> 'sold_win')::int = 12 AND (j ->> 'supplied')::int = 22 AND (j ->> 'sell_through_pct')::numeric = 54.5
+      AND (j ->> 'velocity')::numeric = 0.57 AND (j ->> 'active_days')::int = 21 AND (j ->> 'days_of_cover')::numeric = 18
+      AND (j -> 'stock' ->> 'available')::int = 10 AND (j -> 'stock' ->> 'sellable')::int = 10 AND (j ->> 'age_days')::int = 20
+      AND (j ->> 'stock_value')::numeric = 1000 AND (j ->> 'enough_data')::boolean AND (j ->> 'return_rate_pct')::numeric = 0
+      AND (j ->> 'holds_active')::int = 0 AND (j ->> 'variants_out')::int = 0 FROM _t71p),
+  (SELECT j FROM _t71p)::text);
+SELECT t_check('T71d product A sizes: M 10 of 12 = 83.3 %, 2 available; S 1 (8.3 %); L 1; variants detail in size order',
+  (SELECT (j -> 'sizes' -> 1 ->> 'value') = 'M' AND (j -> 'sizes' -> 1 ->> 'share_pct')::numeric = 83.3 AND (j -> 'sizes' -> 1 ->> 'available')::int = 2
+      AND (j -> 'sizes' -> 0 ->> 'value') = 'S' AND (j -> 'sizes' -> 0 ->> 'share_pct')::numeric = 8.3
+      AND (j -> 'variants_detail' -> 0 ->> 'sku') = 'FA-S' AND (j -> 'variants_detail' -> 1 ->> 'sku') = 'FA-M' AND (j -> 'variants_detail' -> 1 ->> 'age_days')::int = 20 FROM _t71p),
+  (SELECT j -> 'sizes' FROM _t71p)::text);
+SELECT t_check('T71d product B: sell-through 5 %, no sale in the window → velocity 0, no cover, last sale 40 days ago, not enough data',
+  (SELECT (j ->> 'sell_through_pct')::numeric = 5.0 AND (j ->> 'velocity')::numeric = 0 AND (j ->> 'days_of_cover') IS NULL
+      AND (j ->> 'days_since_sale')::int = 40 AND (j ->> 'age_days')::int = 150 AND NOT (j ->> 'enough_data')::boolean AND (j ->> 'return_rate_pct') IS NULL
+   FROM (SELECT rpc_intel_product(t_get('pFB'), 30) AS j) x));
+SELECT t_check('T71d product C sizes flag the missing M and L',
+  (SELECT (SELECT bool_and((x ->> 'out')::boolean) FROM jsonb_array_elements(j -> 'sizes') x WHERE x ->> 'value' IN ('M','L'))
+      AND (SELECT bool_and(NOT (x ->> 'out')::boolean) FROM jsonb_array_elements(j -> 'sizes') x WHERE x ->> 'value' IN ('S','XL'))
+      AND (j ->> 'variants_out')::int = 2 FROM (SELECT rpc_intel_product(t_get('pFC'), 30) AS j) x));
+SELECT t_err('T71d unknown product → NOT_FOUND', $q$ SELECT rpc_intel_product(gen_random_uuid()) $q$, 'NOT_FOUND');
+SELECT t_logout();
+
+-- E) roles
+SELECT t_login('u3');
+CREATE TEMP TABLE _t71s AS SELECT rpc_intel_home(t_get('bizF'), NULL, 30) AS j;
+GRANT SELECT ON _t71s TO authenticated;
+SELECT t_check('T71e sales_staff (scope own, sold nothing): no sales-derived signals, no money; stock-side signals intact (broken C, F waits on holds)',
+  (SELECT NOT (j ->> 'financial')::boolean AND j ->> 'scope' = 'own' AND (j -> 'summary' ->> 'sold_win')::int = 0 AND NOT (j -> 'summary' ->> 'enough_data')::boolean
+      AND jsonb_array_length(j -> 'fast_movers') = 0 AND jsonb_array_length(j -> 'broken_size_runs') = 1
+      AND (SELECT string_agg(x ->> 'sku', ',' ORDER BY x ->> 'sku') FROM jsonb_array_elements(j -> 'replenishment') x) = 'FF-STD'
+      AND (j -> 'aging' -> 4 -> 'value') = 'null'::jsonb AND (j -> 'aging' -> 4 ->> 'units')::int = 19
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'slow_movers') x WHERE (x -> 'sellable_value') <> 'null'::jsonb) FROM _t71s),
+  (SELECT j FROM _t71s)::text);
+SELECT t_check('T71e sales_staff product view: no stock value, no sell-through from invisible sales',
+  (SELECT (j ->> 'stock_value') IS NULL AND (j ->> 'sold_win')::int = 0 AND (j ->> 'sell_through_pct')::numeric = 0 AND (j -> 'stock' ->> 'available')::int = 10
+   FROM (SELECT rpc_intel_product(t_get('pFA'), 30) AS j) x));
+SELECT t_logout();
+UPDATE businesses SET settings = settings || '{"sales_visibility_scope":"business"}'::jsonb WHERE id = t_get('bizF');
+SELECT t_login('u3');
+SELECT t_check('T71e sales_staff under scope=business sees the sales-derived signals, still no money',
+  (SELECT (j -> 'summary' ->> 'sold_win')::int = 63 AND jsonb_array_length(j -> 'fast_movers') = 4 AND jsonb_array_length(j -> 'replenishment') = 7
+      AND (j -> 'slow_movers' -> 0 -> 'sellable_value') = 'null'::jsonb AND (j -> 'aging' -> 0 -> 'value') = 'null'::jsonb
+   FROM (SELECT rpc_intel_home(t_get('bizF'), NULL, 30) AS j) x));
+SELECT t_logout();
+UPDATE businesses SET settings = settings || '{"sales_visibility_scope":"own"}'::jsonb WHERE id = t_get('bizF');
+SELECT t_login('u4');
+SELECT t_check('T71e stock_staff: stock-side only — sales, returns, holds and value sections absent; F counts as available (holds invisible)',
+  (SELECT (j -> 'fast_movers') = 'null'::jsonb AND (j -> 'slow_movers') = 'null'::jsonb AND (j -> 'replenishment') = 'null'::jsonb AND (j -> 'excess') = 'null'::jsonb
+      AND (j -> 'return_signals') = 'null'::jsonb AND (j -> 'reservation_demand') = 'null'::jsonb AND NOT (j ->> 'sales')::boolean
+      AND jsonb_array_length(j -> 'broken_size_runs') = 1 AND (j -> 'summary' ->> 'out_of_stock')::int = 2
+      AND (j -> 'aging' -> 4 ->> 'units')::int = 19 AND (j -> 'aging' -> 4 -> 'value') = 'null'::jsonb
+   FROM (SELECT rpc_intel_home(t_get('bizF'), NULL, 30) AS j) x));
+SELECT t_check('T71e stock_staff dimensions: availability only, no sold units',
+  (SELECT (j ->> 'sold_win')::int = 0 AND (j -> 'sizes' -> 1 ->> 'available')::int = 2 + 0 + 1 + 9 + 5 AND (j -> 'sizes' -> 1 ->> 'share_pct') IS NULL
+   FROM (SELECT rpc_intel_dimensions(t_get('bizF'), NULL, 30) AS j) x));
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T71e other tenant: home FORBIDDEN', $q$ SELECT rpc_intel_home(t_get('bizF')) $q$, 'FORBIDDEN');
+SELECT t_err('T71e other tenant: product FORBIDDEN', $q$ SELECT rpc_intel_product(t_get('pFA')) $q$, 'FORBIDDEN');
+SELECT t_err('T71e other tenant: dimensions FORBIDDEN', $q$ SELECT rpc_intel_dimensions(t_get('bizF')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_err('T71e unauthenticated refused', $q$ SELECT rpc_intel_home(t_get('bizF')) $q$, 'UNAUTHENTICATED');
+SELECT t_login('u5');
+SELECT t_check('T71e sparse tenant (bizB) answers honestly: no fabricated fast movers, slow movers or candidates from a handful of sales',
+  (SELECT jsonb_array_length(j -> 'slow_movers') = 0 AND jsonb_array_length(j -> 'excess') = 0
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'fast_movers') x WHERE (x ->> 'sold_win')::int < 3 OR (x ->> 'active_days')::int < 7)
+   FROM (SELECT rpc_intel_home(t_get('bizB'), NULL, 30) AS j) x));
+SELECT t_logout();
+SELECT t_check('T71e intelligence wrote nothing', (SELECT count(*) FROM sales WHERE business_id = t_get('bizF')) = 24
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizF')) = 14 + 24 + 3);
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$

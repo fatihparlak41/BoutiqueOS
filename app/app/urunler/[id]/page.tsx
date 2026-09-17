@@ -8,6 +8,8 @@ import {
   loadCatalogContext,
 } from "@/lib/catalog/queries";
 import { listStockForVariants } from "@/lib/stock/queries";
+import { getIntelProduct } from "@/lib/intel/queries";
+import { ProductIntel } from "@/components/intel/product-intel";
 import { formatPrice, formatPriceRange } from "@/lib/catalog/format";
 import { updateProductAction } from "@/app/app/urunler/actions";
 import { PageHeader } from "@/components/ui/page-header";
@@ -44,7 +46,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   // RLS scopes the query to the tenant, so a product from another business reads as missing.
   if (!product) notFound();
 
-  const [options, categories, brands, similar, stockRows] = await Promise.all([
+  const [options, categories, brands, similar, stockRows, intel] = await Promise.all([
     listProductOptions(),
     listCategories(),
     listBrands(),
@@ -58,6 +60,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       })),
       { id: product.id, name: product.name, category_name: product.category?.name ?? null, brand_name: product.brand?.name ?? null },
     ),
+    // Manager+ intelligence block: one aggregate RPC in the same round trip as the rest.
+    caps.canEditCatalog ? getIntelProduct(product.id) : Promise.resolve(null),
   ]);
 
   const main = product.images.find((i) => i.role === "product_main") ?? null;
@@ -101,6 +105,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           <Stat label="Satış fiyatı" value={prices.length > 0 ? formatPriceRange(Math.min(...prices), Math.max(...prices)) : formatPrice(product.default_sale_price)} hint={`${totalBarcodes} barkod`} />
         </StatGrid>
       </section>
+
+      {intel ? <ProductIntel intel={intel} productId={product.id} /> : null}
 
       <section className="space-y-3">
         <SectionHeader title="Varyantlar" meta={product.variants.length} />
