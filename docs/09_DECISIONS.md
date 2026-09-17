@@ -201,3 +201,32 @@ out-of-band), but it must be closed when public signup lands.
 its first `owner` membership in one transaction, so no code path can produce an ownerless
 business. Once that RPC is the only way in, the invariant can be tightened from
 "the last owner cannot be lost" to "every business has an owner".
+
+---
+
+## ADR-16 · Reporting Reads the Operational Records, in the Tenant's Calendar
+
+**Decision (Phase 10B):**
+1. There is no reporting ledger. Every report figure is a PostgreSQL aggregate over the
+   operational tables (completed sales / items / payments, `sale_item_costs`, returns /
+   `return_item_costs`, the inventory ledger, posted goods receipts, customers). One
+   bounded `rpc_report_*` per surface returns JSONB; the browser never receives rows to sum.
+2. Profit is historical: COGS is the cost captured at sale time, returned COGS the cost
+   captured at return time. A report never re-prices old sales with today's cost pool, and
+   the stock valuation (current pools) is never used for margin.
+3. Days are the tenant's calendar days: `settings.timezone` (IANA, trigger-validated,
+   `rpc_business_set_timezone` owner/manager). When absent the platform default
+   `Europe/Istanbul` is used and the payload says `timezone_set=false`, which the UI shows
+   as "ayarlanmamış — ayarla"; reports are never silently grouped by server UTC.
+4. Financial keys (COGS, gross profit, margin, valuation, purchasing, supplier liability,
+   payments) exist in the payload only when the RPC established owner/manager rank.
+   sales_staff receive units, counts and selling totals under `sales_visibility_scope`;
+   stock_staff have the stock report only. `p_business_id` selects the tenant and is
+   always re-proven against the membership — it never authorises.
+5. Returns are dated by their own instant, not their sale's; an exchange's replacement sale
+   counts fully in net sales and the returned goods count in returns, so
+   `net_sales − returns_value` is the merchandise that stayed sold.
+
+**Why:** a second ledger drifts from the first and needs its own proofs; the operational
+tables already are the proofs. The 366-day bound and the indexes added with the phase keep
+the aggregates in the tens of milliseconds at pilot scale and under 0.5 s at 40k sales/year.

@@ -796,3 +796,52 @@ tur başına ~300 ms'lik gecikme ve soğuk başlatma gürültüsü baskındır. 
 Kalan darboğaz: yerel ölçümde bir Supabase turu ~300 ms (ağ), pano hâlâ 2 tur (tenant → veri); sayfaların çoğu artık tenant turu + tek veri turu.
 Daha ileri kazanım tur başına gecikmeyi (bölge yakınlığı / Fluid compute) ya da sunucu tarafı toplu RPC'leri gerektirir — Faz 10B kapsamı değil.
 Gate'ler (SQL değişmedi): lint / typecheck / build / `test:auth` 62/0 / `lint_sql` 0 hata / secret taraması temiz.
+
+## 21. Faz 10B — Raporlama temeli (2026-09-17)
+
+### Veri modeli denetimi (CURRENT → REPORTABLE → GAPS)
+| Kaynak | Rapora giren | Boşluk / karar |
+|---|---|---|
+| `sales` (completed; `voided` hariç) + `sale_items` (`list_price`, `unit_price_at_sale`, `discount_amount`, `line_total`) | brüt = liste × adet, indirim, net = `line_total` (= `sales.total`, KDV 0), işlem, adet, ortalama sepet | — |
+| `sale_payments` (`amount_base`, yöntem, para birimi), `sales.change_given_base`, `credit_applied_base` | tahsilat yöntemine göre, para üstü, değişim kredisi, parçalı ödeme; kimlik: net = tahsilat − para üstü + kredi | — |
+| `sale_costs` / `sale_item_costs` (satış anı MWA) | tarihsel COGS | bugünkü havuzla yeniden hesap **yapılmaz** |
+| `returns` (`credit_value_base`, `refund_amount_base`, `refund_method`, `return_type`, `reason_code`) + `return_items` (`disposition`) + `return_item_costs` | iade değeri (satış anı fiyatıyla), ödenen para, neden, durum, tür, iade edilen tarihsel COGS | iade kendi tarihine yazılır |
+| `inventory_movements` (kova), `reservations` (aktif & süresi dolmamış), `variant_cost_pools` | satılabilir / rezerve / müsait / hasarlı / karantina; değerleme (yalnız manager+) | rezervasyon hareket yazmaz (Rev 3) |
+| `goods_receipts` (`posted`, `posted_at`, `posted_charges_base`, `posted_landed_total_base`) + `goods_receipt_items.total_cost_base` + `supplier_account_entries` (`liability`) + `goods_receipt_reversals` | belge, adet, alış, masraf, iniş, oluşan borç; ters kayıt ayrı | 8A öncesi belgede `posted_landed_total_base` NULL → iniş = alış (20260917120000) |
+| `customers` + `sales.customer_id` | kayıtlı / anonim satış, tekrar eden, ilk 10 (yalnız ad) | telefon/e-posta rapora girmez |
+| `sales.salesperson_id` vs `sold_by` | satıcı atfı vs kasiyer ayrı | prim yok |
+| `businesses.settings` | **saat dilimi yoktu** → `settings.timezone` (IANA, trigger `fn_business_settings_guard`, `rpc_business_set_timezone` owner/manager), yoksa `Europe/Istanbul` + `timezone_set=false` | TLC anahtarı **yazılmadı**; sahip `/app/ayarlar/raporlama`'dan seçer |
+
+Şema yalnız iki noktada değişti: ayar doğrulama trigger'ı ve dört indeks. Ayrı rapor defteri yok (ADR-16).
+
+### Metrik tanımları
+`docs/09` ADR-16 ve migration başlığı; UI'da "Bu rakamlar nasıl hesaplanır?" bölümünde aynı metin. brüt = Σ liste × adet · indirim = Σ kalem indirimi · net = Σ `line_total` · iade değeri = Σ `unit_price_at_sale` × adet (dönemdeki iadeler) · iade sonrası net = net − iade · COGS = Σ `sale_item_costs.line_cost_base` · iade COGS = Σ `return_item_costs.line_cost_base` · brüt kâr = iade sonrası net − (COGS − iade COGS) · marj = kâr ÷ iade sonrası net (0'da gösterilmez) · sepet = net ÷ işlem · ödeme hareketi = tahsilat − para üstü − iade.
+
+### Dönem hesabı (tenant saat dilimi)
+Bugün = o dilimdeki takvim günü; Dün; Son 7 gün = bugün−6..bugün; Bu ay = ayın 1'i..bugün (karşılaştırma: geçen ayın aynı sayıda ilk günü); Geçen ay = tam ay (karşılaştırma: ondan önceki ay); Özel = kapsayıcı `from..to` (≤ 366 gün, ters aralık düzeltilir; karşılaştırma aynı uzunlukta önceki pencere). SQL: `[from 00:00, to+1 00:00)` `AT TIME ZONE tz` (`fn_report_window`); T70: DST günü 23 saat, UTC−12 ve UTC+14'te aynı anlar kendi yerel günlerine düşer.
+
+### RPC mimarisi
+`fn_report_access` (üyelik → rol, kapsam `fn_sales_visibility_scope`, şube; stock_staff satış raporunda FORBIDDEN) → `fn_report_window` → satır kaynakları `fn_report_sale_lines` / `fn_report_return_lines` (düz SQL, planlayıcı içine alır; 3.5E/9A görünürlük yüklemi tek kez) → yüzey başına tek JSONB RPC: `rpc_report_overview` (+ önceki dönem, günlük seri), `rpc_report_sales` (şube/satıcı/kategori/ürün filtreleri, günlük, şubeye göre), `rpc_report_products` (ürün/varyant/kategori/renk/beden + en çok satan beden/renk + satışı olup stoku biten), `rpc_report_staff` (satıcı vs kasiyer), `rpc_report_payments` (manager+), `rpc_report_stock` (herkes; değerleme manager+), `rpc_report_receiving` (manager+, yalnız POST edilmiş), `rpc_report_customers`, `rpc_report_returns` (neden/durum/tür, ürün ve beden iade oranı; < 10 satış "küçük örneklem"). Sayfa = tenant turu + 1 rapor turu (+ filtre listeleri paralel). Finansal anahtarlar payload'da yalnız manager+ için vardır; RSC çıktısında ham JSON anahtarı yoktur (sunucu metne çevirir).
+
+### İndeks denetimi (yerel, 40k satış / 80k satır / 8k iade / 2k belge / 82k hareket, 400 gün; EXPLAIN ANALYZE)
+| RPC (30 gün) | İndekssiz | 10B indeksleriyle |
+|---|---|---|
+| overview (+ önceki dönem) | 164 ms | 135 ms (365 gün: 413 ms) |
+| returns | 46,6 ms | 35,9 ms |
+| receiving | 8,3 ms | 3,8 ms |
+| payments | 44,6 ms | 31,0 ms |
+| sales / products / staff / stock / customers | — | 333 / 210 / 64 / 29 / 23 ms |
+
+Eklenen: `idx_returns_business_created (business_id, created_at DESC)`, `idx_return_items_return (return_id)`, `idx_gr_business_posted (business_id, posted_at DESC) WHERE status='posted'`, `idx_cash_mov_business_created`. `sales (business_id, occurred_at)`, `sale_items (sale_id)`, `sale_payments (sale_id)`, `sales (business_id, salesperson_id, occurred_at)` zaten vardı. Pilot ölçeğinde (onlarca satış) tüm raporlar < 10 ms DB süresi; canlıda sayfa süresini tenant turu belirler (§20).
+
+### Testler
+T70 (**67** assertion; fresh-DB **1190/0**): yetkiler; saat dilimi (varsayılan, geçersiz değer trigger/RPC'de reddi, sales_staff/other tenant FORBIDDEN, DST 23 saat, ters/uzun aralık); izole tenant fixture'ında (gerçek RPC'lerle: ayarlama, 6 satış + rezervasyon teslimi, iade, hasarlı değişim, karantina iadesi, mal kabul + masraf) her rakam elle hesaplanmış değere **ve** ham tablo toplamına eşit: brüt 3600 / indirim 50 / net 3550 / iade 1200 / iade sonrası 2350 / COGS 1480 / iade COGS 500 / kâr 1370 / marj 58,30 / sepet 591,67; satıcı-kasiyer ayrımı; ödeme kimlikleri (3550 = 3100 − 50 + 500; hareket 2350 = 3100 − 50 − 700); çekmece = `cash_movements`; stok kovaları + havuz değerlemesi 2260; mal kabul 180/10/190/190; müşteri 6/4/2/2/2; iade neden-durum-tür-oran; UTC−12/UTC+14 gün semantiği; sales_staff (own → 3 satış, business → 6) finansal anahtarsız; stock_staff FORBIDDEN (stok hariç, değerlemesiz); diğer tenant FORBIDDEN; rapor çağrıları hiçbir şey yazmadı. Concurrency 9/9 PASS; auth 62/0; lint_sql 0/0.
+
+### Sentetik canlı smoke (fixture `ZZ E2E REPORTING TEST` `74f00086…`, alias `64cfef13…`, admin `77bf787b…` manager; gerçek akışlarla)
+Mal kabul POST (6 varyant, 24 adet, 5.230 + %1 nakliye 52,30 → iniş birim maliyeti tam 1,01×), 7 satış (indirimli, nakit/kart/parçalı, kayıtlı/anonim, satıcı atfı iki kişi, rezervasyon teslimi), R1 satılabilir nakit iade, R2 hasarlı değişim (+2 yeni kalem), R3 karantina kart iadesi. DEV'de RPC düzeyinde **98/98** assertion (brüt 6.800 / indirim 90 / net 6.710 / iade 2.050 / iade sonrası 4.660 / COGS 2.353,30 / iade COGS 686,80 / kâr 2.993,50 / marj 64,24; tahsilat 6.010 = nakit 3.500 + kart 2.510, para üstü 200, kredi 900, iade 1.150, hareket 4.660; stok 14/1/1, havuz 3.615,80 = elle; mal kabul 5.230/52,30/5.282,30/5.282,30; müşteri 7/4/3/2/2; iade 3/1/2, oranlar). Canlı UI (uzantısız Chrome): sahip — 9 rapor sayfası, KPI'lar RPC ile aynı, tek günde grafik yerine cümle, önceki dönem boşken karşılaştırma yok, saat dilimi `/app/ayarlar/raporlama`'dan Asia/Nicosia'ya alındı ve dönem satırındaki uyarı kalktı, filtreler (satıcı 4.660/4, kategori 1.400/4, ürün 1.000/3), gruplamalar; sales_staff — Ödemeler/Mal kabul menüde yok ve yönlendirir, kâr/marj/değerleme yok, RSC'de maliyet anahtarı yok, ayar sayfası yok; stock_staff — yalnız Stok, satış raporları yönlendirir, değerleme yok; doğrudan RPC: stock_staff FORBIDDEN, TLC id'siyle non-member FORBIDDEN. Duyarlı: 390 / 768 / 1440 yatay taşma yok (ilk turda 390'da 2 grid taşması → `grid-cols-1`, düzeltildi). Bulunan ve düzeltilen: `"use server"` modülünden sabit dışa aktarımı formu kırıyordu (62df02f); 8A öncesi belgede iniş maliyeti 0 (20260917120000). Fixture `cancelled` (platform audit), tarih satırları korundu.
+
+### TLC salt-okuma mutabakatı
+TLC sahibi (77bf787b) olarak yalnız STABLE rapor RPC'leri okundu: Eylül 2026 → 1 işlem / 1 adet / brüt=net 1.250 / COGS 420 / kâr 830 / marj 66,4 / sepet 1.250; 16 Eylül günü 1, 17 Eylül 0; ürün TEST Keten Crop Bluz 1 / 1.250 / 420; tahsilat nakit 1.250, çekmece `sale_cash` 1.250; stok satılabilir 7 (aktif 20 varyant, 18'i hiç stoklanmamış → "stoku biten"), havuz 7 / 2.840; mal kabul 1 belge / 8 adet / 3.260 alış = iniş = borç; müşteri 0 (1 anonim satış); iade 0; saat dilimi ayarlanmamış (varsayılan). §13 taban çizgisiyle birebir. **TLC before/after anlık görüntüsü 24 anahtarda aynı; TLC'ye yazma yok.**
+
+### Ertelenen (10B)
+Sayfa/yazdırma dışa aktarımı; şubeler arası karşılaştırma tablosu (tek şubeli pilot); sell-through (alım adedine oran — gelecek dönemde mal kabul kaynaklı); kohort / tekrar satın alma aralığı; personel kâr katkısı politikası (bugün manager+ görüyor, prim yok); büyük kataloglarda ürün filtresi (> 300 ürün: seçici yerine arama gerekir); tenant saat dilimi dışında rapor ayarı yok.
