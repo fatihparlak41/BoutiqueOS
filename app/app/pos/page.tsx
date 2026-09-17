@@ -18,12 +18,12 @@ export const metadata = { title: "Kasa · BoutiqueOS" };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default async function PosPage({ searchParams }: { searchParams: Promise<{ rezervasyon?: string }> }) {
-  const { caps, branchId, tenant } = await loadPosContext();
+  // caps (own discount authority) and the branch's registers / members / holds in one round
+  const [{ caps, branchId, tenant }, registers, members, pending, { rezervasyon }] = await Promise.all([
+    loadPosContext(), listRegisters(), listMembers(), listActiveReservationsForBranch(10), searchParams,
+  ]);
   if (!caps.canSell) redirect("/app");
   if (!branchId) redirect("/app");
-  const { rezervasyon } = await searchParams;
-
-  const [registers, members, pending] = await Promise.all([listRegisters(), listMembers(), listActiveReservationsForBranch(10)]);
   const anyOpen = registers.some((r) => r.open_session);
 
   // a reservation to fulfil: pre-loaded lines + its customer; the sale converts it atomically

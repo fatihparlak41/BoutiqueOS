@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { loadAppContext } from "@/lib/app-context";
 import { describeVariants } from "@/lib/stock/count-queries";
 import { listMembers } from "@/lib/pos/queries";
@@ -41,7 +42,7 @@ function toCustomer(r: Record<string, unknown>): Customer {
   };
 }
 
-export async function listSources(): Promise<CustomerSource[]> {
+export const listSources = cache(async (): Promise<CustomerSource[]> => {
   const { supabase, businessId } = await loadCrmContext();
   const { data, error } = await supabase.from("customer_sources").select("business_id, code, label, sort_order, is_active").or(`business_id.is.null,business_id.eq.${businessId}`).eq("is_active", true).order("sort_order");
   if (error) throw new Error(`Kaynaklar okunamadı: ${error.message}`);
@@ -50,7 +51,7 @@ export async function listSources(): Promise<CustomerSource[]> {
   for (const s of data ?? []) if (s.business_id === null && !map.has(s.code as string)) map.set(s.code as string, { code: s.code as string, label: s.label as string });
   for (const s of data ?? []) if (s.business_id !== null) map.set(s.code as string, { code: s.code as string, label: s.label as string });
   return [...map.values()];
-}
+});
 
 /** Recent customers for the list page (bounded); search goes through the RPC. */
 export async function listRecentCustomers(limit = 30): Promise<Customer[]> {
@@ -224,7 +225,7 @@ export async function getReservation(id: string): Promise<Reservation | null> {
 
 /** Active holds of the terminal's branch (for the POS pick list). */
 export async function listActiveReservationsForBranch(limit = 20): Promise<Reservation[]> {
-  const { supabase, businessId, branchId } = await loadCrmContext();
+  const { supabase, businessId, branchId } = await loadAppContext();
   if (!branchId) return [];
   const { data, error } = await supabase.from("reservations").select(RESERVATION_SELECT).eq("business_id", businessId).eq("branch_id", branchId).eq("status", "active").gt("expires_at", new Date().toISOString()).order("expires_at").limit(limit);
   if (error) throw new Error(`Rezervasyonlar okunamadı: ${error.message}`);

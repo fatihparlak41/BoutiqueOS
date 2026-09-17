@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireTenant } from "@/lib/tenant";
 import { listProducts } from "@/lib/catalog/queries";
 import { catalogCaps } from "@/lib/catalog/model";
-import { listStock } from "@/lib/stock/queries";
+import { stockAvailabilitySummary } from "@/lib/stock/queries";
 import { listReceipts } from "@/lib/receiving/queries";
 import { receivingCaps } from "@/lib/receiving/model";
 import { formatDate, formatQuantity } from "@/lib/receiving/format";
@@ -44,18 +44,18 @@ export default async function AppHomePage() {
   const receiving = receivingCaps(active.role);
 
   const [products, stock, receipts] = await Promise.all([
-    listProducts({}),
-    listStock({}),
+    listProducts({}, { thumbnails: false }),
+    stockAvailabilitySummary(),
     receiving.canRead ? listReceipts({}) : Promise.resolve([]),
   ]);
 
   const name = profile.full_name?.trim() || user.email?.split("@")[0] || "";
   const activeProducts = products.filter((p) => p.status === "active").length;
-  const available = stock.filter((r) => r.available > 0).length;
-  const outOfStock = stock.filter((r) => r.available <= 0).length;
+  const available = stock.available;
+  const outOfStock = stock.outOfStock;
   const drafts = receipts.filter((r) => r.status === "draft");
   const recent = receipts.slice(0, 5);
-  const firstUse = products.length === 0 && stock.length === 0 && receipts.length === 0;
+  const firstUse = products.length === 0 && stock.total === 0 && receipts.length === 0;
 
   return (
     <div className="space-y-10">

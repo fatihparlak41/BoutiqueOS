@@ -7,7 +7,7 @@ import {
   listProductOptions,
   loadCatalogContext,
 } from "@/lib/catalog/queries";
-import { listStock } from "@/lib/stock/queries";
+import { listStockForVariants } from "@/lib/stock/queries";
 import { formatPrice, formatPriceRange } from "@/lib/catalog/format";
 import { updateProductAction } from "@/app/app/urunler/actions";
 import { PageHeader } from "@/components/ui/page-header";
@@ -44,14 +44,20 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   // RLS scopes the query to the tenant, so a product from another business reads as missing.
   if (!product) notFound();
 
-  const variantIds = new Set(product.variants.map((v) => v.id));
   const [options, categories, brands, similar, stockRows] = await Promise.all([
     listProductOptions(),
     listCategories(),
     listBrands(),
     caps.canEditCatalog ? findSimilarProducts({ name: product.name, styleCode: product.style_code, excludeId: product.id }) : Promise.resolve([]),
-    // The stock screen's own query, narrowed to this product's variants: same RLS, same numbers.
-    product.variants.length > 0 ? listStock({ search: product.sku_prefix }).then((rows) => rows.filter((r) => variantIds.has(r.variant_id))) : Promise.resolve([]),
+    // The stock screen's quantities for exactly this product's variants: same views, same RLS, one round trip.
+    listStockForVariants(
+      product.variants.map((v) => ({
+        id: v.id, sku: v.sku,
+        options: v.options.length > 0 ? v.options.map((o) => `${o.option_name}: ${o.value}`).join(" · ") : "Seçeneksiz",
+        primary_barcode: v.barcodes.find((b) => b.is_primary)?.barcode ?? v.barcodes[0]?.barcode ?? null,
+      })),
+      { id: product.id, name: product.name, category_name: product.category?.name ?? null, brand_name: product.brand?.name ?? null },
+    ),
   ]);
 
   const main = product.images.find((i) => i.role === "product_main") ?? null;

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { loadAppContext } from "@/lib/app-context";
 import type { Bucket, MovementReason, MovementRow, StockRow, StockState } from "@/lib/stock/model";
 
@@ -126,7 +127,7 @@ type VariantBase = {
  * The list is variant-based rather than ledger-based, so a catalogue variant that has
  * never been received still appears with zeros — which is what makes "tükenmiş" meaningful.
  */
-async function loadVariantBase(filters: StockFilters): Promise<VariantBase[]> {
+async function loadVariantBase(filters: StockFilters): Promise<VariantIdRow[]> {
   const { supabase, businessId } = await loadAppContext();
 
   const search = sanitize(filters.search ?? "");
@@ -205,9 +206,15 @@ async function loadVariantBase(filters: StockFilters): Promise<VariantBase[]> {
 
   const { data: variantRows, error: variantError } = await variantQuery.limit(STOCK_LIST_LIMIT);
   if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
-  const variants = variantRows ?? [];
-  if (variants.length === 0) return [];
+  return (variantRows ?? []) as VariantIdRow[];
+}
 
+type VariantIdRow = { id: string; product_id: string; sku: string };
+
+/** Names, options, barcodes, category and brand for known variant rows — one round trip. */
+async function describeVariantRows(variants: VariantIdRow[]): Promise<VariantBase[]> {
+  if (variants.length === 0) return [];
+  const { supabase, businessId } = await loadAppContext();
   const variantIds = variants.map((v) => v.id as string);
   const neededProductIds = Array.from(new Set(variants.map((v) => v.product_id as string)));
 
@@ -271,7 +278,7 @@ async function loadVariantBase(filters: StockFilters): Promise<VariantBase[]> {
   });
 }
 
-export async function listBranchOptions(): Promise<Array<{ id: string; name: string }>> {
+export const listBranchOptions = cache(async (): Promise<Array<{ id: string; name: string }>> => {
   const { supabase, businessId } = await loadAppContext();
   const { data, error } = await supabase
     .from("branches")
@@ -282,19 +289,23 @@ export async function listBranchOptions(): Promise<Array<{ id: string; name: str
     .order("name", { ascending: true });
   if (error) throw new Error(`Şubeler okunamadı: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id as string, name: row.name as string }));
-}
+});
 
 export async function listStock(filters: StockFilters = {}): Promise<StockRow[]> {
   const { branchId: contextBranch } = await loadAppContext();
-  const branches = await listBranchOptions();
+  // branch list and the variant discovery are independent: one round trip for both
+  const [branches, variantRows] = await Promise.all([listBranchOptions(), loadVariantBase(filters)]);
   const branchId = filters.branchId ?? contextBranch ?? branches[0]?.id ?? null;
   if (!branchId) return [];
 
   const branchName = branches.find((b) => b.id === branchId)?.name ?? "—";
-  const base = await loadVariantBase(filters);
-  if (base.length === 0) return [];
+  if (variantRows.length === 0) return [];
 
-  const quantities = await loadQuantities(base.map((v) => v.variant_id), branchId);
+  // description and quantities both need only the variant ids: same round trip
+  const [base, quantities] = await Promise.all([
+    describeVariantRows(variantRows),
+    loadQuantities(variantRows.map((v) => v.id), branchId),
+  ]);
 
   return base
     .map((variant) => {
@@ -320,18 +331,73 @@ export async function listStock(filters: StockFilters = {}): Promise<StockRow[]>
     .sort((a, b) => a.product_name.localeCompare(b.product_name, "tr") || a.sku.localeCompare(b.sku, "tr"));
 }
 
+/**
+ * Stock rows for known variants (the product page): the same quantities the stock screen
+ * shows, without re-discovering the variants through a search. One round trip.
+ */
+export async function listStockForVariants(
+  variants: Array<{ id: string; sku: string; options: string; primary_barcode: string | null }>,
+  product: { id: string; name: string; category_name: string | null; brand_name: string | null },
+): Promise<StockRow[]> {
+  if (variants.length === 0) return [];
+  const { branchId: contextBranch, tenant } = await loadAppContext();
+  const branchId = contextBranch ?? tenant.active.branches[0]?.id ?? null;
+  if (!branchId) return [];
+  const branchName = tenant.active.branches.find((b) => b.id === branchId)?.name ?? "—";
+  const quantities = await loadQuantities(variants.map((v) => v.id), branchId);
+  return variants
+    .map((v) => {
+      const q = quantities.get(v.id) ?? { ...EMPTY };
+      return {
+        variant_id: v.id, product_id: product.id, product_name: product.name, sku: v.sku, options: v.options, primary_barcode: v.primary_barcode,
+        category_name: product.category_name, brand_name: product.brand_name, branch_id: branchId, branch_name: branchName,
+        sellable: q.sellable, quarantine: q.quarantine, damaged: q.damaged, on_hand: onHand(q), reserved: q.reserved, available: q.available,
+      };
+    })
+    .sort((a, b) => a.sku.localeCompare(b.sku, "tr"));
+}
+
+/**
+ * Dashboard counts only: how many active variants of the branch have stock available and
+ * how many have none. Same rows and the same availability the stock screen counts, read
+ * in one round trip (variants + v_stock_available) instead of the full described list.
+ */
+export async function stockAvailabilitySummary(): Promise<{ available: number; outOfStock: number; total: number }> {
+  const { supabase, businessId, branchId: contextBranch, tenant } = await loadAppContext();
+  const branchId = contextBranch ?? tenant.active.branches[0]?.id ?? null;
+  if (!branchId) return { available: 0, outOfStock: 0, total: 0 };
+  const [{ data: variants, error }, { data: stock, error: stockError }] = await Promise.all([
+    supabase.from("product_variants").select("id").eq("business_id", businessId).eq("status", "active").limit(STOCK_LIST_LIMIT),
+    supabase.from("v_stock_available").select("variant_id, available_quantity").eq("business_id", businessId).eq("branch_id", branchId),
+  ]);
+  if (error) throw new Error(`Varyantlar okunamadı: ${error.message}`);
+  if (stockError) throw new Error(`Uygun stok okunamadı: ${stockError.message}`);
+  const availableOf = new Map((stock ?? []).map((s) => [s.variant_id as string, Number(s.available_quantity) || 0]));
+  let available = 0;
+  for (const v of variants ?? []) if ((availableOf.get(v.id as string) ?? 0) > 0) available++;
+  const total = (variants ?? []).length;
+  return { available, outOfStock: total - available, total };
+}
+
 /** Per-branch quantities for one variant, using the same aggregation as the list. */
 export async function getVariantStock(variantId: string): Promise<StockRow[]> {
-  const base = await loadVariantBase({});
-  const variant = base.find((v) => v.variant_id === variantId);
-  const branches = await listBranchOptions();
-
+  const { supabase, businessId } = await loadAppContext();
+  // this one variant (not the whole list), described and quantified per branch in parallel
+  const [{ data: row, error }, branches] = await Promise.all([
+    supabase.from("product_variants").select("id, product_id, sku").eq("business_id", businessId).eq("id", variantId).maybeSingle(),
+    listBranchOptions(),
+  ]);
+  if (error) throw new Error(`Varyant okunamadı: ${error.message}`);
+  if (!row) return [];
+  const [[variant], perBranch] = await Promise.all([
+    describeVariantRows([row as VariantIdRow]),
+    Promise.all(branches.map((branch) => loadQuantities([variantId], branch.id))),
+  ]);
   if (!variant) return [];
 
   const rows: StockRow[] = [];
-  for (const branch of branches) {
-    const quantities = await loadQuantities([variantId], branch.id);
-    const q = quantities.get(variantId) ?? { ...EMPTY };
+  for (const [index, branch] of branches.entries()) {
+    const q = perBranch[index].get(variantId) ?? { ...EMPTY };
     rows.push({
       ...variant,
       branch_id: branch.id,

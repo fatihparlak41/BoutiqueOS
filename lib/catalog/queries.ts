@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 
 import { createClient } from "@/lib/supabase/server";
 import { requireTenant } from "@/lib/tenant";
@@ -64,7 +65,7 @@ export async function loadCatalogContext() {
 
 export type CatalogContext = Awaited<ReturnType<typeof loadCatalogContext>>;
 
-export async function listCategories(): Promise<NamedRef[]> {
+export const listCategories = cache(async (): Promise<NamedRef[]> => {
   const { supabase, businessId } = await loadCatalogContext();
   const { data, error } = await supabase
     .from("categories")
@@ -76,9 +77,9 @@ export async function listCategories(): Promise<NamedRef[]> {
 
   if (error) throw new Error(`Kategoriler okunamadı: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id as string, name: row.name as string }));
-}
+});
 
-export async function listBrands(): Promise<NamedRef[]> {
+export const listBrands = cache(async (): Promise<NamedRef[]> => {
   const { supabase, businessId } = await loadCatalogContext();
   const { data, error } = await supabase
     .from("brands")
@@ -89,10 +90,10 @@ export async function listBrands(): Promise<NamedRef[]> {
 
   if (error) throw new Error(`Markalar okunamadı: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id as string, name: row.name as string }));
-}
+});
 
 /** Options and their values exactly as this business defined them — no hard-coded size list. */
-export async function listProductOptions(): Promise<ProductOption[]> {
+export const listProductOptions = cache(async (): Promise<ProductOption[]> => {
   const { supabase, businessId } = await loadCatalogContext();
 
   const [{ data: optionRows, error: optionError }, { data: valueRows, error: valueError }] =
@@ -129,7 +130,7 @@ export async function listProductOptions(): Promise<ProductOption[]> {
         color_hex: (value.color_hex as string | null) ?? null,
       })),
   }));
-}
+});
 
 /** Raw shapes returned by PostgREST for the two variant child tables. */
 type VariantOptionRow = { variant_id: string; product_option_id: string; option_value_id: string };
@@ -142,8 +143,10 @@ type BarcodeRow = {
   is_primary: boolean;
 };
 
-export async function listProducts(filters: ProductFilters): Promise<ProductListRow[]> {
+export async function listProducts(filters: ProductFilters, opts: { thumbnails?: boolean } = {}): Promise<ProductListRow[]> {
   const { supabase, businessId } = await loadCatalogContext();
+  // independent of the product rows: start them now, await them with the variant read
+  const references = Promise.all([listCategories(), listBrands()]);
 
   let query = supabase
     .from("products")
@@ -160,14 +163,17 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
   if (error) throw new Error(`Ürünler okunamadı: ${error.message}`);
 
   const products = productRows ?? [];
-  if (products.length === 0) return [];
+  if (products.length === 0) {
+    await references;
+    return [];
+  }
 
   const productIds = products.map((row) => row.id as string);
 
   // Variant counts are aggregated here rather than in SQL: the catalogue has no aggregate
   // RPC and adding one would mean a migration. Adequate at pilot size; revisit past a few
   // thousand products.
-  const [{ data: variantRows, error: variantError }, { data: imageRows }, categories, brands] = await Promise.all([
+  const [{ data: variantRows, error: variantError }, { data: imageRows }, [categories, brands]] = await Promise.all([
     supabase
       .from("product_variants")
       .select("id, product_id, sale_price_override, status")
@@ -179,18 +185,17 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
       .eq("business_id", businessId)
       .eq("role", "product_main")
       .in("product_id", productIds),
-    listCategories(),
-    listBrands(),
+    references,
   ]);
 
   if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
 
-  // One signing round trip for every thumbnail on the page.
+  // One signing round trip for every thumbnail on the page — skipped when the caller
+  // renders no images (the dashboard counts products, it does not show them).
   const mains = (imageRows ?? []) as Array<{ product_id: string; storage_path: string | null; url: string | null }>;
-  const signed = await signImagePaths(
-    supabase,
-    mains.map((m) => m.storage_path).filter((x): x is string => !!x),
-  );
+  const signed = opts.thumbnails === false
+    ? new Map<string, string>()
+    : await signImagePaths(supabase, mains.map((m) => m.storage_path).filter((x): x is string => !!x));
   const thumbFor = (productId: string): string | null => {
     const m = mains.find((row) => row.product_id === productId);
     if (!m) return null;
@@ -227,63 +232,40 @@ export async function listProducts(filters: ProductFilters): Promise<ProductList
 export async function getProduct(productId: string): Promise<ProductDetail | null> {
   const { supabase, businessId } = await loadCatalogContext();
 
-  const { data: product, error } = await supabase
-    .from("products")
-    .select(
-      "id, name, sku_prefix, style_code, status, default_sale_price, tax_rate, is_tax_inclusive, collection, description, category_id, brand_id",
-    )
-    .eq("business_id", businessId)
-    .eq("id", productId)
-    .maybeSingle();
-
-  if (error) throw new Error(`Ürün okunamadı: ${error.message}`);
-  if (!product) return null;
-
-  const { data: variantRows, error: variantError } = await supabase
-    .from("product_variants")
-    .select("id, sku, status, sale_price_override")
-    .eq("business_id", businessId)
-    .eq("product_id", productId)
-    .order("sku", { ascending: true });
-
-  if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
-
-  const variantIds = (variantRows ?? []).map((row) => row.id as string);
-
-  // Declared as concrete row shapes so the empty-variant case does not produce a union
-  // of array types that TypeScript refuses to call .filter() on.
-  let vovRows: VariantOptionRow[] = [];
-  let barcodeRows: BarcodeRow[] = [];
-
-  if (variantIds.length > 0) {
-    const [vovResult, barcodeResult] = await Promise.all([
-      supabase
-        .from("variant_option_values")
-        .select("variant_id, product_option_id, option_value_id")
-        .eq("business_id", businessId)
-        .in("variant_id", variantIds),
-      supabase
-        .from("barcodes")
-        .select("id, variant_id, barcode, barcode_type, symbology, is_primary")
-        .eq("business_id", businessId)
-        .in("variant_id", variantIds)
-        .order("is_primary", { ascending: false })
-        .order("barcode", { ascending: true }),
-    ]);
-
-    if (vovResult.error) throw new Error(`Varyant seçenekleri okunamadı: ${vovResult.error.message}`);
-    if (barcodeResult.error) throw new Error(`Barkodlar okunamadı: ${barcodeResult.error.message}`);
-
-    vovRows = (vovResult.data ?? []) as VariantOptionRow[];
-    barcodeRows = (barcodeResult.data ?? []) as BarcodeRow[];
-  }
-
-  const [options, categories, brands, images] = await Promise.all([
+  // One round trip: the product, its variants with their option pairs and barcodes embedded
+  // (PostgREST resource embedding over the existing foreign keys), and the reference lists
+  // the page needs anyway. Every read is RLS-scoped to the tenant as before.
+  const [{ data: product, error }, { data: variantRows, error: variantError }, options, categories, brands, images] = await Promise.all([
+    supabase
+      .from("products")
+      .select(
+        "id, name, sku_prefix, style_code, status, default_sale_price, tax_rate, is_tax_inclusive, collection, description, category_id, brand_id",
+      )
+      .eq("business_id", businessId)
+      .eq("id", productId)
+      .maybeSingle(),
+    supabase
+      .from("product_variants")
+      .select("id, sku, status, sale_price_override, variant_option_values(variant_id, product_option_id, option_value_id), barcodes(id, variant_id, barcode, barcode_type, symbology, is_primary)")
+      .eq("business_id", businessId)
+      .eq("product_id", productId)
+      .order("sku", { ascending: true }),
     listProductOptions(),
     listCategories(),
     listBrands(),
     listProductImages(productId),
   ]);
+
+  if (error) throw new Error(`Ürün okunamadı: ${error.message}`);
+  if (!product) return null;
+  if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
+
+  // Flattened from the embedded rows; declared as concrete row shapes so the empty-variant
+  // case does not produce a union of array types that TypeScript refuses to call .filter() on.
+  const vovRows: VariantOptionRow[] = (variantRows ?? []).flatMap((row) => ((row.variant_option_values ?? []) as VariantOptionRow[]));
+  const barcodeRows: BarcodeRow[] = (variantRows ?? [])
+    .flatMap((row) => ((row.barcodes ?? []) as BarcodeRow[]))
+    .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.barcode.localeCompare(b.barcode));
 
   const variants: VariantRow[] = (variantRows ?? []).map((row) => {
     const variantId = row.id as string;

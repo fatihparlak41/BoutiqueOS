@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { loadAppContext } from "@/lib/app-context";
 import { toUserMessage } from "@/lib/db-errors";
 import {
@@ -97,7 +98,7 @@ export async function listSuppliers(filters: SupplierFilters = {}): Promise<Supp
 }
 
 /** Active branches of the tenant — the receipt header needs a real branch id. */
-export async function listBranches(): Promise<Array<{ id: string; name: string; code: string }>> {
+export const listBranches = cache(async (): Promise<Array<{ id: string; name: string; code: string }>> => {
   const { supabase, businessId } = await loadReceivingContext();
   const { data, error } = await supabase
     .from("branches")
@@ -113,7 +114,7 @@ export async function listBranches(): Promise<Array<{ id: string; name: string; 
     name: row.name as string,
     code: row.code as string,
   }));
-}
+});
 
 // ------------------------------------------------------------------ receipts
 

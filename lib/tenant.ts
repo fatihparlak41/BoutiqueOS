@@ -59,87 +59,70 @@ export type TenantContext = {
  * tenant — business, branch or role — is ever taken from client state; the cookie only
  * expresses a *preference* between memberships that were proven server-side.
  */
+type EmbeddedBranch = { id: string; name: string; code: string; is_default: boolean; status: string };
+type EmbeddedBusiness = { id: string; name: string; code: string; status: string; branches: EmbeddedBranch[] | null };
+type MemberRow = { business_id: string; role: UserRole; branch_id: string | null; businesses: EmbeddedBusiness | null };
+
 export const loadMemberships = cache(async () => {
   const supabase = await createClient();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // The identity comes from the verified JWT (getClaims: signature checked against the
+  // project's signing keys, no round trip to Auth when the project signs asymmetrically).
+  // The middleware already refreshed the session for this request; a missing or invalid
+  // token means sign in again. Authorisation itself is never taken from the token: every
+  // read below is a PostgreSQL row the membership policies allow the user to see.
+  const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+  if (claimsError || !claims?.sub) redirect("/login");
+  const userId = String(claims.sub);
+  const email = typeof claims.email === "string" ? claims.email : null;
 
-  if (!user) redirect("/login");
-
-  // First read with a possibly seconds-old token. A token minted by Auth in the same
-  // second can be "issued at future" for PostgREST's clock; that one condition is
-  // retried once after a short pause (lib/auth/jwt-skew.ts) and, if it persists,
-  // handed to /auth/session-ready by failTenantRead. Every other error goes straight
-  // through.
+  // One round trip for the whole tenant picture: memberships with their business and the
+  // business's active branches embedded (PostgREST resource embedding over the existing
+  // foreign keys), plus the profile in parallel. A token minted by Auth in the same second
+  // can be "issued at future" for PostgREST's clock; that one condition is retried once
+  // after a short pause (lib/auth/jwt-skew.ts) and, if it persists, handed to
+  // /auth/session-ready by failTenantRead. Every other error goes straight through.
   const {
     profile: { data: profileRow },
     members: { data: memberRows, error: memberError },
   } = await withFreshJwtRetry(async () => {
     const [profile, members] = await Promise.all([
-      supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
+      supabase.from("profiles").select("full_name").eq("id", userId).maybeSingle(),
       supabase
         .from("business_members")
-        .select("business_id, role, branch_id")
-        .eq("user_id", user.id)
-        .eq("is_active", true),
+        .select("business_id, role, branch_id, businesses!inner(id, name, code, status, branches(id, name, code, is_default, status))")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .eq("businesses.status", "active")
+        .eq("businesses.branches.status", "active"),
     ]);
     return { profile, members, error: members.error ?? profile.error };
   });
 
   if (memberError) failTenantRead("Üyelikler okunamadı", memberError);
 
-  const businessIds = (memberRows ?? []).map((m) => m.business_id as string);
-
-  let memberships: Membership[] = [];
-
-  if (businessIds.length > 0) {
-    const [{ data: businessRows, error: bizError }, { data: branchRows, error: branchError }] =
-      await Promise.all([
-        supabase
-          .from("businesses")
-          .select("id, name, code, status")
-          .in("id", businessIds)
-          .eq("status", "active"),
-        supabase
-          .from("branches")
-          .select("id, business_id, name, code, is_default, status")
-          .in("business_id", businessIds)
-          .eq("status", "active")
-          .order("is_default", { ascending: false })
-          .order("name", { ascending: true }),
-      ]);
-
-    if (bizError) failTenantRead("İşletmeler okunamadı", bizError);
-    if (branchError) failTenantRead("Şubeler okunamadı", branchError);
-
-    memberships = (memberRows ?? [])
-      .map((m) => {
-        const business = (businessRows ?? []).find((b) => b.id === m.business_id);
-        if (!business) return null; // suspended or cancelled business: no access
-        return {
-          business_id: business.id as string,
-          business_name: business.name as string,
-          business_code: business.code as string,
-          role: m.role as UserRole,
-          membership_branch_id: (m.branch_id as string | null) ?? null,
-          branches: (branchRows ?? [])
-            .filter((br) => br.business_id === business.id)
-            .map((br) => ({
-              id: br.id as string,
-              name: br.name as string,
-              code: br.code as string,
-              is_default: br.is_default as boolean,
-            })),
-        } satisfies Membership;
-      })
-      .filter((m): m is Membership => m !== null)
-      .sort((a, b) => a.business_name.localeCompare(b.business_name, "tr"));
-  }
+  const memberships: Membership[] = ((memberRows ?? []) as unknown as MemberRow[])
+    .map((m) => {
+      const business = m.businesses;
+      if (!business || business.status !== "active") return null; // suspended or cancelled business: no access
+      return {
+        business_id: business.id,
+        business_name: business.name,
+        business_code: business.code,
+        role: m.role,
+        membership_branch_id: m.branch_id ?? null,
+        branches: (business.branches ?? [])
+          .filter((br) => br.status === "active")
+          .sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name, "tr"))
+          .map((br) => ({ id: br.id, name: br.name, code: br.code, is_default: br.is_default })),
+      } satisfies Membership;
+    })
+    .filter((m): m is Membership => m !== null)
+    .sort((a, b) => a.business_name.localeCompare(b.business_name, "tr"));
 
   return {
-    user: { id: user.id, email: user.email ?? null },
+    user: { id: userId, email },
     profile: { full_name: (profileRow?.full_name as string | null) ?? null },
     memberships,
   };

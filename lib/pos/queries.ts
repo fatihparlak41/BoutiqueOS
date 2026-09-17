@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { loadAppContext } from "@/lib/app-context";
 import { describeVariants } from "@/lib/stock/count-queries";
 import {
@@ -30,8 +31,8 @@ function sanitize(term: string): string {
   return term.replace(/[%_,()]/g, " ").trim().slice(0, 60);
 }
 
-/** Tenant + role + the caller's own discount authority (business_members: own row is readable). */
-export async function loadPosContext() {
+/** Tenant + role + the caller's own discount authority (business_members: own row is readable). Request-scoped. */
+export const loadPosContext = cache(async () => {
   const ctx = await loadAppContext();
   const { data } = await ctx.supabase
     .from("business_members")
@@ -41,33 +42,29 @@ export async function loadPosContext() {
     .maybeSingle();
   const maxDiscount = num(data?.max_discount_pct);
   return { ...ctx, caps: posCaps(ctx.role, maxDiscount) };
-}
+});
 
 // ------------------------------------------------------------------ registers + sessions
 
-export async function listRegisters(): Promise<Register[]> {
-  const { supabase, businessId, branchId } = await loadPosContext();
+export const listRegisters = cache(async (): Promise<Register[]> => {
+  // tenant only (no discount-authority read): lets the page fetch registers and caps in one round
+  const { supabase, businessId, branchId } = await loadAppContext();
   if (!branchId) return [];
-  const [{ data: regs, error }, { data: sessions, error: sessError }] = await Promise.all([
+  // registers with their open session embedded (one round trip) alongside the member directory
+  const [{ data: regs, error }, members] = await Promise.all([
     supabase
       .from("cash_registers")
-      .select("id, branch_id, name, is_active, device_ref")
+      .select("id, branch_id, name, is_active, device_ref, register_sessions(id, cash_register_id, session_number, status, opened_by, opened_at)")
       .eq("business_id", businessId)
       .eq("branch_id", branchId)
+      .eq("register_sessions.status", "open")
       .order("name"),
-    supabase
-      .from("register_sessions")
-      .select("id, cash_register_id, session_number, status, opened_by, opened_at")
-      .eq("business_id", businessId)
-      .eq("branch_id", branchId)
-      .eq("status", "open"),
+    listMembers(),
   ]);
   if (error) throw new Error(`Kasalar okunamadı: ${error.message}`);
-  if (sessError) throw new Error(`Kasa oturumları okunamadı: ${sessError.message}`);
-  const members = await listMembers();
   const nameOf = (id: string) => members.find((m) => m.user_id === id)?.full_name ?? null;
   return (regs ?? []).map((r) => {
-    const s = (sessions ?? []).find((x) => x.cash_register_id === r.id);
+    const s = ((r.register_sessions ?? []) as Array<Record<string, unknown>>).find((x) => x.status === "open");
     const open: RegisterSession | null = s
       ? {
           id: s.id as string,
@@ -88,11 +85,11 @@ export async function listRegisters(): Promise<Register[]> {
       open_session: open,
     };
   });
-}
+});
 
 /** Name-only member directory (rpc_pos_members): salesperson picker and receipt names. */
-export async function listMembers(): Promise<PosMember[]> {
-  const { supabase, businessId } = await loadPosContext();
+export const listMembers = cache(async (): Promise<PosMember[]> => {
+  const { supabase, businessId } = await loadAppContext();
   const { data, error } = await supabase.rpc("rpc_pos_members", { p_business_id: businessId });
   if (error) throw new Error(`Ekip okunamadı: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((m) => ({
@@ -101,7 +98,7 @@ export async function listMembers(): Promise<PosMember[]> {
     can_sell: Boolean(m.can_sell),
     is_self: Boolean(m.is_self),
   }));
-}
+});
 
 // ------------------------------------------------------------------ items
 

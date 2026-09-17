@@ -11,11 +11,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * or an exchange needs the branch's open drawer — opened by a manager (Phase 9A).
  */
 export default async function ReturnsPage({ searchParams }: { searchParams: Promise<{ satis?: string }> }) {
-  const { caps, branchId, tenant } = await loadPosContext();
+  const [{ caps, branchId, tenant }, registers, members, { satis }] = await Promise.all([loadPosContext(), listRegisters(), listMembers(), searchParams]);
   if (!caps.canSell) redirect("/app");
   if (!branchId) redirect("/app");
-  const { satis } = await searchParams;
-  const [registers, members] = await Promise.all([listRegisters(), listMembers()]);
   const anyOpen = registers.some((r) => r.open_session);
 
   return (
