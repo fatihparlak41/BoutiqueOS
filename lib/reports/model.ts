@@ -31,6 +31,10 @@ export function reportCaps(role: UserRole): ReportCaps {
   };
 }
 
+/** Feedback of the timezone form; lives here because a "use server" module may export only actions. */
+export type TimezoneActionState = { error: string | null; ok: boolean };
+export const TIMEZONE_IDLE: TimezoneActionState = { error: null, ok: false };
+
 /** Platform default when settings.timezone is absent (mirrors fn_business_timezone). */
 export const DEFAULT_TIMEZONE = "Europe/Istanbul";
 

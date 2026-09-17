@@ -4,8 +4,8 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { setTimezoneAction, TIMEZONE_IDLE } from "@/app/app/ayarlar/raporlama/actions";
-import { TIMEZONE_OPTIONS } from "@/lib/reports/model";
+import { setTimezoneAction } from "@/app/app/ayarlar/raporlama/actions";
+import { TIMEZONE_IDLE, TIMEZONE_OPTIONS } from "@/lib/reports/model";
 
 export function TimezoneForm({ current }: { current: string | null }) {
   const [state, formAction, pending] = useActionState(setTimezoneAction, TIMEZONE_IDLE);

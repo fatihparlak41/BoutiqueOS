@@ -4,10 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireTenant } from "@/lib/tenant";
 import { reportDbError } from "@/lib/db-errors";
-import { reportCaps, TIMEZONE_OPTIONS } from "@/lib/reports/model";
-
-export type TimezoneActionState = { error: string | null; ok: boolean };
-export const TIMEZONE_IDLE: TimezoneActionState = { error: null, ok: false };
+import { reportCaps, TIMEZONE_OPTIONS, type TimezoneActionState } from "@/lib/reports/model";
 
 /**
  * Sets settings.timezone through rpc_business_set_timezone. The RPC proves owner/manager
