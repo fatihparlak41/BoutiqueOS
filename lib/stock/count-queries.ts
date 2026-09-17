@@ -35,62 +35,51 @@ export async function describeVariants(variantIds: string[]): Promise<Map<string
   if (ids.length === 0) return out;
   const { supabase, businessId } = await loadAppContext();
 
+  // One read: the variants with their product (name + main image), option pairs (value +
+  // kind) and barcodes embedded over the existing foreign keys — then one signing call for
+  // the thumbnails. Same RLS-scoped rows as the four sequential reads this replaces.
   const { data: variants, error } = await supabase
     .from("product_variants")
-    .select("id, sku, product_id")
+    .select(
+      "id, sku, product_id, products(name, product_images(storage_path, url, role)), " +
+        "variant_option_values(option_values(value, sort_order), product_options(kind)), barcodes(barcode, is_primary)",
+    )
     .eq("business_id", businessId)
-    .in("id", ids);
+    .in("id", ids)
+    .eq("products.product_images.role", "product_main");
   if (error) throw new Error(`Varyantlar okunamadı: ${error.message}`);
-  const productIds = [...new Set((variants ?? []).map((v) => v.product_id as string))];
 
-  const [{ data: products }, { data: vov }, { data: barcodes }, { data: images }] = await Promise.all([
-    supabase.from("products").select("id, name").eq("business_id", businessId).in("id", productIds),
-    supabase
-      .from("variant_option_values")
-      .select("variant_id, product_option_id, option_value_id")
-      .eq("business_id", businessId)
-      .in("variant_id", ids),
-    supabase.from("barcodes").select("variant_id, barcode, is_primary").eq("business_id", businessId).in("variant_id", ids),
-    supabase
-      .from("product_images")
-      .select("product_id, storage_path, url")
-      .eq("business_id", businessId)
-      .eq("role", "product_main")
-      .in("product_id", productIds),
-  ]);
+  type Row = {
+    id: string; sku: string; product_id: string;
+    products: { name: string; product_images: Array<{ storage_path: string | null; url: string | null; role: string }> | null } | null;
+    variant_option_values: Array<{ option_values: { value: string; sort_order: number } | null; product_options: { kind: string } | null }> | null;
+    barcodes: Array<{ barcode: string; is_primary: boolean }> | null;
+  };
+  const rows = (variants ?? []) as unknown as Row[];
+  const mainOf = (r: Row) => (r.products?.product_images ?? []).find((i) => i.role === "product_main") ?? null;
+  const signed = await signImagePaths(
+    supabase,
+    rows.map((r) => mainOf(r)?.storage_path ?? null).filter((x): x is string => !!x),
+  );
 
-  const valueIds = [...new Set((vov ?? []).map((r) => r.option_value_id as string))];
-  const optionIds = [...new Set((vov ?? []).map((r) => r.product_option_id as string))];
-  const [{ data: values }, { data: options }] = await Promise.all([
-    valueIds.length > 0 ? supabase.from("option_values").select("id, value, sort_order").in("id", valueIds) : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
-    optionIds.length > 0 ? supabase.from("product_options").select("id, kind").in("id", optionIds) : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
-  ]);
-  const valueById = new Map((values ?? []).map((v) => [v.id as string, v.value as string]));
-  const kindById = new Map((options ?? []).map((o) => [o.id as string, o.kind as string]));
-
-  const mains = (images ?? []) as Array<{ product_id: string; storage_path: string | null; url: string | null }>;
-  const signed = await signImagePaths(supabase, mains.map((m) => m.storage_path).filter((x): x is string => !!x));
-
-  for (const v of variants ?? []) {
-    const vid = v.id as string;
-    const pairs = (vov ?? [])
-      .filter((r) => r.variant_id === vid)
-      .map((r) => ({ kind: kindById.get(r.product_option_id as string) ?? "other", value: valueById.get(r.option_value_id as string) ?? "—" }))
+  for (const v of rows) {
+    const pairs = (v.variant_option_values ?? [])
+      .map((r) => ({ kind: r.product_options?.kind ?? "other", value: r.option_values?.value ?? "—" }))
       .sort((a, b) => rank(a.kind) - rank(b.kind));
     const color = pairs.find((p) => p.kind === "color")?.value ?? null;
     const size = pairs.find((p) => p.kind === "size")?.value ?? null;
-    const bcs = (barcodes ?? []).filter((b) => b.variant_id === vid);
+    const bcs = v.barcodes ?? [];
     const primary = bcs.find((b) => b.is_primary) ?? bcs[0];
-    const main = mains.find((m) => m.product_id === v.product_id);
-    out.set(vid, {
-      variant_id: vid,
-      product_id: v.product_id as string,
-      product_name: ((products ?? []).find((p) => p.id === v.product_id)?.name as string | undefined) ?? "—",
-      sku: v.sku as string,
+    const main = mainOf(v);
+    out.set(v.id, {
+      variant_id: v.id,
+      product_id: v.product_id,
+      product_name: v.products?.name ?? "—",
+      sku: v.sku,
       options: pairs.map((p) => p.value).join(" / "),
       color,
       size,
-      primary_barcode: (primary?.barcode as string | undefined) ?? null,
+      primary_barcode: primary?.barcode ?? null,
       thumbnail_url: main ? (main.storage_path ? (signed.get(main.storage_path) ?? null) : main.url) : null,
     });
   }
