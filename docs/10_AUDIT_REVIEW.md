@@ -754,3 +754,45 @@ Bu oturum TLC'ye hiçbir yazma yapmadı (alias/admin hesaplarıyla TLC'de 0 ür�
 
 ### Ertelenen (10A)
 stock_staff için `v_stock_available` rezervasyonları göremediğinden `available = sellable` görünür (CRM'siz rol için bilinçli; stok sayfaları kovaya göre on_hand gösterir); rezervasyon düzenlemede UI'dan yeni satır ekleme (adet/süre/not düzenlenir; yeni ürün için yeni rezervasyon), kısmi teslim, bekleme listesi, otomatik expire job (cron; doğruluk buna bağlı değil), WhatsApp/Instagram otomasyonu, sadakat, komisyon, gerçek TLC müşteri içe aktarımı.
+
+## 20. Faz 10A sonrası — performans geçişi (2026-09-17)
+
+Ölçüm önce: `instrumentation.ts` (opt-in `BOUTIQUEOS_TRACE_SUPABASE=1`, yalnız Node runtime; production'da hiç açılmaz) her Supabase fetch'ini
+`SBTRACE` satırı olarak stderr'e yazar; `perf.mjs` (scratchpad, uzantısız Chrome + CDP) her rotayı 3 kez gezip Navigation Timing (TTFB / responseEnd),
+RSC payload boyutu (`RSC: 1` fetch) ve yerel üretim sunucusunda çağrı sayısı / ardışık tur sayısını çıkarır. Ölçüm hesabı alias `64cfef13…`,
+tenant `ZZ E2E CUSTOMER RESERVATION TEST` (yeniden `active` → ölçüm → yeniden `cancelled`, katalog arşivli, `platform_audit_log` 3 satır). **TLC'ye yazma yok** —
+`tlc_reconcile` anlık görüntüsü 24 anahtarda §13 taban çizgisiyle birebir aynı.
+
+Kök neden: her yetkili sayfada **üç ardışık kimlik/tenant turu** (`getUser` ağ çağrısı → profil + üyelik → işletme + şube, her biri ~300 ms Vercel→Supabase),
+referans listelerinin (kategori/marka/şube/üye/kasa) aynı istekte tekrar tekrar okunması, bağımlı zincirler (`describeVariants` 4 tur), pano için imzalanan
+ama gösterilmeyen küçük resimler.
+
+Yapılanlar (`58477c1 perf: reduce authenticated navigation latency`, `c147fff perf: describe variants in one embedded read`) — RLS, yetki modeli ve iş kuralları
+değişmedi; yetki hiçbir yerde istek dışında cache'lenmez (`cache()` yalnız React istek kapsamı):
+- `lib/tenant.ts`: `getClaims()` (yerel JWT doğrulama) + tek PostgREST turunda `business_members` → `businesses!inner` → `branches` embed'i (aktif filtreleri embed'de), profil paralel. 3 tur → 1.
+- `cache()` ile istek kapsamlı tekilleştirme: kategori/marka/seçenek, şube, POS bağlamı/üye/kasa, kaynak listeleri.
+- Bağımsız okumalar `Promise.all`; `getProduct` varyant+seçenek+barkodu tek embed'de; `listRegisters` açık oturumu embed'de.
+- Pano: `listProducts(..., { thumbnails: false })` (imza yok) + `stockAvailabilitySummary()` (yalnız sayı); ürün sayfası `listStockForVariants` (arama yerine bilinen id'ler).
+- `describeVariants` (POS, iade, rezervasyon, müşteri satış geçmişi, sayım): ürün + ana görsel + seçenek çiftleri + barkod tek embed + tek imza çağrısı (4 tur → 1).
+
+| Rota | Yerel TTFB önce → sonra | Supabase çağrı / tur önce → sonra | Canlı responseEnd önce → sonra¹ | RSC payload |
+|---|---|---|---|---|
+| `/app` | 2580 → 1073 ms | 23 / 7 → 10 / 2 | 3570 → 1189–2320 ms | 13.9 KB (aynı) |
+| `/app/urunler` | 963 → 357 ms | 10 / 4 → 7 / 2 | 2276 → 1524–1549 ms | 21.7 KB (aynı) |
+| `/app/urunler/[id]` | 951 → 383 ms | 30 / 11 → 13 / 3 | 5240 → 2397–2974 ms | 32.3 KB (aynı) |
+| `/app/stok` | 955 → 362 ms | 19 / 7 → 16 / 3 | 3151 → 1651–2216 ms | 28.9 KB (aynı) |
+| `/app/mal-kabul` | 981 → 353 ms | 7 / 4 → 4 / 2 | 1687 → 747–772 ms | 14.5 KB (aynı) |
+| `/app/pos` | 1891 → 684 ms | 11 / 5 → 6 / 2 | 3584 → 1070–1647 ms | 10.0 KB (aynı) |
+| `/app/pos/iade` | 1895 → 669 ms | 10 / 5 → 5 / 2 | 2340 → 752–954 ms | 9.7 KB (aynı) |
+| `/app/musteriler` | 1323 → 673 ms | 7 / 4 → 4 / 2 | 2130 → 829–1709 ms | 12.0 KB (aynı) |
+| `/app/musteriler/[id]` | 2211 → 1602 ms | 17 / 5 → 11 / 3 | — → 2313 ms | 12.8 KB |
+| `/app/rezervasyonlar` | 1264 → 652 ms | 6 / 4 → 3 / 2 | 1202 → 1347–1687 ms | 9.0 KB (aynı) |
+| `/app/rezervasyonlar/[id]` | 1618 → 993 ms | 15 / 4 → 9 / 3 | — → 1568 ms | 9.9 KB |
+| `/app/ayarlar` | 984 → 351 ms | 5 / 3 → 2 / 1 | 979 → 549–687 ms | 10.4 KB (aynı) |
+
+¹ Canlıda TTFB ~56 ms (streaming), anlamlı ölçü `responseEnd`; iki ayrı ölçüm turunun aralığı verildi — Vercel fonksiyonu ile Supabase arasındaki
+tur başına ~300 ms'lik gecikme ve soğuk başlatma gürültüsü baskındır. Payload'lar bilinçli olarak değişmedi (sayfa içerikleri aynı).
+
+Kalan darboğaz: yerel ölçümde bir Supabase turu ~300 ms (ağ), pano hâlâ 2 tur (tenant → veri); sayfaların çoğu artık tenant turu + tek veri turu.
+Daha ileri kazanım tur başına gecikmeyi (bölge yakınlığı / Fluid compute) ya da sunucu tarafı toplu RPC'leri gerektirir — Faz 10B kapsamı değil.
+Gate'ler (SQL değişmedi): lint / typecheck / build / `test:auth` 62/0 / `lint_sql` 0 hata / secret taraması temiz.
