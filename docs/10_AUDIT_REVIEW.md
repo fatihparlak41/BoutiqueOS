@@ -878,3 +878,43 @@ TLC sahibi olarak yalnız STABLE RPC'ler: `enough_data=false` (dönemde 1 adet),
 
 ### Ertelenen (11A)
 Tedarik süresi kaydı ve buna dayalı sipariş zamanı; parti/kohort bazlı sell-through (mal kabul partisine göre); mevsimsellik ve trend (tahmin yok); indirim önerisi; otomatik satın alma / PO; komisyon; e-ticaret; sadakat. Sinyallerin e-posta/WhatsApp ile iletilmesi.
+
+## 23. Faz 12A — Satın alma siparişi temeli (2026-09-18)
+
+### Tedarik modeli denetimi (CURRENT → REQUIRED → MIGRATION IMPACT)
+| Alan | CURRENT | REQUIRED | Uygulanan |
+|---|---|---|---|
+| Tedarikçi | `suppliers` (para birimi, durum) | PO tam olarak bir tedarikçi; ürün-tedarikçi kalıcı eşlemesi yok | `purchase_orders.supplier_id` (bileşik FK); tedarikçi kataloğu **kurulmadı** |
+| Mal kabul motoru | 8A: taslak → gözden geçir → POST; iniş maliyeti, borç, ters kayıt | tek muhasebe/stok yolu olarak **aynen** kullanılsın | `goods_receipts.purchase_order_id` tek kolon; POST/ters kayıt trigger'ları PO durumunu türetir |
+| Numaralandırma | `fn_next_sequence` (yarış-güvenli) | `PO-YYYY-000001` | aynı helper, `PO` ön eki; okunur numara yetki değildir (yetki üyelikten) |
+| Durum | — | draft → approved → ordered → partially_received → received → closed; cancelled | `purchase_order_status` enum, RPC geçişleri, trigger'la dondurma |
+| Beklenen maliyet | — | planlama bilgisi, muhasebe değil | `purchase_order_items.expected_unit_cost` (PO para biriminde); istemci SELECT'i yok, yalnız `rpc_po_detail` (manager+); fişe **kopyalanmaz** |
+| Para birimi / FX | 8A fiş kendi kurunu alır | PO kuru bilgi amaçlı | `fx_rate_snapshot` (nullable); fiş kendi `exchange_rate`'i ile POST edilir; fark serbest |
+| Kısmi teslim | — | çok fiş ↔ bir PO, kalan hesabı | alınan = POST edilmiş & ters kaydı olmayan bağlı fiş satırları (`fn_po_received`), sayaç yok |
+| Aşırı teslim | — | varsayılan engel | POST anında PO satırı kilitli, `OVER_RECEIPT` (override 12A'da yok) |
+| Rol | 8A: procurement = owner/manager/stock_staff; maliyet manager+ | oluştur/onayla owner+manager; stock_staff operasyonel; sales_staff yok | `fn_require_role`, RLS `fn_is_procurement`, kolon yetkisi |
+| Analiz | 11A "Yeniden sipariş adayı" | yalnız taslak ön doldurma | `/app/satin-alma/yeni?varyant=&neden=` → taslakta seçici hazır, adet kullanıcıdan |
+
+### Mimari ve yaşam döngüsü
+`purchase_orders` + `purchase_order_items` (istemci yazamaz, yalnız RPC; RLS procurement) · `goods_receipts.purchase_order_id` (aynı tenant'a zorlayan bileşik FK; taslakta bir kez, açık PO'ya, aynı tedarikçiye — `fn_guard_receipt_po_link`; 8A kolon yetkileri gereği istemci bu kolonu doğrudan yazamaz). Durumlar: **draft** (başlık + satırlar düzenlenir) → **approved** (`rpc_po_approve`, ≥ 1 satır; ticari şartlar dondurulur: tedarikçi, şube, para birimi, sipariş tarihi, satırlar) → **ordered** (`rpc_po_mark_ordered`) → **partially_received / received** (POST trigger'ı `fn_po_on_receipt_posted`: PO satırı `FOR UPDATE`, `PO_NOT_OPEN` / `PO_SUPPLIER_MISMATCH` / `NOT_IN_PO` / `OVER_RECEIPT`, sonra `fn_po_refresh_status`) → **closed** (`rpc_po_close`: received'den ya da kısmi teslimde nedenle "bekleyen miktarı kapat"; defter dokunulmaz, kalan açıkta gösterilir). **cancelled**: draft/approved/ordered ve POST edilmiş fiş yokken, açık taslak fiş varsa `OPEN_RECEIPTS`, neden zorunlu. Ters kayıt (`goods_receipt_reversals` AFTER INSERT) alınanı düşürür ve durumu geri alır (received → partially_received / ordered); kapalı PO kapalı kalır. Beklenen teslim tarihi / referans / not onaydan sonra da düzenlenir (`rpc_po_update`); received/closed/cancelled değişmez, PO silinmez. Zaman damgaları + aktörler: created/approved/ordered/cancelled/closed.
+
+### Sıfır yan etki (POST öncesi)
+T72 `t72_untouched()` ve DEV `zero_side_effects_after_order=true`: taslak → onay → sipariş → PO'dan taslak fiş: `inventory_movements`, `variant_cost_pools`, `inventory_movement_costs`, `supplier_account_entries` değişmez. Yalnız `rpc_post_goods_receipt` yazar.
+
+### PO → mal kabul
+`rpc_po_create_receipt` (procurement rolleri): `rpc_create_goods_receipt` ile TASLAK (tedarikçi, şube, PO para birimi, bilgi kuru, `document_ref`), `rpc_goods_receipt_upsert_line` ile **kalan adetler, maliyet NULL** (mevcut `COST_REQUIRED` akışı; yönetici gerçek maliyeti girer). Fiş ekranında "Sipariş" paneli: satır başına sipariş/alınan/kalan/bu belgede, manager+ için beklenen maliyet **referans olarak**; taslakta kalanı aşan satır uyarılır. Tam teslim → `NOTHING_REMAINING`.
+
+### Testler
+T72 (**90** assertion; fresh-DB **1318/0**; T01 tablo sayısı 59): yetkiler/kolon yetkisi, numara biçimi, taslak satırları (edit/sil, toplam 2.400 EUR), yabancı tedarikçi/şube/varyant, TRY kur, tarih, adet; onay/sipariş ve dondurma; sıfır yan etki; stock_staff'ın PO'dan açtığı taslak (kalan, maliyetsiz, bağlı); S 6 / M 4 / Top 5 POST → kalan 4 / 6 / 0, fiş maliyeti 110 ≠ beklenen 100 ve kur 35 ile havuz/borç; taslak fiş ve iptal edilen fiş sayılmaz; `OVER_RECEIPT` (11 > 10) hiçbir şey bırakmaz; `NOT_IN_PO`; kısmi PO iptal edilemez, açık taslakla kapatılamaz; kalanı kur 36 ile alan fiş → RECEIVED, PO snapshot 35 kalır; kapatma; kapalı PO değişmez/silinmez; ters kayıt → ordered, sonraki fiş tam kalanla; 5/8 → "bekleyen miktarı kapat" (neden zorunlu), defter 4 hareket; iptal kuralları (`OPEN_RECEIPTS`, neden), tedarikçi uyuşmazlığı, kapalı PO'ya bağlanamaz, bağlantı taşınamaz; roller (stock_staff maliyetsiz liste/detay/referans, oluşturamaz/onaylayamaz/kolonu okuyamaz; sales_staff FORBIDDEN, RLS 0 satır; diğer tenant FORBIDDEN, çapraz bağlantı `INVALID_PO`). `po_race_run.ps1`: eşzamanlı çift onay (INVALID_STATE), son adetler için yarışan iki fiş (biri POST, diğeri **OVER_RECEIPT**, fiş taslak kalır, tek hareket), çift "sipariş verildi", ardışık numaralar {n, n+1}. Concurrency 10/10, auth 62/0, lint_sql 0/0.
+
+### Sorgu planı (yerel, 2.000 PO / 6.000 satır / 1.500 bağlı POST edilmiş fiş + 40k satış fixture'ı)
+`rpc_po_list` 100 → 28 ms, 500 → 35 ms; `rpc_po_detail` 14 ms; `rpc_receipt_po_reference` 1,2 ms. İndeksler: `purchase_orders (business_id, status, order_date)`, `purchase_order_items (purchase_order_id)`, `goods_receipts (purchase_order_id) WHERE NOT NULL`.
+
+### Sentetik canlı smoke (fixture `ZZ E2E PURCHASE ORDER TEST` `b6abb41f…`, alias sahip; UI + aynı RPC'ler)
+UI'da: taslak (form) → seçiciyle Elbise S/M 10 @100 + Üst 3 @80 → Üst 5'e düzeltildi → beklenen **2.400** → sıfır yan etki (stok raporu 0) → Onayla → Sipariş verildi (seçici kayboldu, "ticari şartlar dondurulmuştur") → "Mal kabul oluştur" → fiş taslağı 3 satır kalan adetle, maliyetsiz, POST bloklu ("fiyat girilmedi"), sipariş paneli → S 6 / M 4 / Üst 5 @100/100/80 → gözden geçir → POST → PO **Kısmen teslim** 15/25, satırlar 4/6/0 kalan, bağlı fiş "sayıldı" → fiş #2 (S 4, M 6 ön dolu), S 5 istendi → panel "kalanı aşıyor", POST reddedildi (OVER_RECEIPT, artık Türkçe mesaj), fiş taslak kaldı, PO değişmedi → taslak iptal → PO değişmedi → fiş #3 kalanı 110 ₺ ile → PO **Teslim alındı** 25/25, "Mal kabul oluştur" yok → Kapat → **Kapatıldı** (zaman damgası) → liste. Analizden: `?varyant=&neden=` → form "Analizden gelen aday" → taslakta seçici 2 satır + "Analizden: …", **0 satır sipariş** (otomatik yok). DEV RPC: ters kayıt 3/8 → ordered, alınan 0, sonraki fiş 8 ön dolu; 5/8 + nedenle kapat → closed alınan 5 kalan 3; EUR PO @35, fiş @36 → borç 110 EUR @36, PO snapshot 35; TLC branch/supplier/variant/list → FORBIDDEN / INVALID_*. stock_staff: listede/detayda beklenen tutar-maliyet sütunu yok, RSC'de maliyet anahtarı yok, "Yeni sipariş" yok, onay RPC 42501, fiş paneli maliyetsiz. sales_staff: liste/detay `/app`'e yönlendirir, RPC FORBIDDEN. Duyarlı 390/768/1440: taşma yok. Fixture `cancelled` (platform audit), 9 PO + 5 POST edilmiş fiş tarih olarak korundu.
+
+### TLC salt-okuma kanıtı
+TLC'de PO oluşturulmadı; 9 taslak / 1 POST / 5 iptal fiş aynen; before/after 24 anahtar aynı (`goods_receipts draft=9, posted=1, cancelled=5`).
+
+### Ertelenen (12A)
+Tedarikçi teslim süresi öğrenimi (PO ordered_at → receipt posted_at farkından türetilecek), aşırı teslim override politikası, tedarikçi ürün kodu eşlemesi, çok tedarikçili fiyat karşılaştırması, PO e-posta/PDF gönderimi, tedarikçi ödemeleri, OCR, otomatik satın alma.

@@ -253,3 +253,30 @@ the aggregates in the tens of milliseconds at pilot scale and under 0.5 s at 40k
 
 **Why:** a boutique owner acts on a sentence they can check against the shelf; a score they
 cannot audit is noise, and with the pilot's sparse history any "trend" would be fiction.
+
+---
+
+## ADR-18 · Purchase Orders Plan, Only Posted Receipts Post
+
+**Decision (Phase 12A):**
+1. A purchase order is a commercial planning document. Creating, approving, marking ordered,
+   cancelling or closing one never writes an inventory movement, a cost pool change or a
+   supplier ledger entry. The Phase 8A goods receipt POST remains the single accounting and
+   inventory event; a receipt may reference a PO, the PO never references stock.
+2. Received quantities are derived from posted, non-reversed linked receipt items — no
+   counters. The receipt POST trigger validates under the PO row lock (variant on the PO,
+   total ≤ ordered → `OVER_RECEIPT`, PO open, same supplier) so two receipts cannot
+   over-receive; a reversal lowers the received total and the status follows.
+3. Expected unit cost is planning information in the PO currency; it is never copied into
+   a receipt. A receipt created from a PO carries the remaining quantities and no cost; the
+   manager prices what actually arrived, with its own FX snapshot.
+4. After approval the commercial terms are frozen; expected date, reference and note stay
+   editable. A partly received order is closed with its balance abandoned, not cancelled;
+   received / closed / cancelled orders are immutable and never deleted.
+5. Roles follow Phase 8A: owner / manager manage the document and see expected cost;
+   stock_staff sees the operational document and may create the draft receipt; sales_staff
+   has no procurement access. Intelligence only prefills a draft — it never orders.
+
+**Why:** one accounting path keeps stock, cost and liability provable from the ledger alone;
+deriving received quantities avoids drifting counters; keeping expected cost out of the
+receipt keeps the MWA honest when the invoice differs from the plan.
