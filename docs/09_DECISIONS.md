@@ -230,3 +230,26 @@ business. Once that RPC is the only way in, the invariant can be tightened from
 **Why:** a second ledger drifts from the first and needs its own proofs; the operational
 tables already are the proofs. The 366-day bound and the indexes added with the phase keep
 the aggregates in the tens of milliseconds at pilot scale and under 0.5 s at 40k sales/year.
+
+---
+
+## ADR-17 · Fashion Intelligence is Rules over Records, Never a Score
+
+**Decision (Phase 11A):**
+1. Every intelligence signal is a deterministic rule over the operational records via
+   `fn_intel_facts` (supply, first arrival, buckets, holds, window and lifetime sales /
+   returns per variant). No model, no prediction, no composite score; each row carries the
+   inputs and a sentence built from them ("Son 30 günde 8 adet satıldı, 2 adet müsait kaldı.").
+2. Thresholds are RPC parameters with documented defaults, echoed back in the payload and
+   shown on the page. Percentages (shares, return rates) appear only above a sample size;
+   below it the count is shown and the page says "küçük örneklem" / "Henüz yeterli veri yok".
+3. Sell-through is the all-time cohort per variant (no lot tracking) and is named so; stock
+   age counts from the first sellable arrival and is not reset by a restock; velocity uses
+   active selling days so a newly received product is neither "slow" nor a "bestseller".
+4. Replenishment and excess are candidates with explanations — no purchase order, no
+   discount, no supplier lead time (not stored, therefore not guessed).
+5. Access follows ADR-16: manager+ everything incl. value; sales_staff scoped sales signals
+   without money; stock_staff stock-side sections only.
+
+**Why:** a boutique owner acts on a sentence they can check against the shelf; a score they
+cannot audit is noise, and with the pilot's sparse history any "trend" would be fiction.

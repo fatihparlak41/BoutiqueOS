@@ -845,3 +845,36 @@ TLC sahibi (77bf787b) olarak yalnız STABLE rapor RPC'leri okundu: Eylül 2026 �
 
 ### Ertelenen (10B)
 Sayfa/yazdırma dışa aktarımı; şubeler arası karşılaştırma tablosu (tek şubeli pilot); sell-through (alım adedine oran — gelecek dönemde mal kabul kaynaklı); kohort / tekrar satın alma aralığı; personel kâr katkısı politikası (bugün manager+ görüyor, prim yok); büyük kataloglarda ürün filtresi (> 300 ürün: seçici yerine arama gerekir); tenant saat dilimi dışında rapor ayarı yok.
+
+## 22. Faz 11A — Moda zekâsı (2026-09-17)
+
+### Veri hazırlığı denetimi (METRIC → SOURCE → RELIABILITY → GAP)
+| Metrik | Kaynak | Güvenilirlik | Boşluk / karar |
+|---|---|---|---|
+| Sell-through | `inventory_movements` (satılabilir kovaya giren `goods_receipt` / `transfer_receive` / artı `adjustment` / artı `state_change`) ÷ `sale_items` − `return_items` | güvenilir, **parti takibi yok**: kohort = varyantın tüm arzı; yeniden alım oranı düşürür | dürüstçe "tüm geçmiş" olarak adlandırıldı |
+| Stok yaşı | ilk satılabilir giriş hareketi (`first_arrival`), yalnız satılabilir stoku olan varyant | güvenilir; `products.created_at` kullanılmaz | yeniden alım yaşı sıfırlamaz (belgelendi) |
+| İlk giriş / son satış | `min(occurred_at)` giriş, `max(sales.occurred_at)` | güvenilir | — |
+| Beden / renk performansı | `variant_option_values` → `product_options.kind` (size / color) → `option_values.value` | seçenek tanımlı ürünlerde güvenilir | seçeneksiz varyantlar beden/renk analizine girmez (TLC'nin "Beden" seçeneği `kind=other` → bedensiz görünür) |
+| Müsaitlik | satılabilir − aktif & süresi dolmamış rezervasyon (Rev 3) | güvenilir | stock_staff için rezervasyon görünmez → müsait = satılabilir |
+| İade oranı | dönemde `return_items` ÷ `sale_items` | güvenilir; **örneklem eşiği** 10 adet | eşik altında yüzde gösterilmez |
+| Rezervasyon talebi | `reservations` (active / converted / cancelled / expired, dönem) | güvenilir | süresi dolan / iptal talep sayılmaz, ayrı gösterilir |
+| Yeniden sipariş | dönem satışı + müsait + aktif rezervasyon + min. stok | güvenilir, kurala dayalı | tedarik süresi kayıtlı değil → **tahmin edilmez**; sipariş oluşturulmaz |
+| Satış hızı | dönem satışı ÷ aktif gün (dönem ile ilk girişten bu yana geçen günün küçüğü) | güvenilir | yeni ürün ömür boyu adetle sıralanmaz |
+
+### Metrik tanımları ve eşikler
+Migration başlığı (`20260917150000`) + UI "Bu sinyaller nasıl hesaplanır?" bölümü. Varsayılan eşikler (RPC parametreleri, `/app/analiz` üzerinde görünür ve URL ile değiştirilebilir): örneklem 10 adet (pay/oran yüzdesi için), min. stok 2, hızlı: ≥ 3 satış + ≥ 7 aktif gün (hıza göre), yavaş: yaş ≥ 60 gün, müsait ≥ 3, dönemde ≤ 1 satış, ≥ 30 gün satışsız (ya da hiç), sipariş adayı: dönemde ≥ 3 satış ve müsait ≤ min. stok **veya** aktif rezervasyon ≥ müsait, fazla: müsait ≥ 10, yaş ≥ 60, ≥ 120 günlük stok (ya da hiç satış), bedeni kırılan: bazı bedenler müsait + daha önce arz edilmiş ≥ 1 beden tükenmiş. Dönem 14 / 30 / 90 gün (RPC 7–365 sınırlar), tenant saat dilimi.
+
+### RPC mimarisi
+`fn_intel_facts` (düz SQL, varyant başına: arz, ilk/son giriş, kovalar, rezerve, dönem ve ömür boyu satış/iade, rezervasyon sayaçları, havuz) → `rpc_intel_home` (özet + 9 liste, **tek tur**), `rpc_intel_dimensions` (beden/renk; ürün ya da kategori), `rpc_intel_product` (ürün sayfası, mevcut `Promise.all` içinde). Erişim `fn_intel_access`: owner/manager tümü (+ stok değeri), sales_staff satışa dayalı sinyaller görünürlük kapsamında ve parasız, stock_staff yalnız stok tarafı (satış/iade/rezervasyon/değer bölümleri `null`). İndeks eklenmedi: 40k satış / 82k hareketle EXPLAIN'de `return_items(variant_id)` planı değiştirmedi (home 330–400 ms, dimensions 379 ms, product 178 ms; pilot ölçeğinde onlarca ms). Sayfalar: `/app/analiz` tenant turu + 1 tur (yerel 704 ms responseEnd), `/app/analiz/beden-renk` 2 tur, ürün sayfası 12 → 13 çağrı / 3 tur değişmedi (yerel 1035 → 1007 ms, RSC 30 → 36 KB).
+
+### Testler
+T71 (**38** assertion; fresh-DB **1228/0**): izole tenant'ta A–F ürünleri gerçek RPC'lerle (açılış stoku, 24 satış, 3 iade, 3 rezervasyon), sentetik satırların giriş/satış tarihleri test içinde geri alınmış; hızlı satanlar sırası ve hızları (E 1,23 / A 0,57 / D 0,33 / C 0,27), sell-through 54,5, kaç günlük stok 18, yavaş B (150 gün / 19 müsait / 40 gün satışsız, cümlesi ve 3.800 değeri), bedeni kırılan C (S XL müsait, M L tükenmiş, 8 satış), tükenenler, 7 sipariş adayı (cümleleriyle), fazla B, yaş kovaları (31/9/3.060 · 8/2/1.200 · 19/1/3.800 = havuz), iade sinyalleri (M %33,3, S %10, ürün %15,6, hepsi anlamlı), rezervasyon talebi (F 2 hold / 0 müsait / stok az, A-S iptal), beden payları (S 17,7 / M 58,1 / L 24,2 / XL 0), renk payları (81,8 / 9,1 / 9,1), eşik altı gizleme, ürün A/B/C görünümü, roller (sales_staff own → satışsız, business → satışlı, parasız; stock_staff yalnız stok; diğer tenant FORBIDDEN), seyrek tenant sessiz, hiçbir yazma yok.
+
+### Sentetik canlı smoke (fixture `ZZ E2E FASHION INTELLIGENCE TEST` `d1b0ad66…`, gerçek akışlar + sentetik satırların geri tarihlenmesi)
+DEV'de RPC düzeyinde **81/81** assertion (T71 ile aynı beklentiler). Canlı UI: sahip — sinyaller sayfası (hızlı/sipariş/kırık beden/tükenen/yavaş/fazla/yaş/iade/rezervasyon listeleri RPC ile birebir, eşik özeti ve eşik formu; `yavas_yas=200` → yavaş 0, `min_stok=5` → 8 aday), beden & renk (ürün D: Siyah %90 / Kırmızı %10; kategori Alt: S 31,3 / M 37,5 / L 31,3, M iade %33,3), ürün A analiz bloğu (0,57 adet/gün, %54,5, 18 günlük, 1.000 ₺), ürün B "Henüz yeterli veri yok" (sell-through %5, 150 gün, son satış 40 gün), ürün C beden dağılımında M/L "tükendi"; sales_staff — "yalnız görebildiğiniz satışlar" notu, yaş tablosunda değer sütunu yok, RSC'de değer metni/anahtarı yok, ürün sayfasında analiz bloğu yok; stock_staff — yalnız kırık beden / tükenen / yaş, rezervasyon görünmez (tükenen 2), beden & renk yalnız müsaitlik sütunları. Duyarlı 390 / 768 / 1440: taşma yok. Fixture `cancelled` (platform audit), 24 satış korundu.
+
+### TLC salt-okuma
+TLC sahibi olarak yalnız STABLE RPC'ler: `enough_data=false` (dönemde 1 adet), hızlı/yavaş/sipariş/fazla/iade/rezervasyon listeleri **boş**, bedeni kırılan yok, yaş 0–30: 7 adet / 2 varyant / 2.840 ₺ (= havuz), 18 varyant hiç stoklanmamış; FATİH PARLAK ürünü: arz 0, sinyal yok. Beklenen "Henüz yeterli veri yok" davranışı. **TLC before/after 24 anahtarda aynı; TLC'ye yazma yok.**
+
+### Ertelenen (11A)
+Tedarik süresi kaydı ve buna dayalı sipariş zamanı; parti/kohort bazlı sell-through (mal kabul partisine göre); mevsimsellik ve trend (tahmin yok); indirim önerisi; otomatik satın alma / PO; komisyon; e-ticaret; sadakat. Sinyallerin e-posta/WhatsApp ile iletilmesi.
