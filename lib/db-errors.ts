@@ -62,6 +62,16 @@ const RPC_MESSAGES: Array<[string, string]> = [
   // goods receiving + landed cost (20260916090000)
   ["NOT_REVIEWED", "Belge işlenmeden önce gözden geçirilmeli. Önce \"Gözden geçir\" adımını çalıştırın."],
   ["STALE_DRAFT", "Belge gözden geçirildikten sonra değişti. Yeniden gözden geçirin."],
+  // purchase orders (20260918100000)
+  ["OVER_RECEIPT", "Bu belge siparişte kalan miktarı aşıyor. Adetleri kalan miktara indirin ya da siparişi düzeltin."],
+  ["NOT_IN_PO", "Belgede siparişte olmayan bir varyant var. Satırı silin ya da siparişsiz bir mal kabul açın."],
+  ["PO_NOT_OPEN", "Bu sipariş açık değil; mal kabul ona bağlanamaz ya da işlenemez."],
+  ["PO_SUPPLIER_MISMATCH", "Mal kabulün tedarikçisi siparişin tedarikçisiyle aynı değil."],
+  ["OPEN_RECEIPTS", "Bu siparişe bağlı taslak mal kabul var. Önce onu iptal edin ya da işleyin."],
+  ["NOTHING_REMAINING", "Siparişin tamamı teslim alındı; kalan miktar yok."],
+  ["REASON_REQUIRED", "Bir neden yazın (en az 3 karakter)."],
+  ["EMPTY_DOCUMENT", "Belgede satır yok."],
+  ["INVALID_PO", "Sipariş bu işletmede bulunamadı."],
   ["ALREADY_REVERSED", "Bu belge zaten ters kaydedilmiş."],
   ["this business requires a return reason", "Bu işletmede iade nedeni zorunlu."],
   ["REASON_REQUIRED", "Ters kayıt nedeni en az 3 karakter olmalı."],

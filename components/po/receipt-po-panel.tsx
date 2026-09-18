@@ -11,7 +11,9 @@ import { formatMoney, formatQuantity } from "@/lib/receiving/format";
  */
 export function ReceiptPoPanel({ receipt, reference: ref }: { receipt: ReceiptDetail; reference: ReceiptPoReference }) {
   const labels = new Map(receipt.lines.map((l) => [l.variant_id, l]));
-  const overs = ref.lines.filter((l) => (labels.get(l.variant_id)?.quantity ?? 0) > l.remaining);
+  // the over-receipt warning is a draft concern: a posted receipt's own units are already inside "received"
+  const draft = receipt.status === "draft";
+  const overs = draft ? ref.lines.filter((l) => (labels.get(l.variant_id)?.quantity ?? 0) > l.remaining) : [];
   return (
     <section className="space-y-3 rounded border border-border bg-background/60 p-4" data-testid="receipt-po-panel">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -31,7 +33,7 @@ export function ReceiptPoPanel({ receipt, reference: ref }: { receipt: ReceiptDe
               <span className="text-text-secondary" data-numeric>
                 sipariş {formatQuantity(l.ordered)} · alınan {formatQuantity(l.received)} · kalan {formatQuantity(l.remaining)}
                 {line ? ` · bu belgede ${formatQuantity(claimed)}` : ""}
-                {claimed > l.remaining ? <span className="ml-1 font-medium text-danger">kalanı aşıyor</span> : null}
+                {draft && claimed > l.remaining ? <span className="ml-1 font-medium text-danger">kalanı aşıyor</span> : null}
                 {ref.financial && l.expected_unit_cost != null ? ` · beklenen ${formatMoney(l.expected_unit_cost, ref.po_currency)}` : ""}
               </span>
             </li>
