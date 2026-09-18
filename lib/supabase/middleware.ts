@@ -2,11 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
 import { publicSupabaseEnv } from "@/lib/env";
 
-const PROTECTED_PREFIXES = ["/app", "/select-business", "/no-access", "/auth/session-ready"];
+const PROTECTED_PREFIXES = ["/app", "/select-business", "/no-access", "/auth/session-ready", "/basvuru", "/basvuru-bekliyor", "/hesap-durumu", "/platform"];
+
+/** Public auth entry points a signed-in visitor is sent away from (registration continues at /basvuru). */
+const SIGNED_OUT_ONLY: Record<string, string> = { "/login": "/app", "/kayit": "/basvuru" };
 
 /**
  * Refreshes the Supabase session on every request and enforces the two routing rules:
- * unauthenticated -> /login, authenticated on /login -> /app (tenant entry).
+ * unauthenticated -> /login, authenticated on /login -> /app (tenant entry) and on /kayit -> /basvuru.
  */
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -60,8 +63,8 @@ export async function updateSession(request: NextRequest) {
     return redirectWithSession(request, "/login", response, authHeaders);
   }
 
-  if (claims && pathname === "/login") {
-    return redirectWithSession(request, "/app", response, authHeaders);
+  if (claims && pathname in SIGNED_OUT_ONLY) {
+    return redirectWithSession(request, SIGNED_OUT_ONLY[pathname], response, authHeaders);
   }
 
   return response;

@@ -62,6 +62,20 @@ const RPC_MESSAGES: Array<[string, string]> = [
   // goods receiving + landed cost (20260916090000)
   ["NOT_REVIEWED", "Belge işlenmeden önce gözden geçirilmeli. Önce \"Gözden geçir\" adımını çalıştırın."],
   ["STALE_DRAFT", "Belge gözden geçirildikten sonra değişti. Yeniden gözden geçirin."],
+  // SaaS onboarding (20260918140000) — the applicant and the platform console
+  ["EMAIL_NOT_CONFIRMED: confirm your e-mail", "Önce e-posta adresinizi doğrulayın; kayıt e-postasındaki bağlantı bunu yapar."],
+  ["EMAIL_NOT_CONFIRMED: the applicant", "Başvuru sahibi e-posta adresini henüz doğrulamadı; onay bunu bekler."],
+  ["INVALID_NAME", "İşletme adı gerekli."],
+  ["INVALID_COUNTRY", "Ülkeyi listeden seçin."],
+  ["INVALID_PLAN", "Seçilen plan artık sunulmuyor. Yeniden seçin."],
+  ["NO_PLAN", "Sunulan bir plan yok; önce Planlar sayfasından bir plan tanımlayın."],
+  ["INVALID_STATUS", "Durum tanınmadı."],
+  ["INVALID_STATE: application", "Başvuru bu durumda bu işlemi kabul etmiyor. Sayfayı yenileyin."],
+  ["INVALID_STATE: subscription", "Abonelik kapanmış; durumu değiştirilemez."],
+  ["NOT_FOUND: application", "Başvuru bulunamadı."],
+  ["NOT_FOUND: subscription", "Abonelik bulunamadı."],
+  ["NOT_FOUND: business", "İşletme bulunamadı."],
+  ["platform administrator role required", "Bu işlem platform yetkisi gerektirir."],
   // purchase orders (20260918100000)
   ["OVER_RECEIPT", "Bu belge siparişte kalan miktarı aşıyor. Adetleri kalan miktara indirin ya da siparişi düzeltin."],
   ["NOT_IN_PO", "Belgede siparişte olmayan bir varyant var. Satırı silin ya da siparişsiz bir mal kabul açın."],

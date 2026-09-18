@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 59 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 59,
+SELECT t_check('T01 all 62 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 62,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -4567,6 +4567,251 @@ SELECT t_check('T72i only receipt POSTs wrote to the ledger: movements 5 (gr1 3 
   (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) = 8
   AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP') AND entry_type = 'liability') = 4
   AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP') AND entry_type = 'credit') = 1);
+
+-- ============================================================
+-- T73  SaaS platform foundation  (Phase 13A)
+-- ============================================================
+SELECT t_check('T73a saas tables have RLS and no write policies',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('saas_plans','business_applications','business_subscriptions') AND relrowsecurity) = 3
+  AND (SELECT count(*) FROM pg_policies WHERE tablename IN ('saas_plans','business_applications','business_subscriptions') AND cmd <> 'SELECT') = 0);
+SELECT t_check('T73a2 clients cannot write saas tables',
+  NOT has_table_privilege('authenticated', 'saas_plans', 'INSERT') AND NOT has_table_privilege('authenticated', 'saas_plans', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'business_applications', 'INSERT') AND NOT has_table_privilege('authenticated', 'business_applications', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'business_subscriptions', 'INSERT') AND NOT has_table_privilege('authenticated', 'business_subscriptions', 'UPDATE')
+  AND NOT has_table_privilege('anon', 'business_applications', 'SELECT') AND NOT has_table_privilege('anon', 'business_subscriptions', 'SELECT'));
+SELECT t_check('T73a3 platform tables still have zero policies and the audit log gained the application target',
+  (SELECT count(*) FROM pg_policies WHERE tablename IN ('platform_admins','platform_audit_log')) = 0
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'platform_audit_log' AND column_name = 'target_application_id'));
+SELECT t_check('T73a4 businesses still has no client INSERT policy and no pending status',
+  (SELECT count(*) FROM pg_policies WHERE tablename = 'businesses' AND cmd = 'INSERT') = 0
+  AND (SELECT count(*) FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'business_status') = 3);
+SELECT t_check('T73a5 the plan catalog is data: one active plan with a price, callable by anon',
+  (SELECT count(*) FROM saas_plans WHERE is_active) = 1
+  AND has_function_privilege('anon', 'rpc_saas_plans()', 'EXECUTE')
+  AND (SELECT (rpc_saas_plans() -> 0 ->> 'price_amount')::numeric > 0));
+
+-- the platform admin of T41 was retired at the end of that block; bring them back
+UPDATE platform_admins SET is_active = true WHERE user_id = t_get('u8');
+-- applicants: a9 (unconfirmed at first), a10, a11
+SELECT t_set('a9',  'aaaaaaaa-0000-4000-8000-000000000021');
+SELECT t_set('a10', 'aaaaaaaa-0000-4000-8000-000000000022');
+SELECT t_set('a11', 'aaaaaaaa-0000-4000-8000-000000000023');
+INSERT INTO auth.users (id, instance_id, aud, role, email, email_confirmed_at, raw_user_meta_data) VALUES
+  (t_get('a9'),  '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'applicant-a@boutiqueos.test', NULL, '{"full_name":"Aylin Kaya"}'),
+  (t_get('a10'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'applicant-b@boutiqueos.test', now(), '{}'),
+  (t_get('a11'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'applicant-c@boutiqueos.test', now(), '{}')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO profiles (id) VALUES (t_get('a9')), (t_get('a10')), (t_get('a11')) ON CONFLICT DO NOTHING;
+CREATE FUNCTION t73_app(p_user TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT id FROM business_applications WHERE applicant_user_id = t_get(p_user) ORDER BY (status = 'pending') DESC, submitted_at DESC, id DESC LIMIT 1 $$;
+CREATE FUNCTION t73_biz(p_user TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT business_id FROM business_applications WHERE applicant_user_id = t_get(p_user) AND status = 'approved' LIMIT 1 $$;
+-- evaluate a boolean from the superuser's side while a tenant/platform session is active
+CREATE FUNCTION t73_q(p_sql TEXT) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE b BOOLEAN; BEGIN EXECUTE 'SELECT (' || p_sql || ')' INTO b; RETURN COALESCE(b, false); END $$;
+CREATE FUNCTION t73_sub(p_user TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT id FROM business_subscriptions WHERE business_id = t73_biz(p_user) ORDER BY created_at DESC LIMIT 1 $$;
+CREATE FUNCTION t73_app_in(p_user TEXT, p_status TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT id FROM business_applications WHERE applicant_user_id = t_get(p_user) AND status::text = p_status ORDER BY submitted_at DESC LIMIT 1 $$;
+CREATE TEMP TABLE _t73 AS SELECT (SELECT count(*) FROM businesses) AS biz, (SELECT count(*) FROM platform_audit_log) AS audit;
+GRANT SELECT ON _t73 TO authenticated;
+
+-- ---------------- submission ----------------
+SELECT t_err('T73b unauthenticated cannot apply', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik') $q$, 'UNAUTHENTICATED');
+SELECT t_login('a9');
+SELECT t_err('T73b2 an unconfirmed address cannot apply', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik') $q$, 'EMAIL_NOT_CONFIRMED');
+SELECT t_logout();
+UPDATE auth.users SET email_confirmed_at = now() WHERE id = t_get('a9');
+SELECT t_login('a9');
+SELECT t_err('T73b3 the business name is required', $q$ SELECT rpc_submit_business_application(' ') $q$, 'INVALID_NAME');
+SELECT t_err('T73b4 the currency is validated', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik', 'TR', 'XXX') $q$, 'INVALID_CURRENCY');
+SELECT t_err('T73b5 the plan must be offered', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik', 'TR', 'TRY', NULL, NULL, NULL, gen_random_uuid()) $q$, 'INVALID_PLAN');
+SELECT t_ok('T73c a confirmed applicant submits',
+  $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik', 'TR', 'TRY', '+90 555 000 0001', 'butik', 'Merkez', (SELECT id FROM saas_plans WHERE code = 'starter'), 'Aylin Kaya') $q$);
+SELECT t_check('T73c2 the application is pending and the registrant name landed on the profile',
+  (SELECT status = 'pending' AND country = 'TR' AND currency = 'TRY' AND plan_id IS NOT NULL FROM business_applications WHERE id = t73_app('a9'))
+  AND (SELECT full_name = 'Aylin Kaya' FROM profiles WHERE id = t_get('a9')));
+SELECT t_check('T73c3 a second submission replays the first (no duplicate)',
+  (SELECT (r ->> 'replayed')::boolean AND (r ->> 'application_id')::uuid = t73_app('a9') FROM rpc_submit_business_application('ZZ Baska Isim') r)
+  AND (SELECT count(*) FROM business_applications WHERE applicant_user_id = t_get('a9')) = 1);
+SELECT t_check('T73c4 the applicant reads own status only, without internals',
+  (SELECT r ->> 'status' = 'pending' AND r ->> 'business_name' = 'ZZ Aylin Butik' AND r -> 'plan' ->> 'code' = 'starter' AND r ->> 'business_active' IS NULL FROM rpc_my_business_application() r)
+  AND (SELECT count(*) FROM business_applications) = 1);
+SELECT t_err('T73c5 the applicant cannot approve their own application', $q$ SELECT rpc_platform_approve_application(t73_app('a9')) $q$, 'FORBIDDEN');
+SELECT t_err('T73c6 the applicant cannot read the platform queue', $q$ SELECT rpc_platform_applications() $q$, 'FORBIDDEN');
+SELECT t_err('T73c7 the applicant cannot insert a business', $q$ INSERT INTO businesses (name, code) VALUES ('X', 'XXX') $q$, '42501');
+SELECT t_err('T73c8 the applicant cannot assign themselves to a tenant', $q$ INSERT INTO business_members (business_id, user_id, role) VALUES (t_get('biz'), t_get('a9'), 'owner') $q$, '42501');
+SELECT t_check('T73c9 no business exists for the applicant before approval', (SELECT count(*) FROM business_members WHERE user_id = t_get('a9')) = 0);
+SELECT t_logout();
+
+-- ---------------- who may approve ----------------
+SELECT t_login('u1');
+SELECT t_err('T73d a tenant owner cannot approve', $q$ SELECT rpc_platform_approve_application(t73_app('a9')) $q$, 'FORBIDDEN');
+SELECT t_err('T73d2 a tenant owner cannot reject', $q$ SELECT rpc_platform_reject_application(t73_app('a9'), 'no') $q$, 'FORBIDDEN');
+SELECT t_check('T73d3 a tenant owner sees no application of others', (SELECT count(*) FROM business_applications) = 0);
+SELECT t_check('T73d4 whoami says not a platform admin', (SELECT NOT (rpc_platform_whoami() ->> 'platform_admin')::boolean));
+SELECT t_logout();
+
+-- ---------------- atomic activation ----------------
+UPDATE auth.users SET email_confirmed_at = NULL WHERE id = t_get('a9');
+SELECT t_login('u8');
+SELECT t_err('T73e approval refuses an applicant whose address became unconfirmed', $q$ SELECT rpc_platform_approve_application(t73_app('a9')) $q$, 'EMAIL_NOT_CONFIRMED');
+SELECT t_logout();
+UPDATE auth.users SET email_confirmed_at = now() WHERE id = t_get('a9');
+SELECT t_login('u8');
+SELECT t_check('T73e2 whoami says platform admin with one pending application',
+  (SELECT (r ->> 'platform_admin')::boolean AND (r ->> 'pending_applications')::int = 1 FROM rpc_platform_whoami() r));
+SELECT t_ok('T73e3 the platform admin approves', $q$ SELECT rpc_platform_approve_application(t73_app('a9'), 'pilot onayi') $q$);
+SELECT t_logout();
+SELECT t_check('T73e4 exactly one business was created, active, with a readable unique code',
+  (SELECT count(*) FROM businesses) = (SELECT biz + 1 FROM _t73)
+  AND (SELECT status = 'active' AND code = 'ZZAYLINB' AND name = 'ZZ Aylin Butik' AND base_currency = 'TRY' AND phone = '+90 555 000 0001' FROM businesses WHERE id = t73_biz('a9')));
+SELECT t_check('T73e5 the registrant is the first and only owner',
+  (SELECT count(*) FROM business_members WHERE business_id = t73_biz('a9')) = 1
+  AND (SELECT role = 'owner' AND is_active FROM business_members WHERE business_id = t73_biz('a9') AND user_id = t_get('a9')));
+SELECT t_check('T73e6 the initial branch Merkez is the default',
+  (SELECT count(*) FROM branches WHERE business_id = t73_biz('a9')) = 1
+  AND (SELECT name = 'Merkez' AND is_default AND status = 'active' FROM branches WHERE business_id = t73_biz('a9')));
+SELECT t_check('T73e7 default settings carry every key the RPCs read',
+  (SELECT settings ? 'accepted_currencies' AND settings ? 'money_refund_allowed' AND settings ? 'store_credit_allowed' AND settings ? 'exchange_window_days'
+          AND settings ->> 'sales_visibility_scope' = 'own' AND settings ->> 'timezone' = 'Europe/Istanbul' AND settings -> 'accepted_currencies' @> '["TRY"]'
+   FROM businesses WHERE id = t73_biz('a9')));
+SELECT t_check('T73e8 a pending subscription on the chosen plan, no dates, no provider',
+  (SELECT count(*) FROM business_subscriptions WHERE business_id = t73_biz('a9')) = 1
+  AND (SELECT status = 'pending' AND starts_at IS NULL AND activated_at IS NULL AND external_provider IS NULL AND source = 'platform_manual'
+       FROM business_subscriptions WHERE business_id = t73_biz('a9')));
+SELECT t_check('T73e9 the application is approved, reviewed, linked; the audit log has the approval',
+  (SELECT status = 'approved' AND reviewed_by = t_get('u8') AND reviewed_at IS NOT NULL AND review_note = 'pilot onayi' AND business_id IS NOT NULL FROM business_applications WHERE id = t73_app('a9'))
+  AND (SELECT count(*) FROM platform_audit_log WHERE action = 'approve_application' AND target_application_id = t73_app('a9') AND target_business_id = t73_biz('a9')) = 1);
+SELECT t_login('u8');
+SELECT t_check('T73f approving again replays the same business (idempotent)',
+  (SELECT (r ->> 'replayed')::boolean AND (r ->> 'business_id')::uuid = t73_biz('a9') FROM rpc_platform_approve_application(t73_app('a9')) r)
+  AND t73_q($q$ (SELECT count(*) FROM businesses) = (SELECT biz + 1 FROM _t73) $q$)
+  AND t73_q($q$ (SELECT count(*) FROM business_members WHERE user_id = t_get('a9')) = 1 $q$)
+  AND t73_q($q$ (SELECT count(*) FROM platform_audit_log WHERE action = 'approve_application') = 1 $q$));
+SELECT t_err('T73f2 an approved application cannot be rejected', $q$ SELECT rpc_platform_reject_application(t73_app('a9'), 'gec kaldi') $q$, 'INVALID_STATE');
+SELECT t_err('T73f3 unknown application', $q$ SELECT rpc_platform_approve_application(gen_random_uuid()) $q$, 'NOT_FOUND');
+SELECT t_check('T73f4 the platform queue lists the application with the applicant and plan',
+  (SELECT (r ->> 'total')::int = 1 AND (r ->> 'pending')::int = 0 AND r -> 'rows' -> 0 -> 'applicant' ->> 'email' = 'applicant-a@boutiqueos.test'
+          AND r -> 'rows' -> 0 -> 'plan' ->> 'code' = 'starter' FROM rpc_platform_applications() r));
+SELECT t_check('T73f5 the detail view carries business, subscription and reviewer',
+  (SELECT r -> 'business' ->> 'code' = 'ZZAYLINB' AND r -> 'subscription' ->> 'status' = 'pending' AND r -> 'applicant' ->> 'name' = 'Aylin Kaya' AND (r -> 'applicant' ->> 'other_memberships')::int = 0
+   FROM rpc_platform_application_detail(t73_app('a9')) r));
+SELECT t_check('T73f6 the business directory finds it by code with owners=1 and the subscription',
+  (SELECT (r ->> 'total')::int = 1 AND (r -> 'rows' -> 0 ->> 'owners')::int = 1 AND (r -> 'rows' -> 0 ->> 'branches')::int = 1 AND r -> 'rows' -> 0 -> 'subscription' ->> 'plan' = 'starter'
+   FROM rpc_platform_businesses(NULL, 'ZZAYLINB') r));
+SELECT t_check('T73f7 the business detail shows the owner, timezone and the audit trail',
+  (SELECT r -> 'owners' -> 0 ->> 'email' = 'applicant-a@boutiqueos.test' AND r ->> 'timezone' = 'Europe/Istanbul' AND jsonb_array_length(r -> 'audit') = 1 AND r -> 'application' ->> 'status' = 'approved'
+   FROM rpc_platform_business_detail(t73_biz('a9')) r));
+SELECT t_logout();
+
+-- ---------------- the new owner lives in a normal tenant ----------------
+SELECT t_login('a9');
+SELECT t_check('T73g the registrant sees exactly one active membership as owner',
+  (SELECT count(*) FROM business_members WHERE user_id = t_get('a9') AND is_active) = 1
+  AND fn_is_business_active(t73_biz('a9')));
+SELECT t_check('T73g2 the applicant page now says approved and active',
+  (SELECT r ->> 'status' = 'approved' AND (r ->> 'business_active')::boolean FROM rpc_my_business_application() r));
+SELECT t_ok('T73g3 the owner can use a tenant RPC right away (timezone)', $q$ SELECT rpc_business_set_timezone(t73_biz('a9'), 'Asia/Nicosia') $q$);
+SELECT t_check('T73g4 the owner reads own subscription, nobody else''s',
+  (SELECT count(*) FROM business_subscriptions) = 1);
+SELECT t_err('T73g5 the owner cannot change platform status', $q$ UPDATE businesses SET status = 'suspended' WHERE id = t73_biz('a9') $q$, 'PLATFORM_MANAGED_FIELD');
+SELECT t_err('T73g6 the owner cannot touch the subscription', $q$ UPDATE business_subscriptions SET status = 'active' WHERE business_id = t73_biz('a9') $q$, '42501');
+SELECT t_err('T73g7 the owner cannot activate the subscription through the platform RPC', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active') $q$, 'FORBIDDEN');
+-- the 3.5B guard is a deferred constraint trigger: it speaks at commit / SET CONSTRAINTS IMMEDIATE
+SELECT t_err_deferred('T73g8 last-owner protection holds for the first owner', $q$ UPDATE business_members SET is_active = false WHERE business_id = t73_biz('a9') AND user_id = t_get('a9') $q$, 'LAST_OWNER');
+SELECT t_err('T73g9 the owner cannot see the platform tables', $q$ SELECT count(*) FROM platform_audit_log $q$, '42501');
+SELECT t_err('T73g10 an approved application cannot be withdrawn', $q$ SELECT rpc_withdraw_business_application(t73_app('a9')) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_check('T73g11 the TLC owner sees nothing of the new tenant',
+  (SELECT count(*) FROM business_subscriptions) = 0 AND (SELECT count(*) FROM business_applications) = 0
+  AND (SELECT count(*) FROM branches WHERE business_id = t73_biz('a9')) = 0);
+SELECT t_logout();
+
+-- ---------------- subscription lifecycle (manual, platform only) ----------------
+SELECT t_login('u8');
+SELECT t_err('T73h the status is validated', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'paid') $q$, 'INVALID_STATUS');
+SELECT t_ok('T73h2 the platform activates the subscription after out-of-band payment',
+  $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active', 'havale alindi') $q$);
+SELECT t_check('T73h3 activation sets the period from the plan interval (annual)',
+  t73_q($q$ SELECT status = 'active' AND starts_at IS NOT NULL AND activated_at IS NOT NULL AND ends_at = starts_at + interval '1 year' AND renews_at = ends_at AND note = 'havale alindi'
+   FROM business_subscriptions WHERE business_id = t73_biz('a9') $q$));
+SELECT t_ok('T73h4 past_due keeps the dates', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'past_due') $q$);
+SELECT t_ok('T73h5 cancellation', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'cancelled', 'istek') $q$);
+SELECT t_err('T73h6 a cancelled subscription is final', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active') $q$, 'INVALID_STATE');
+SELECT t_check('T73h7 every subscription change is audited',
+  t73_q($q$ (SELECT count(*) FROM platform_audit_log WHERE action = 'set_subscription_status' AND target_business_id = t73_biz('a9')) = 3 $q$));
+SELECT t_check('T73h8 the business itself stayed active: subscription state never touches tenant status',
+  t73_q($q$ SELECT status = 'active' FROM businesses WHERE id = t73_biz('a9') $q$));
+-- plans are data
+SELECT t_ok('T73i the platform adds a plan', $q$ SELECT rpc_platform_upsert_plan('pro_monthly', 'Pro Aylik', NULL, 'monthly', 9, 'USD', true, 20) $q$);
+SELECT t_ok('T73i2 and edits it by code', $q$ SELECT rpc_platform_upsert_plan('pro_monthly', 'Pro Aylik', 'iki sube', 'monthly', 12, 'USD', false, 20) $q$);
+SELECT t_check('T73i3 the inactive plan is hidden from the public catalog but listed to the platform',
+  t73_q($q$ (SELECT count(*) FROM saas_plans) = 2 $q$) AND jsonb_array_length(rpc_saas_plans()) = 1 AND jsonb_array_length(rpc_platform_plans()) = 2);
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_err('T73i4 a tenant owner cannot edit plans', $q$ SELECT rpc_platform_upsert_plan('starter', 'X', NULL, 'annual', 1, 'USD') $q$, 'FORBIDDEN');
+SELECT t_err('T73i5 nor list them with counts', $q$ SELECT rpc_platform_plans() $q$, 'FORBIDDEN');
+SELECT t_check('T73i6 anon-visible plan rows are only the active ones', (SELECT count(*) FROM saas_plans) = 1);
+SELECT t_logout();
+
+-- ---------------- rejection, withdrawal, history, code collisions ----------------
+SELECT t_login('a10');
+SELECT t_ok('T73j applicant B submits with the same business name', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik', 'CY', 'EUR') $q$);
+SELECT t_ok('T73j2 applicant B withdraws', $q$ SELECT rpc_withdraw_business_application(t73_app('a10')) $q$);
+SELECT t_check('T73j3 the withdrawn application is kept and the status page says withdrawn',
+  (SELECT status = 'withdrawn' FROM business_applications WHERE id = t73_app('a10'))
+  AND (SELECT r ->> 'status' = 'withdrawn' FROM rpc_my_business_application() r));
+SELECT t_ok('T73j4 applicant B submits again (new row, history preserved)', $q$ SELECT rpc_submit_business_application('ZZ Aylin Butik', 'CY', 'EUR') $q$);
+SELECT t_check('T73j5 two rows for B, one pending', (SELECT count(*) FROM business_applications WHERE applicant_user_id = t_get('a10')) = 2
+  AND (SELECT count(*) FROM business_applications WHERE applicant_user_id = t_get('a10') AND status = 'pending') = 1);
+SELECT t_logout();
+SELECT t_login('u8');
+SELECT t_err('T73j6 approving the withdrawn row is refused',
+  $q$ SELECT rpc_platform_approve_application(t73_app_in('a10', 'withdrawn')) $q$, 'INVALID_STATE');
+SELECT t_ok('T73j7 the platform approves the pending one', $q$ SELECT rpc_platform_approve_application(t73_app_in('a10', 'pending')) $q$);
+SELECT t_check('T73j8 the colliding name gets a numbered code and country defaults (Cyprus, EUR)',
+  t73_q($q$ SELECT code = 'ZZAYLIN2' AND base_currency = 'EUR' AND settings ->> 'timezone' = 'Asia/Nicosia' AND settings -> 'accepted_currencies' @> '["EUR"]' FROM businesses WHERE id = t73_biz('a10') $q$));
+SELECT t_check('T73j9 B is the only owner of the second tenant and A is untouched',
+  t73_q($q$ (SELECT count(*) FROM business_members WHERE business_id = t73_biz('a10')) = 1 AND (SELECT count(*) FROM business_members WHERE business_id = t73_biz('a9')) = 1 $q$));
+SELECT t_logout();
+SELECT t_login('a11');
+SELECT t_ok('T73k applicant C submits', $q$ SELECT rpc_submit_business_application('ZZ Red Test', 'TR', 'TRY') $q$);
+SELECT t_logout();
+SELECT t_login('u8');
+SELECT t_err('T73k2 rejection without a note', $q$ SELECT rpc_platform_reject_application(t73_app('a11'), ' ') $q$, 'REASON_REQUIRED');
+SELECT t_ok('T73k3 rejection with a note', $q$ SELECT rpc_platform_reject_application(t73_app('a11'), 'eksik bilgi') $q$);
+SELECT t_check('T73k4 rejection creates no business, no membership, and is audited',
+  t73_q($q$ (SELECT status = 'rejected' AND business_id IS NULL AND review_note = 'eksik bilgi' FROM business_applications WHERE id = t73_app('a11'))
+  AND (SELECT count(*) FROM business_members WHERE user_id = t_get('a11')) = 0
+  AND (SELECT count(*) FROM platform_audit_log WHERE action = 'reject_application' AND target_application_id = t73_app('a11')) = 1 $q$));
+SELECT t_check('T73k5 the queue filters by status and paginates',
+  (SELECT (r ->> 'total')::int = 1 FROM rpc_platform_applications('rejected') r)
+  AND (SELECT (r ->> 'total')::int = 4 AND jsonb_array_length(r -> 'rows') = 2 AND (r ->> 'limit')::int = 2 FROM rpc_platform_applications(NULL, 2, 0) r));
+SELECT t_logout();
+SELECT t_login('a11');
+SELECT t_check('T73k6 the rejected applicant sees the note and may apply again',
+  (SELECT r ->> 'status' = 'rejected' AND r ->> 'review_note' = 'eksik bilgi' FROM rpc_my_business_application() r)
+  AND (SELECT NOT (r ->> 'replayed')::boolean FROM rpc_submit_business_application('ZZ Red Test 2') r));
+SELECT t_check('T73k7 an applicant without any membership has no inactive business to show', jsonb_array_length(rpc_my_inactive_businesses()) = 0);
+SELECT t_check('T73k8 the onboarding summary bundles application + inactive businesses + platform flag',
+  (SELECT NOT (r ->> 'platform_admin')::boolean AND r -> 'application' ->> 'status' = 'pending' AND jsonb_array_length(r -> 'inactive_businesses') = 0 FROM rpc_my_onboarding() r));
+SELECT t_logout();
+
+-- ---------------- suspension keeps working through the 3.5G path ----------------
+SELECT t_login('u8');
+SELECT t_ok('T73l the platform suspends the new tenant with the existing audited RPC', $q$ SELECT rpc_platform_set_business_status(t73_biz('a9'), 'suspended', 'odeme yok') $q$);
+SELECT t_logout();
+SELECT t_login('a9');
+SELECT t_check('T73l2 the suspended owner gets a safe status list (name + status only)',
+  (SELECT r -> 0 ->> 'name' = 'ZZ Aylin Butik' AND r -> 0 ->> 'status' = 'suspended' AND jsonb_array_length(r) = 1 FROM rpc_my_inactive_businesses() r));
+SELECT t_err('T73l3 and cannot use the tenant', $q$ SELECT rpc_business_set_timezone(t73_biz('a9'), 'UTC') $q$, 'BUSINESS_SUSPENDED');
+SELECT t_logout();
+SELECT t_check('T73m TLC was not touched by any of this',
+  (SELECT status = 'active' FROM businesses WHERE id = t_get('biz'))
+  AND (SELECT count(*) FROM business_subscriptions WHERE business_id = t_get('biz')) = 0
+  AND (SELECT count(*) FROM business_applications WHERE business_id = t_get('biz')) = 0);
 
 -- ============================================================
 -- SUMMARY

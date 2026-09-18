@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { loadMemberships } from "@/lib/tenant";
 import { signOutAction } from "@/app/auth/actions";
@@ -55,6 +56,12 @@ export default async function SelectBusinessPage() {
               branch_count: m.branches.length,
             }))}
           />
+          <p className="mt-6 text-xs text-text-muted">
+            Başka bir işletme mi açacaksınız?{" "}
+            <Link href="/basvuru" className="underline-offset-4 hover:text-text-primary hover:underline">
+              Yeni işletme başvurusu
+            </Link>
+          </p>
         </div>
       </div>
     </main>

@@ -16,8 +16,8 @@
  * followed; anything else falls back.
  */
 
-/** Paths an auth email may legitimately land on. Everything else falls back. */
-const ALLOWED_PREFIXES = ["/davet/", "/sifre-belirle", "/app"] as const;
+/** Paths an auth email may legitimately land on (the signup confirmation lands on /basvuru). Everything else falls back. */
+const ALLOWED_PREFIXES = ["/davet/", "/sifre-belirle", "/app", "/basvuru"] as const;
 
 /**
  * Control characters, written as escapes rather than as literal bytes. A literal one in

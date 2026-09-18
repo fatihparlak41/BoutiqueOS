@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import Link from "next/link";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { LoginForm } from "./login-form";
 
@@ -16,7 +17,18 @@ export default async function LoginPage() {
   return (
     <AuthShell
       title="Mağazanıza giriş yapın"
-      description="Hesabınız işletmeniz tarafından tanımlanır; davetle açılır."
+      description="Ekip hesabınız işletmeniz tarafından davetle açılır."
+      footer={
+        <>
+          İşletmenizi BoutiqueOS&apos;a taşımak mı istiyorsunuz?{" "}
+          <Link
+            href="/kayit"
+            className="underline-offset-4 hover:text-text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Başvurun
+          </Link>
+        </>
+      }
     >
       <LoginForm />
     </AuthShell>

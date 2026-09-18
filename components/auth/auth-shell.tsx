@@ -47,7 +47,7 @@ export function AuthShell({
           </ul>
         </div>
 
-        <p className="text-xs text-text-muted">Hesaplar davetle açılır; herkese açık kayıt yoktur.</p>
+        <p className="text-xs text-text-muted">Ekip hesapları davetle açılır; işletmeler başvuruyla katılır.</p>
       </section>
 
       <section className="flex min-h-dvh flex-col px-6 py-10 sm:px-12 lg:min-h-0 lg:justify-center lg:px-20 lg:py-16">

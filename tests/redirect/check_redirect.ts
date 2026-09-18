@@ -89,6 +89,11 @@ check("R23 next refuses protocol-relative", safeNextPath("//evil.example"), "/ap
 check("R24 next refuses a scheme", safeNextPath("/javascript:alert(1)"), "/app");
 check("R25 next refuses a newline", safeNextPath("/app\nSet-Cookie: x=1"), "/app");
 
+// ---------------------------------------------------------------- signup confirmation (13A)
+check("R26 signup confirmation destination", safeRedirectPath(`${PROD}/basvuru`, PROD), "/basvuru");
+check("R27 the public registration page itself is not an email destination", safeRedirectPath(`${PROD}/kayit`, PROD), "/app");
+check("R28 the platform console is not an email destination", safeRedirectPath(`${PROD}/platform`, PROD), "/app");
+
 // ---------------------------------------------------------------- report
 for (const failure of failures) console.error(`  [FAIL] ${failure}`);
 console.log(`redirect: ${pass} passed, ${failures.length} failed`);

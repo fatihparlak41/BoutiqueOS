@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { withFreshJwtRetry } from "@/lib/auth/jwt-skew";
 import { tenantReadOutcome } from "@/lib/auth/session-ready";
 import type { UserRole } from "@/lib/roles";
+import { noTenantDestination } from "@/lib/saas/queries";
 
 export const ACTIVE_BUSINESS_COOKIE = "bos_active_business";
 
@@ -141,14 +142,15 @@ function resolveBranch(membership: Membership): Branch | null {
 
 /**
  * Full tenant entry for protected pages.
- *   0 memberships  -> /no-access
+ *   0 memberships  -> the onboarding page that fits (pending application, suspended
+ *                     business, platform console) or /no-access — one extra RPC, only here
  *   1 membership   -> entered automatically
  *   many           -> the cookie must name one of them, otherwise /select-business
  */
 export async function requireTenant(): Promise<TenantContext> {
   const { user, profile, memberships } = await loadMemberships();
 
-  if (memberships.length === 0) redirect("/no-access");
+  if (memberships.length === 0) redirect(await noTenantDestination());
 
   let active: Membership;
 

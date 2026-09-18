@@ -14,7 +14,7 @@ import { ACTIVE_BUSINESS_COOKIE, loadMemberships } from "@/lib/tenant";
 
 export type SignInState = { error: string | null };
 
-/** Email + password sign-in. V1 has no public registration; accounts are created by invitation. */
+/** Email + password sign-in. Accounts come from an invitation or from the public registration (/kayit). */
 export async function signInAction(_prev: SignInState, formData: FormData): Promise<SignInState> {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
@@ -27,7 +27,12 @@ export async function signInAction(_prev: SignInState, formData: FormData): Prom
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    // Do not leak whether the address exists.
+    // Do not leak whether the address exists. The one named case is an account that
+    // registered but never opened its confirmation link: Auth refuses the sign-in with
+    // a dedicated code and the visitor needs to know which mailbox to look in.
+    if (error.code === "email_not_confirmed") {
+      return { error: "E-posta adresiniz henüz doğrulanmadı. Gelen kutunuzdaki doğrulama bağlantısını açın." };
+    }
     const message =
       error.status === 400 || error.status === 401
         ? "E-posta veya parola hatalı."

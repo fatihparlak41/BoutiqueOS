@@ -26,7 +26,7 @@ import { isFreshJwtError, type QueryError } from "./jwt-skew.ts";
 export const SESSION_READY_PATH = "/auth/session-ready";
 
 /** Exact paths a readiness wait may continue to. Anything else falls back to the first. */
-export const SESSION_READY_NEXT_ALLOWLIST = ["/app", "/select-business"] as const;
+export const SESSION_READY_NEXT_ALLOWLIST = ["/app", "/select-business", "/basvuru"] as const;
 
 export type SessionReadyNext = (typeof SESSION_READY_NEXT_ALLOWLIST)[number];
 
