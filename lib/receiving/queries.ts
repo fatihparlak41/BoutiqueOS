@@ -533,6 +533,23 @@ export async function searchVariants(term: string): Promise<PickableVariant[]> {
   );
 }
 
+/** Every active variant of the product that owns `variantId` — the picker's prefill for "add to a purchase order". */
+export async function variantSiblings(variantId: string): Promise<PickableVariant[]> {
+  const { supabase, businessId } = await loadReceivingContext();
+  const { data: v } = await supabase.from("product_variants").select("product_id").eq("business_id", businessId).eq("id", variantId).maybeSingle();
+  if (!v) return [];
+  const { data: siblings, error } = await supabase
+    .from("product_variants")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("status", "active")
+    .eq("product_id", v.product_id as string)
+    .limit(VARIANT_PICKER_LIMIT);
+  if (error) throw new Error(`Varyantlar okunamadı: ${error.message}`);
+  const meta = await loadVariantMeta((siblings ?? []).map((r) => r.id as string));
+  return Array.from(meta.values()).sort((a, b) => a.sku.localeCompare(b.sku, "tr"));
+}
+
 // ------------------------------------------------------------------ fx prefill
 
 export type FxHint = { currency: Currency; rate: number | null };

@@ -28,14 +28,26 @@ export function Section({ title, meta, empty, hint, children, count }: { title: 
   );
 }
 
-export function VariantRows({ rows, financial, numbers }: { rows: VariantSignal[]; financial: boolean; numbers: (r: VariantSignal) => React.ReactNode }) {
+export function VariantRows({ rows, financial, numbers, orderLink = false }: { rows: VariantSignal[]; financial: boolean; numbers: (r: VariantSignal) => React.ReactNode; orderLink?: boolean }) {
   return (
     <ul className="divide-y divide-border rounded border border-border">
       {rows.map((r) => (
         <li key={r.variant_id} className="grid gap-x-4 gap-y-1 px-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto]">
           <VariantLabel r={r} />
           <span className="text-xs text-text-secondary sm:text-right" data-numeric>{numbers(r)}</span>
-          {r.why ? <p className="text-xs text-text-muted sm:col-span-2">{r.why}{financial && r.sellable_value !== null && r.sellable_value !== undefined ? ` · stok değeri ${fmtMoney(r.sellable_value)}` : ""}</p> : null}
+          {r.why ? (
+            <p className="text-xs text-text-muted sm:col-span-2">
+              {r.why}{financial && r.sellable_value !== null && r.sellable_value !== undefined ? ` · stok değeri ${fmtMoney(r.sellable_value)}` : ""}
+              {orderLink ? (
+                <>
+                  {" · "}
+                  <Link href={`/app/satin-alma/yeni?varyant=${r.variant_id}&neden=${encodeURIComponent(r.why)}`} className="underline underline-offset-4 hover:text-text-primary" data-testid="intel-to-po">
+                    Satın alma siparişine ekle
+                  </Link>
+                </>
+              ) : null}
+            </p>
+          ) : null}
         </li>
       ))}
     </ul>

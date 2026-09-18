@@ -56,8 +56,8 @@ export default async function IntelHomePage({ searchParams }: { searchParams: Pr
       ) : null}
 
       {home.sales ? (
-        <Section title="Yeniden sipariş adayları" empty="Satış hızına göre stoku azalan varyant yok." hint="Sipariş oluşturulmaz; tedarik süresi kayıtlı olmadığından tahmin edilmez." count={home.replenishment?.length ?? 0}>
-          <VariantRows rows={home.replenishment ?? []} financial={false} numbers={(r) => `${fmtInt(r.sold_win)} satış · ${fmtInt(r.available)} müsait${r.days_of_cover !== null && r.days_of_cover !== undefined ? ` · ${fmtInt(r.days_of_cover)} günlük` : ""}`} />
+        <Section title="Yeniden sipariş adayları" empty="Satış hızına göre stoku azalan varyant yok." hint="Sipariş kendiliğinden oluşmaz: bağlantı yalnız bir taslağı açar, adedi siz girersiniz. Tedarik süresi kayıtlı olmadığından tahmin edilmez." count={home.replenishment?.length ?? 0}>
+          <VariantRows rows={home.replenishment ?? []} financial={false} orderLink={home.financial} numbers={(r) => `${fmtInt(r.sold_win)} satış · ${fmtInt(r.available)} müsait${r.days_of_cover !== null && r.days_of_cover !== undefined ? ` · ${fmtInt(r.days_of_cover)} günlük` : ""}`} />
         </Section>
       ) : null}
 

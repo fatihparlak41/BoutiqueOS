@@ -4,6 +4,7 @@ import {
   Boxes,
   Truck,
   PackagePlus,
+  ClipboardList,
   ScanLine,
   Undo2,
   Users,
@@ -34,6 +35,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Tedarik",
     items: [
+      { label: "Satın Alma", icon: ClipboardList, href: "/app/satin-alma" },
       { label: "Mal Kabul", icon: PackagePlus, href: "/app/mal-kabul" },
       { label: "Tedarikçiler", icon: Truck, href: "/app/tedarikciler" },
     ],

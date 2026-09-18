@@ -6,6 +6,8 @@ import { ALLOCATION_LABELS } from "@/lib/receiving/model";
 import { ReceiptStatusPill } from "@/components/receiving/receipt-status-pill";
 import { ReceiptEditor } from "@/components/receiving/receipt-editor";
 import { ChargesSection, ReversalPanel } from "@/components/receiving/landed-cost-panels";
+import { getReceiptPoReference } from "@/lib/po/queries";
+import { ReceiptPoPanel } from "@/components/po/receipt-po-panel";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,10 +29,12 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
   // Financial reads (allocation preview, payee suppliers) exist only for owner|manager;
   // the database would refuse them for anyone else, so they are not requested.
   const financial = editing && caps.canManageCost;
-  const [fxHints, preview, suppliers] = await Promise.all([
+  const [fxHints, preview, suppliers, poRef] = await Promise.all([
     isDraft && receipt.invoice_currency !== "TRY" ? loadFxHints(receipt.received_at) : Promise.resolve([]),
     financial ? getAllocationPreview(receipt.id) : Promise.resolve(null),
     financial ? listSuppliers({ status: "active" }) : Promise.resolve([]),
+    // the purchase order behind a linked receipt (null when unlinked); same round trip
+    getReceiptPoReference(receipt.id),
   ]);
   const fxHint = fxHints.find((h) => h.currency === receipt.invoice_currency)?.rate ?? null;
   const isPosted = receipt.status === "posted";
@@ -64,6 +68,8 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
           {receipt.document_ref ? <span>{receipt.document_ref}</span> : null}
         </p>
       </header>
+
+      {poRef ? <ReceiptPoPanel receipt={receipt} reference={poRef} /> : null}
 
       {editing ? (
         <ReceiptEditor receipt={receipt} fxHint={fxHint} preview={preview} suppliers={suppliers} />

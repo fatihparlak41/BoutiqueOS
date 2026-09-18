@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 57 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 57,
+SELECT t_check('T01 all 59 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 59,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -4299,6 +4299,274 @@ SELECT t_check('T71e sparse tenant (bizB) answers honestly: no fabricated fast m
 SELECT t_logout();
 SELECT t_check('T71e intelligence wrote nothing', (SELECT count(*) FROM sales WHERE business_id = t_get('bizF')) = 24
   AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizF')) = 14 + 24 + 3);
+
+-- ============================================================
+-- T72 — Phase 12A purchase orders: lifecycle, zero side effects before receipt POST,
+--        receipt link + partial receiving + over-receipt + draft/cancelled receipts not counted,
+--        cost and FX independence, reversal, close remaining, cancel rules, roles, cross-tenant.
+-- ============================================================
+SELECT t_logout();
+SELECT t_set('bizP', 'b0000000-0000-4000-8000-000000000010');
+INSERT INTO businesses (id, name, code, settings) VALUES (t_get('bizP'), 'Sipariş Butik', 'PO', jsonb_build_object(
+  'accepted_currencies', jsonb_build_array('TRY','EUR'), 'money_refund_allowed', false, 'store_credit_allowed', false, 'exchange_window_days', 14,
+  'default_charge_allocation_method', 'invoice_value_proportional'));
+WITH x AS (INSERT INTO branches (business_id, name, code, is_default) VALUES (t_get('bizP'), 'Sipariş Merkez', 'SM', true) RETURNING id) SELECT t_set('brP', id) FROM x;
+INSERT INTO business_members (business_id, user_id, role) VALUES
+  (t_get('bizP'), t_get('u1'), 'owner'), (t_get('bizP'), t_get('u2'), 'manager'),
+  (t_get('bizP'), t_get('u3'), 'sales_staff'), (t_get('bizP'), t_get('u4'), 'stock_staff');
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizP'), 'Tedarikçi A', 'EUR') RETURNING id) SELECT t_set('supPA', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizP'), 'Tedarikçi B', 'TRY') RETURNING id) SELECT t_set('supPB', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizP'), 'Beden', 'size', 10) RETURNING id) SELECT t_set('optP_size', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optP_size'), 'S', 'S', 1) RETURNING id) SELECT t_set('ovP_s', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optP_size'), 'M', 'M', 2) RETURNING id) SELECT t_set('ovP_m', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('bizP'), 'Siyah Elbise', 'PD', 900, 'active') RETURNING id) SELECT t_set('pPD', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('bizP'), 'Tek Beden Üst', 'PT', 400, 'active') RETURNING id) SELECT t_set('pPT', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('bizP'), 'Diğer Ürün', 'PX', 100, 'active') RETURNING id) SELECT t_set('pPX', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pPD'), 'PD-S') RETURNING id) SELECT t_set('vPDS', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vPDS'), t_get('optP_size'), t_get('ovP_s'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pPD'), 'PD-M') RETURNING id) SELECT t_set('vPDM', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('vPDM'), t_get('optP_size'), t_get('ovP_m'));
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pPT'), 'PT-STD') RETURNING id) SELECT t_set('vPT', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('pPX'), 'PX-STD') RETURNING id) SELECT t_set('vPX', id) FROM x;
+CREATE TEMP TABLE _t72_base AS
+  SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) AS movements,
+         (SELECT count(*) FROM variant_cost_pools WHERE business_id = t_get('bizP')) AS pools,
+         (SELECT COALESCE(sum(on_hand_qty), 0) FROM variant_cost_pools WHERE business_id = t_get('bizP')) AS on_hand,
+         (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP')) AS liabilities,
+         (SELECT count(*) FROM inventory_movement_costs WHERE business_id = t_get('bizP')) AS mcosts;
+GRANT SELECT ON _t72_base TO authenticated;
+CREATE FUNCTION t72_untouched() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) = (SELECT movements FROM _t72_base)
+     AND (SELECT count(*) FROM variant_cost_pools WHERE business_id = t_get('bizP')) = (SELECT pools FROM _t72_base)
+     AND (SELECT COALESCE(sum(on_hand_qty), 0) FROM variant_cost_pools WHERE business_id = t_get('bizP')) = (SELECT on_hand FROM _t72_base)
+     AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP')) = (SELECT liabilities FROM _t72_base)
+     AND (SELECT count(*) FROM inventory_movement_costs WHERE business_id = t_get('bizP')) = (SELECT mcosts FROM _t72_base) $$;
+CREATE FUNCTION t72_received(po TEXT, v TEXT) RETURNS INTEGER LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT COALESCE((SELECT received FROM fn_po_received(t_get(po)) WHERE variant_id = t_get(v)), 0) $$;
+CREATE FUNCTION t72_status(po TEXT) RETURNS TEXT LANGUAGE sql SECURITY DEFINER AS $$ SELECT status::text FROM purchase_orders WHERE id = t_get(po) $$;
+CREATE FUNCTION t72_lines(gr TEXT, OUT n INT, OUT qty INT, OUT unpriced BOOLEAN) LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT count(*)::int, COALESCE(sum(quantity), 0)::int, COALESCE(bool_and(unit_cost IS NULL), true) FROM goods_receipt_items WHERE goods_receipt_id = t_get(gr) $$;
+CREATE FUNCTION t72_expected(po TEXT, v TEXT) RETURNS NUMERIC LANGUAGE sql SECURITY DEFINER AS $$ SELECT expected_unit_cost FROM purchase_order_items WHERE purchase_order_id = t_get(po) AND variant_id = t_get(v) $$;
+
+-- A) privileges + numbering
+SELECT t_check('T72a privileges: PO RPCs to authenticated only; tables write-locked for clients; expected cost column unreadable',
+  has_function_privilege('authenticated', 'rpc_po_create(uuid,uuid,text,numeric,date,date,text,text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_po_create(uuid,uuid,text,numeric,date,date,text,text)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_po_approve(uuid)', 'EXECUTE') AND has_function_privilege('authenticated', 'rpc_po_create_receipt(uuid,date,text)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_po_list(uuid,text,integer)', 'EXECUTE') AND has_function_privilege('authenticated', 'rpc_po_detail(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_po_received(uuid)', 'EXECUTE') AND NOT has_function_privilege('authenticated', 'fn_po_refresh_status(uuid)', 'EXECUTE')
+  AND NOT has_table_privilege('authenticated', 'purchase_orders', 'INSERT') AND NOT has_table_privilege('authenticated', 'purchase_orders', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'purchase_orders', 'DELETE') AND NOT has_table_privilege('authenticated', 'purchase_order_items', 'INSERT')
+  AND has_column_privilege('authenticated', 'purchase_order_items', 'ordered_quantity', 'SELECT')
+  AND NOT has_column_privilege('authenticated', 'purchase_order_items', 'expected_unit_cost', 'SELECT'));
+
+-- B) draft: create, lines, edit, total 2,400 EUR; zero side effects
+SELECT t_login('u2');
+SELECT t_set('po1', rpc_po_create(t_get('brP'), t_get('supPA'), 'EUR', 35, CURRENT_DATE, CURRENT_DATE + 14, 'A-REF-1', 'ilk sipariş'));
+SELECT t_check('T72b draft created with a PO-YYYY-000001 number in EUR', (SELECT status = 'draft' AND po_number ~ ('^PO-' || extract(year from now())::int || '-[0-9]{6}$') AND currency = 'EUR' AND fx_rate_snapshot = 35 AND created_by = t_get('u2') FROM purchase_orders WHERE id = t_get('po1')));
+SELECT t_ok('T72b lines: S 10 @100, M 12 @100 (edited to 10), Top 5 @80, a stray line removed', $q$
+  SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPDS'), 10, 100);
+  SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPDM'), 12, 100);
+  SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPDM'), 10, 100);
+  SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPT'), 5, 80);
+  SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPX'), 1, 1);
+  SELECT rpc_po_remove_line(t_get('po1'), t_get('vPX')) $q$);
+SELECT t_check('T72b detail: 3 lines, 25 ordered, 0 received, expected total 2400, timeline created',
+  (SELECT (j -> 'totals' ->> 'lines')::int = 3 AND (j -> 'totals' ->> 'ordered')::int = 25 AND (j -> 'totals' ->> 'received')::int = 0 AND (j -> 'totals' ->> 'remaining')::int = 25
+      AND (j -> 'totals' ->> 'expected_total')::numeric = 2400 AND (j -> 'totals' ->> 'unpriced_lines')::int = 0 AND (j ->> 'financial')::boolean
+      AND (j -> 'timeline' -> 'created' ->> 'at') IS NOT NULL AND (j -> 'timeline' -> 'approved') = 'null'::jsonb
+      AND (SELECT (l ->> 'expected_total')::numeric FROM jsonb_array_elements(j -> 'lines') l WHERE l ->> 'sku' = 'PD-M') = 1000
+   FROM (SELECT rpc_po_detail(t_get('po1')) AS j) x), rpc_po_detail(t_get('po1'))::text);
+SELECT t_err('T72b foreign supplier refused', $q$ SELECT rpc_po_create(t_get('brP'), t_get('sup1'), 'TRY') $q$, 'INVALID_SUPPLIER');
+SELECT t_err('T72b foreign branch refused', $q$ SELECT rpc_po_create(t_get('brB'), t_get('supPA'), 'TRY') $q$, 'FORBIDDEN');
+SELECT t_err('T72b foreign variant refused', $q$ SELECT rpc_po_upsert_line(t_get('po1'), t_get('v66a'), 1, 1) $q$, 'INVALID_VARIANT');
+SELECT t_err('T72b TRY order with a rate ≠ 1 refused', $q$ SELECT rpc_po_create(t_get('brP'), t_get('supPB'), 'TRY', 2) $q$, 'INVALID_FX');
+SELECT t_err('T72b expected date before order date refused', $q$ SELECT rpc_po_update(t_get('po1'), CURRENT_DATE - 1, NULL, NULL) $q$, 'INVALID_DATE');
+SELECT t_err('T72b zero quantity refused', $q$ SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPDS'), 0, 100) $q$, 'INVALID_QTY');
+-- C) approve → ordered; terms frozen; expected date still editable; zero side effects
+SELECT t_set('po_empty', rpc_po_create(t_get('brP'), t_get('supPB'), 'TRY'));
+SELECT t_err('T72c empty order cannot be approved', $q$ SELECT rpc_po_approve(t_get('po_empty')) $q$, 'EMPTY_DOCUMENT');
+SELECT t_err('T72c a draft cannot be marked ordered before approval', $q$ SELECT rpc_po_mark_ordered(t_get('po1')) $q$, 'INVALID_STATE');
+SELECT t_ok('T72c approve', $q$ SELECT rpc_po_approve(t_get('po1')) $q$);
+SELECT t_check('T72c approved by the manager, stamped', (SELECT status = 'approved' AND approved_by = t_get('u2') AND approved_at IS NOT NULL FROM purchase_orders WHERE id = t_get('po1')));
+SELECT t_err('T72c lines frozen after approval', $q$ SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPDS'), 11, 100) $q$, 'INVALID_STATE');
+SELECT t_err('T72c approve twice refused', $q$ SELECT rpc_po_approve(t_get('po1')) $q$, 'INVALID_STATE');
+SELECT t_err('T72c receipt cannot be created before the order is sent', $q$ SELECT rpc_po_create_receipt(t_get('po1')) $q$, 'PO_NOT_OPEN');
+SELECT t_ok('T72c expected date / note stay editable', $q$ SELECT rpc_po_update(t_get('po1'), CURRENT_DATE + 21, 'A-REF-1b', 'not güncellendi') $q$);
+SELECT t_ok('T72c mark ordered', $q$ SELECT rpc_po_mark_ordered(t_get('po1')) $q$);
+SELECT t_check('T72c ordered by the manager, expected date kept', (SELECT status = 'ordered' AND ordered_by = t_get('u2') AND ordered_at IS NOT NULL AND expected_date = CURRENT_DATE + 21 FROM purchase_orders WHERE id = t_get('po1')));
+SELECT t_logout();
+SELECT t_err('T72c commercial terms frozen even for the database owner path', $q$ UPDATE purchase_orders SET supplier_id = t_get('supPB') WHERE id = t_get('po1') $q$, 'IMMUTABLE');
+SELECT t_err('T72c lines of an ordered PO cannot be inserted directly', $q$ INSERT INTO purchase_order_items (purchase_order_id, variant_id, ordered_quantity) VALUES (t_get('po1'), t_get('vPX'), 1) $q$, 'IMMUTABLE');
+SELECT t_check('T72c ZERO side effects: draft → approved → ordered wrote no movement, pool, cost or liability', t72_untouched());
+
+-- D) receipt #1 from the PO: prefilled remaining, no cost, linked; operator changes quantities; manager prices differently; POST
+SELECT t_login('u4');
+SELECT t_set('gr1', rpc_po_create_receipt(t_get('po1'), CURRENT_DATE, 'IRS-1'));
+SELECT t_logout();
+SELECT t_check('T72d stock_staff created the draft receipt: linked, EUR @35 prefilled, 3 lines with remaining quantities and NO cost, still zero side effects',
+  (SELECT purchase_order_id = t_get('po1') AND status = 'draft' AND invoice_currency = 'EUR' AND exchange_rate = 35 AND supplier_id = t_get('supPA') AND branch_id = t_get('brP') AND document_ref = 'IRS-1' FROM goods_receipts WHERE id = t_get('gr1'))
+  AND (SELECT count(*) = 3 AND bool_and(unit_cost IS NULL) AND sum(quantity) = 25 FROM goods_receipt_items WHERE goods_receipt_id = t_get('gr1'))
+  AND t72_untouched());
+SELECT t_login('u2');
+SELECT t_ok('T72d delivered S 6, M 4, Top 5; manager prices S 110 (≠ expected 100), M 100, Top 80', $q$
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr1'), t_get('vPDS'), 6, 110);
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr1'), t_get('vPDM'), 4, 100);
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr1'), t_get('vPT'), 5, 80);
+  SELECT * FROM rpc_goods_receipt_review(t_get('gr1')) $q$);
+SELECT t_check('T72d draft receipt does not count: PO still ordered, received 0', t72_status('po1') = 'ordered' AND t72_received('po1', 'vPDS') = 0 AND t72_untouched());
+SELECT t_ok('T72d POST receipt #1', $q$ SELECT rpc_post_goods_receipt(t_get('gr1')) $q$);
+SELECT t_check('T72d PO is PARTIALLY_RECEIVED: S 6/10, M 4/10, Top 5/5 → remaining S 4, M 6, Top 0; received 15 / remaining 10',
+  t72_status('po1') = 'partially_received' AND t72_received('po1', 'vPDS') = 6 AND t72_received('po1', 'vPDM') = 4 AND t72_received('po1', 'vPT') = 5
+  AND (SELECT (j -> 'totals' ->> 'received')::int = 15 AND (j -> 'totals' ->> 'remaining')::int = 10
+          AND (SELECT (l ->> 'remaining')::int FROM jsonb_array_elements(j -> 'lines') l WHERE l ->> 'sku' = 'PD-S') = 4
+          AND (SELECT (l ->> 'remaining')::int FROM jsonb_array_elements(j -> 'lines') l WHERE l ->> 'sku' = 'PT-STD') = 0
+          AND jsonb_array_length(j -> 'receipts') = 1 AND (j -> 'receipts' -> 0 ->> 'status') = 'posted'
+       FROM (SELECT rpc_po_detail(t_get('po1')) AS j) x), rpc_po_detail(t_get('po1'))::text);
+SELECT t_check('T72d the receipt carried its own cost and FX: S landed 110 EUR × 35 = 3,850 TRY per unit in the pool; liability 1,460 EUR @35; PO expected cost untouched',
+  (SELECT total_value_base = 6 * 110 * 35 AND on_hand_qty = 6 FROM variant_cost_pools WHERE business_id = t_get('bizP') AND variant_id = t_get('vPDS'))
+  AND (SELECT amount_original = 6*110 + 4*100 + 5*80 AND currency = 'EUR' AND exchange_rate = 35 FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr1'))
+  AND t72_expected('po1', 'vPDS') = 100);
+SELECT t_check('T72d PO reference for the receipt editor: expected vs remaining (manager sees expected cost)',
+  (SELECT j ->> 'po_status' = 'partially_received' AND (SELECT (l ->> 'expected_unit_cost')::numeric = 100 AND (l ->> 'remaining')::int = 4 FROM jsonb_array_elements(j -> 'lines') l WHERE l ->> 'variant_id' = t_get('vPDS')::text)
+   FROM (SELECT rpc_receipt_po_reference(t_get('gr1')) AS j) x));
+
+-- E) over-receipt blocked at POST (nothing posted), draft #2 not counted, cancelled draft not counted, foreign variant blocked
+SELECT t_set('gr2', rpc_po_create_receipt(t_get('po1')));
+SELECT t_check('T72e receipt #2 prefilled with the remaining S 4, M 6 only (Top complete)',
+  (SELECT n = 2 AND qty = 10 AND unpriced FROM t72_lines('gr2'))
+  AND t72_status('po1') = 'partially_received');
+SELECT t_ok('T72e operator claims S 5 (one too many), M 6, priced', $q$
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr2'), t_get('vPDS'), 5, 100);
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr2'), t_get('vPDM'), 6, 100);
+  SELECT * FROM rpc_goods_receipt_review(t_get('gr2')) $q$);
+SELECT t_logout();
+CREATE TEMP TABLE _t72_mid AS SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) AS movements, (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP')) AS liabilities;
+GRANT SELECT ON _t72_mid TO authenticated;
+SELECT t_login('u2');
+SELECT t_err('T72e OVER_RECEIPT: S would reach 11 of 10', $q$ SELECT rpc_post_goods_receipt(t_get('gr2')) $q$, 'OVER_RECEIPT');
+SELECT t_check('T72e the refused POST left nothing behind: receipt still draft, no movement, no liability, PO unchanged',
+  (SELECT status = 'draft' FROM goods_receipts WHERE id = t_get('gr2')) AND t72_status('po1') = 'partially_received' AND t72_received('po1', 'vPDS') = 6
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) = (SELECT movements FROM _t72_mid)
+  AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP')) = (SELECT liabilities FROM _t72_mid));
+SELECT t_ok('T72e a variant that is not on the PO is added to the linked receipt', $q$ SELECT rpc_goods_receipt_upsert_line(t_get('gr2'), t_get('vPDS'), 4, 100); SELECT rpc_goods_receipt_upsert_line(t_get('gr2'), t_get('vPX'), 1, 10); SELECT * FROM rpc_goods_receipt_review(t_get('gr2')) $q$);
+SELECT t_err('T72e NOT_IN_PO blocks the POST', $q$ SELECT rpc_post_goods_receipt(t_get('gr2')) $q$, 'NOT_IN_PO');
+SELECT t_err('T72e a partly received PO cannot be cancelled', $q$ SELECT rpc_po_cancel(t_get('po1'), 'vazgeçtik') $q$, 'INVALID_STATE');
+SELECT t_err('T72e close is refused while a draft receipt is open against the PO', $q$ SELECT rpc_po_close(t_get('po1'), 'kalanı gelmeyecek') $q$, 'OPEN_RECEIPTS');
+UPDATE goods_receipts SET status = 'cancelled' WHERE id = t_get('gr2');
+SELECT t_check('T72e cancelled draft receipt is not counted', t72_status('po1') = 'partially_received' AND t72_received('po1', 'vPDS') = 6
+  AND (SELECT (j -> 'receipts' -> 1 ->> 'status') = 'cancelled' AND (j ->> 'open_draft_receipts')::int = 0 FROM (SELECT rpc_po_detail(t_get('po1')) AS j) x));
+
+-- F) receipt #3 receives the remainder at a different FX (36) → RECEIVED; close; immutable
+SELECT t_set('gr3', rpc_po_create_receipt(t_get('po1'), CURRENT_DATE, 'IRS-3'));
+UPDATE goods_receipts SET exchange_rate = 36 WHERE id = t_get('gr3');
+SELECT t_ok('T72f remainder S 4 @100, M 6 @100 at 36 TRY/EUR', $q$
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr3'), t_get('vPDS'), 4, 100);
+  SELECT rpc_goods_receipt_upsert_line(t_get('gr3'), t_get('vPDM'), 6, 100);
+  SELECT * FROM rpc_goods_receipt_review(t_get('gr3'));
+  SELECT rpc_post_goods_receipt(t_get('gr3')) $q$);
+SELECT t_check('T72f PO RECEIVED: S 10/10, M 10/10, Top 5/5; receipt #3 liability 1,000 EUR @36; PO snapshot still 35',
+  t72_status('po1') = 'received' AND t72_received('po1', 'vPDS') = 10 AND t72_received('po1', 'vPDM') = 10
+  AND (SELECT amount_original = 1000 AND exchange_rate = 36 FROM supplier_account_entries WHERE reference_type = 'goods_receipt' AND reference_id = t_get('gr3'))
+  AND (SELECT fx_rate_snapshot = 35 FROM purchase_orders WHERE id = t_get('po1'))
+  AND (SELECT on_hand_qty = 10 AND total_value_base = 6*110*35 + 4*100*36 FROM variant_cost_pools WHERE business_id = t_get('bizP') AND variant_id = t_get('vPDS')));
+SELECT t_err('T72f nothing remains → no further receipt', $q$ SELECT rpc_po_create_receipt(t_get('po1')) $q$, 'NOTHING_REMAINING');
+SELECT t_ok('T72f close the received order', $q$ SELECT rpc_po_close(t_get('po1')) $q$);
+SELECT t_check('T72f closed by the manager', (SELECT status = 'closed' AND closed_by = t_get('u2') FROM purchase_orders WHERE id = t_get('po1')));
+SELECT t_err('T72f closed PO immutable via RPC', $q$ SELECT rpc_po_update(t_get('po1'), NULL, NULL, 'x') $q$, 'INVALID_STATE');
+SELECT t_err('T72f closed PO cannot be cancelled', $q$ SELECT rpc_po_cancel(t_get('po1'), 'x') $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_err('T72f closed PO immutable at the table', $q$ UPDATE purchase_orders SET note = 'x' WHERE id = t_get('po1') $q$, 'IMMUTABLE');
+SELECT t_err('T72f PO never deleted', $q$ DELETE FROM purchase_orders WHERE id = t_get('po1') $q$, 'IMMUTABLE');
+
+-- G) reversal + close remaining on a second PO (TRY, supplier B)
+SELECT t_login('u2');
+SELECT t_set('po2', rpc_po_create(t_get('brP'), t_get('supPB'), 'TRY'));
+SELECT t_ok('T72g PO2: Top 8 @80, approved and ordered', $q$ SELECT rpc_po_upsert_line(t_get('po2'), t_get('vPT'), 8, 80); SELECT rpc_po_approve(t_get('po2')); SELECT rpc_po_mark_ordered(t_get('po2')) $q$);
+SELECT t_set('gr4', rpc_po_create_receipt(t_get('po2')));
+SELECT t_ok('T72g receipt #4: 3 of 8 posted', $q$ SELECT rpc_goods_receipt_upsert_line(t_get('gr4'), t_get('vPT'), 3, 80); SELECT * FROM rpc_goods_receipt_review(t_get('gr4')); SELECT rpc_post_goods_receipt(t_get('gr4')) $q$);
+SELECT t_check('T72g PO2 partially received 3/8', t72_status('po2') = 'partially_received' AND t72_received('po2', 'vPT') = 3);
+SELECT t_ok('T72g receipt #4 reversed', $q$ SELECT rpc_reverse_goods_receipt(t_get('gr4'), 'yanlış parti') $q$);
+SELECT t_check('T72g reversal takes the units out: PO2 back to ordered, received 0, the receipt listed as reversed',
+  t72_status('po2') = 'ordered' AND t72_received('po2', 'vPT') = 0
+  AND (SELECT (j -> 'receipts' -> 0 ->> 'reversed')::boolean AND (j -> 'totals' ->> 'remaining')::int = 8 FROM (SELECT rpc_po_detail(t_get('po2')) AS j) x),
+  t72_status('po2') || ' recv=' || t72_received('po2', 'vPT') || ' ' || rpc_po_detail(t_get('po2'))::text);
+SELECT t_set('gr5', rpc_po_create_receipt(t_get('po2')));
+SELECT t_check('T72g after the reversal the next receipt is prefilled with the full 8', (SELECT n = 1 AND qty = 8 FROM t72_lines('gr5')));
+SELECT t_ok('T72g receipt #5: 5 of 8 posted', $q$ SELECT rpc_goods_receipt_upsert_line(t_get('gr5'), t_get('vPT'), 5, 80); SELECT * FROM rpc_goods_receipt_review(t_get('gr5')); SELECT rpc_post_goods_receipt(t_get('gr5')) $q$);
+SELECT t_err('T72g close remaining needs a reason', $q$ SELECT rpc_po_close(t_get('po2')) $q$, 'REASON_REQUIRED');
+SELECT t_ok('T72g close remaining', $q$ SELECT rpc_po_close(t_get('po2'), 'tedarikçi kalanı göndermeyecek') $q$);
+SELECT t_check('T72g close remaining: CLOSED with 5 received, 3 abandoned, no movement fabricated',
+  t72_status('po2') = 'closed'
+  AND (SELECT (j -> 'totals' ->> 'received')::int = 5 AND (j -> 'totals' ->> 'remaining')::int = 3 AND (j -> 'timeline' -> 'closed' ->> 'reason') = 'tedarikçi kalanı göndermeyecek' FROM (SELECT rpc_po_detail(t_get('po2')) AS j) x));
+SELECT t_check('T72g ledger rows for the top: gr1 +5, gr4 +3, reversal −3, gr5 +5 = 4 movements, on hand 10',
+  (SELECT count(*) = 4 AND sum(quantity) = 10 FROM inventory_movements WHERE business_id = t_get('bizP') AND variant_id = t_get('vPT')));
+
+-- H) cancel rules on a third PO
+SELECT t_set('po3', rpc_po_create(t_get('brP'), t_get('supPB'), 'TRY'));
+SELECT t_ok('T72h PO3 line + approve + order', $q$ SELECT rpc_po_upsert_line(t_get('po3'), t_get('vPX'), 2, 10); SELECT rpc_po_approve(t_get('po3')); SELECT rpc_po_mark_ordered(t_get('po3')) $q$);
+SELECT t_set('gr6', rpc_po_create_receipt(t_get('po3')));
+SELECT t_err('T72h cancel refused while a draft receipt is open', $q$ SELECT rpc_po_cancel(t_get('po3'), 'iptal') $q$, 'OPEN_RECEIPTS');
+SELECT t_err('T72h cancel needs a reason', $q$ SELECT rpc_po_cancel(t_get('po_empty'), '') $q$, 'REASON_REQUIRED');
+UPDATE goods_receipts SET status = 'cancelled' WHERE id = t_get('gr6');
+SELECT t_ok('T72h ordered PO with no posted receipt cancels; draft PO cancels', $q$ SELECT rpc_po_cancel(t_get('po3'), 'tedarikçi iptal etti'); SELECT rpc_po_cancel(t_get('po_empty'), 'yanlış açıldı') $q$);
+SELECT t_check('T72h both retained as cancelled',
+  t72_status('po3') = 'cancelled' AND t72_status('po_empty') = 'cancelled'
+  AND (SELECT count(*) FROM purchase_orders WHERE business_id = t_get('bizP') AND status = 'cancelled') = 2);
+-- (PO4 below adds a third cancelled order)
+SELECT t_err('T72h a receipt cannot be created against a cancelled PO', $q$ SELECT rpc_po_create_receipt(t_get('po3')) $q$, 'PO_NOT_OPEN');
+SELECT t_set('po4', rpc_po_create(t_get('brP'), t_get('supPA'), 'EUR', 35));
+SELECT t_ok('T72h PO4 (supplier A) ordered', $q$ SELECT rpc_po_upsert_line(t_get('po4'), t_get('vPX'), 1, 1); SELECT rpc_po_approve(t_get('po4')); SELECT rpc_po_mark_ordered(t_get('po4')) $q$);
+SELECT t_set('gr7', rpc_create_goods_receipt(t_get('brP'), t_get('supPB'), 'TRY', 1, CURRENT_DATE, 'B-MANUAL', NULL));
+SELECT t_set('gr8', rpc_create_goods_receipt(t_get('brP'), t_get('supPA'), 'EUR', 35, CURRENT_DATE, 'A-MANUAL', NULL));
+SELECT t_err('T72h clients cannot set the link column directly (8A column grants)', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po4') WHERE id = t_get('gr8') $q$, 'permission denied');
+SELECT t_logout();
+SELECT t_err('T72h a receipt of another supplier cannot be linked to the PO', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po4') WHERE id = t_get('gr7') $q$, 'PO_SUPPLIER_MISMATCH');
+SELECT t_err('T72h a draft receipt cannot be linked to a closed PO', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po1') WHERE id = t_get('gr8') $q$, 'PO_NOT_OPEN');
+SELECT t_ok('T72h a draft receipt of the right supplier can be linked to an open PO', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po4') WHERE id = t_get('gr8') $q$);
+SELECT t_err('T72h the link is never moved', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po2') WHERE id = t_get('gr8') $q$, 'IMMUTABLE');
+UPDATE goods_receipts SET status = 'cancelled' WHERE id IN (t_get('gr7'), t_get('gr8'));
+SELECT t_login('u2');
+SELECT t_ok('T72h PO4 cancelled after its drafts are gone', $q$ SELECT rpc_po_cancel(t_get('po4'), 'gerek kalmadı') $q$);
+SELECT t_check('T72h list: 5 orders, summary counts only open ones, financial for the manager',
+  (SELECT jsonb_array_length(j -> 'rows') = 5 AND (j ->> 'financial')::boolean AND (j -> 'summary' ->> 'open')::int = 0
+      AND (SELECT (r ->> 'expected_total')::numeric FROM jsonb_array_elements(j -> 'rows') r WHERE r ->> 'id' = t_get('po1')::text) = 2400
+      AND (SELECT (r ->> 'received')::int FROM jsonb_array_elements(j -> 'rows') r WHERE r ->> 'id' = t_get('po2')::text) = 5
+   FROM (SELECT rpc_po_list(t_get('bizP')) AS j) x), rpc_po_list(t_get('bizP'))::text);
+SELECT t_logout();
+
+-- I) roles + cross-tenant
+SELECT t_login('u4');
+SELECT t_check('T72i stock_staff: list and detail without any expected cost key',
+  (SELECT NOT (j ->> 'financial')::boolean AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'rows') r WHERE r ? 'expected_total') FROM (SELECT rpc_po_list(t_get('bizP')) AS j) x)
+  AND (SELECT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'lines') l WHERE l ? 'expected_unit_cost' OR l ? 'expected_total') AND NOT ((j -> 'totals') ? 'expected_total')
+       FROM (SELECT rpc_po_detail(t_get('po1')) AS j) x)
+  AND (SELECT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'lines') l WHERE l ? 'expected_unit_cost') FROM (SELECT rpc_receipt_po_reference(t_get('gr1')) AS j) x));
+SELECT t_err('T72i stock_staff cannot create', $q$ SELECT rpc_po_create(t_get('brP'), t_get('supPB'), 'TRY') $q$, 'FORBIDDEN');
+SELECT t_err('T72i stock_staff cannot approve', $q$ SELECT rpc_po_approve(t_get('po1')) $q$, 'FORBIDDEN');
+SELECT t_err('T72i stock_staff cannot add lines', $q$ SELECT rpc_po_upsert_line(t_get('po1'), t_get('vPX'), 1, 1) $q$, 'FORBIDDEN');
+SELECT t_err('T72i stock_staff cannot close or cancel', $q$ SELECT rpc_po_close(t_get('po2'), 'x') $q$, 'FORBIDDEN');
+SELECT t_err('T72i stock_staff cannot read the expected cost column', $q$ SELECT expected_unit_cost FROM purchase_order_items LIMIT 1 $q$, 'permission denied');
+SELECT t_check('T72i stock_staff reads the operational columns through RLS', t_count($q$ SELECT count(*) FROM purchase_orders WHERE business_id = t_get('bizP') $q$) = 5);
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_err('T72i sales_staff: list FORBIDDEN', $q$ SELECT rpc_po_list(t_get('bizP')) $q$, 'FORBIDDEN');
+SELECT t_err('T72i sales_staff: detail FORBIDDEN', $q$ SELECT rpc_po_detail(t_get('po1')) $q$, 'FORBIDDEN');
+SELECT t_check('T72i sales_staff sees no PO rows', t_count($q$ SELECT count(*) FROM purchase_orders $q$) = 0 AND t_count($q$ SELECT count(*) FROM purchase_order_items $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T72i other tenant: detail FORBIDDEN', $q$ SELECT rpc_po_detail(t_get('po1')) $q$, 'FORBIDDEN');
+SELECT t_err('T72i other tenant: list FORBIDDEN', $q$ SELECT rpc_po_list(t_get('bizP')) $q$, 'FORBIDDEN');
+SELECT t_err('T72i other tenant cannot create a receipt from it', $q$ SELECT rpc_po_create_receipt(t_get('po2')) $q$, 'FORBIDDEN');
+SELECT t_check('T72i other tenant sees nothing through RLS', t_count($q$ SELECT count(*) FROM purchase_orders $q$) = 0);
+SELECT t_logout();
+WITH x AS (INSERT INTO goods_receipts (business_id, branch_id, supplier_id, receipt_number, status) VALUES (t_get('biz'), t_get('br1'), t_get('sup1'), 'GR-FORGE-72', 'draft') RETURNING id) SELECT t_set('gr_forge', id) FROM x;
+SELECT t_err('T72i linkage cannot be forged across tenants', $q$ UPDATE goods_receipts SET purchase_order_id = t_get('po2') WHERE id = t_get('gr_forge') $q$, 'INVALID_PO');
+SELECT t_err('T72i unauthenticated refused', $q$ SELECT rpc_po_list(t_get('bizP')) $q$, 'UNAUTHENTICATED');
+SELECT t_check('T72i only receipt POSTs wrote to the ledger: movements 5 (gr1 3 lines, gr3 2, gr4 1, reversal 1, gr5 1 = 8), liabilities 4 (+1 credit)',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizP')) = 8
+  AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP') AND entry_type = 'liability') = 4
+  AND (SELECT count(*) FROM supplier_account_entries WHERE business_id = t_get('bizP') AND entry_type = 'credit') = 1);
 
 -- ============================================================
 -- SUMMARY
