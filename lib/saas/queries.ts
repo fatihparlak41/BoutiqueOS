@@ -62,9 +62,11 @@ export const getMyOnboarding = cache(async (): Promise<{ userId: string; email: 
  * only in that branch, so the normal bootstrap costs nothing extra.
  */
 export async function noTenantDestination(): Promise<string> {
-  const { onboarding } = await getMyOnboarding();
+  const { onboarding, draft } = await getMyOnboarding();
   if (onboarding.platform_admin) return "/platform";
   if (onboarding.application?.status === "pending") return "/basvuru-bekliyor";
   if (onboarding.inactive_businesses.length > 0) return "/hesap-durumu";
+  // registered, confirmed, never submitted: the draft from /kayit is waiting to be sent
+  if (!onboarding.application && draft) return "/basvuru";
   return "/no-access";
 }
