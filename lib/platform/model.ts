@@ -109,6 +109,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   upsert_plan: "Plan güncellendi",
 };
 
+/** Payload keys shown in the audit table, in reading order (from → to first). */
+export const AUDIT_PAYLOAD_KEYS = ["from", "to", "reason", "note", "plan", "code"] as const;
+
 export function pageOffset(page: string | undefined): number {
   const n = Number.parseInt(page ?? "1", 10);
   return Number.isFinite(n) && n > 1 ? (n - 1) * PAGE_SIZE : 0;

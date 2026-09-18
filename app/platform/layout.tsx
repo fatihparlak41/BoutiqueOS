@@ -32,7 +32,8 @@ export default async function PlatformLayout({ children }: { children: React.Rea
           <PlatformNav pending={pendingApplications} />
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">{children}</main>
+      {/* px-5 on phones: TableShell bleeds -mx-5 and must stay inside the viewport */}
+      <main className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-6">{children}</main>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBusiness } from "@/lib/platform/queries";
-import { AUDIT_ACTION_LABELS } from "@/lib/platform/model";
+import { AUDIT_ACTION_LABELS, AUDIT_PAYLOAD_KEYS } from "@/lib/platform/model";
 import { formatPlanPrice } from "@/lib/saas/model";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -79,7 +79,7 @@ export default async function BusinessDetailPage({ params }: { params: Promise<{
                       <div><dt>Kaynak</dt><dd className="text-text-secondary">{s.source}</dd></div>
                     </dl>
                     {s.note ? <p className="text-xs text-text-muted">{s.note}</p> : null}
-                    <SubscriptionStatusForm subscriptionId={s.id} current={s.status} />
+                    <SubscriptionStatusForm key={s.status} subscriptionId={s.id} current={s.status} />
                   </li>
                 ))}
               </ul>
@@ -106,9 +106,8 @@ export default async function BusinessDetailPage({ params }: { params: Promise<{
                       <TD muted>{a.admin ?? "—"}</TD>
                       <TD muted>
                         <span className="text-xs">
-                          {Object.entries(a.payload)
-                            .filter(([k, v]) => v !== null && v !== undefined && ["from", "to", "reason", "note", "plan", "code"].includes(k))
-                            .map(([k, v]) => `${k}: ${String(v)}`)
+                          {AUDIT_PAYLOAD_KEYS.filter((k) => a.payload[k] !== null && a.payload[k] !== undefined)
+                            .map((k) => `${k}: ${String(a.payload[k])}`)
                             .join(" · ") || "—"}
                         </span>
                       </TD>
@@ -121,7 +120,7 @@ export default async function BusinessDetailPage({ params }: { params: Promise<{
         </div>
 
         <aside className="space-y-4">
-          <BusinessStatusForm businessId={biz.id} current={biz.status} />
+          <BusinessStatusForm key={biz.status} businessId={biz.id} current={biz.status} />
         </aside>
       </div>
     </div>
