@@ -15,9 +15,13 @@ export const metadata = { title: "İşletme başvurusu · BoutiqueOS" };
  * account is told to open its link first (the RPC would refuse it anyway).
  */
 export default async function ApplicationPage() {
-  const [{ email, confirmed, onboarding, draft }, plans] = await Promise.all([getMyOnboarding(), getPublicPlans()]);
+  const [{ email, confirmed, onboarding, draft: registrationDraft }, plans] = await Promise.all([getMyOnboarding(), getPublicPlans()]);
 
   if (onboarding.application?.status === "pending") redirect("/basvuru-bekliyor");
+
+  // The registration draft is for the first application only; once one exists (in any
+  // state) the form starts empty — a further business is a new decision, not a replay.
+  const draft = onboarding.application ? null : registrationDraft;
 
   if (!confirmed) {
     return (
