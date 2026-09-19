@@ -6,6 +6,7 @@ import { requireTenant } from "@/lib/tenant";
 import { catalogCaps } from "@/lib/catalog/model";
 import { signImagePaths } from "@/lib/catalog/images";
 import type {
+  CategoryRef,
   ImageRole,
   NamedRef,
   OptionKind,
@@ -58,6 +59,7 @@ export async function loadCatalogContext() {
     supabase,
     tenant,
     businessId: tenant.active.business_id,
+    branchId: tenant.branch?.id ?? null,
     role: tenant.active.role,
     caps: catalogCaps(tenant.active.role),
   };
@@ -77,6 +79,20 @@ export const listCategories = cache(async (): Promise<NamedRef[]> => {
 
   if (error) throw new Error(`Kategoriler okunamadı: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id as string, name: row.name as string }));
+});
+
+/** Active categories with their parent, for hierarchical pickers. Same rows as listCategories. */
+export const listCategoryTree = cache(async (): Promise<CategoryRef[]> => {
+  const { supabase, businessId } = await loadCatalogContext();
+  const { data, error } = await supabase
+    .from("categories")
+    .select("id, name, parent_id")
+    .eq("business_id", businessId)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+  if (error) throw new Error(`Kategoriler okunamadı: ${error.message}`);
+  return (data ?? []).map((row) => ({ id: row.id as string, name: row.name as string, parent_id: (row.parent_id as string | null) ?? null }));
 });
 
 export const listBrands = cache(async (): Promise<NamedRef[]> => {
@@ -143,8 +159,8 @@ type BarcodeRow = {
   is_primary: boolean;
 };
 
-export async function listProducts(filters: ProductFilters, opts: { thumbnails?: boolean } = {}): Promise<ProductListRow[]> {
-  const { supabase, businessId } = await loadCatalogContext();
+export async function listProducts(filters: ProductFilters, opts: { thumbnails?: boolean; stock?: boolean } = {}): Promise<ProductListRow[]> {
+  const { supabase, businessId, branchId } = await loadCatalogContext();
   // independent of the product rows: start them now, await them with the variant read
   const references = Promise.all([listCategories(), listBrands()]);
 
@@ -190,6 +206,20 @@ export async function listProducts(filters: ProductFilters, opts: { thumbnails?:
 
   if (variantError) throw new Error(`Varyantlar okunamadı: ${variantError.message}`);
 
+  // Available units per variant at the shell's branch (sellable − active holds; the same
+  // view the stock page reads). Skipped when the caller shows no stock, and when there is
+  // no branch to read for.
+  const availableByVariant = new Map<string, number>();
+  if (opts.stock !== false && branchId && (variantRows ?? []).length > 0) {
+    const { data: availRows } = await supabase
+      .from("v_stock_available")
+      .select("variant_id, available_quantity")
+      .eq("business_id", businessId)
+      .eq("branch_id", branchId)
+      .in("variant_id", (variantRows ?? []).map((v) => v.id as string));
+    for (const r of availRows ?? []) availableByVariant.set(r.variant_id as string, num(r.available_quantity));
+  }
+
   // One signing round trip for every thumbnail on the page — skipped when the caller
   // renders no images (the dashboard counts products, it does not show them).
   const mains = (imageRows ?? []) as Array<{ product_id: string; storage_path: string | null; url: string | null }>;
@@ -225,6 +255,7 @@ export async function listProducts(filters: ProductFilters, opts: { thumbnails?:
       variant_count: own.length,
       price_min: prices.length > 0 ? Math.min(...prices) : null,
       price_max: prices.length > 0 ? Math.max(...prices) : null,
+      available_total: opts.stock === false || !branchId ? null : own.reduce((n, v) => n + (availableByVariant.get(v.id as string) ?? 0), 0),
     };
   });
 }

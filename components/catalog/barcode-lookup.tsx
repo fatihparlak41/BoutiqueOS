@@ -11,10 +11,10 @@ import type { BarcodeHit } from "@/lib/catalog/queries";
  * "types" a code followed by Enter works without any script; the server resolves it
  * through rpc_resolve_barcode, which never reads outside the caller's business.
  */
-export function BarcodeLookup({ code, hit }: { code: string; hit: BarcodeHit | null }) {
+export function BarcodeLookup({ code, hit, showForm = true }: { code: string; hit: BarcodeHit | null; showForm?: boolean }) {
   return (
     <div className="space-y-2">
-      <form method="get" className="flex items-center gap-2">
+      {showForm ? <form method="get" className="flex items-center gap-2">
         <label htmlFor="barkod" className="sr-only">Barkod veya SKU</label>
         <div className="relative w-full max-w-sm">
           <ScanLine aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 stroke-[1.5] text-text-muted" />
@@ -32,7 +32,7 @@ export function BarcodeLookup({ code, hit }: { code: string; hit: BarcodeHit | n
         <Button type="submit" size="sm" variant="outline">
           Bul
         </Button>
-      </form>
+      </form> : null}
 
       {code ? (
         hit ? (

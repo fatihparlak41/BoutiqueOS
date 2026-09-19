@@ -68,6 +68,9 @@ export type DuplicateReport = {
   name_matches: ProductSummary[];
 };
 
+/** Who already owns a barcode the person typed — shown in plain words, linked to the product. */
+export type KnownBarcode = { product_id: string; product_name: string; label: string };
+
 export type OnboardVariantResult = { sku: string; variant_id: string; created: boolean; barcodes_added: number };
 export type OnboardResult = { product_id: string; variants: OnboardVariantResult[] };
 
@@ -98,7 +101,7 @@ export function suggestComboSku(prefix: string, values: IntakeValue[]): string {
 }
 
 export function comboLabel(values: IntakeValue[]): string {
-  return values.map((v) => v.value).join(" / ") || "Tek varyant";
+  return values.map((v) => v.value).join(" / ") || "Tek seçenek";
 }
 
 /** The fingerprint the database uses for "this combination already exists". */

@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { listBrands, listCategories, listProductOptions, loadCatalogContext } from "@/lib/catalog/queries";
+import { listBrands, listCategoryTree, listProductOptions, loadCatalogContext } from "@/lib/catalog/queries";
 import { PageHeader } from "@/components/ui/page-header";
 import { IntakeWizard } from "@/components/catalog/intake/intake-wizard";
 
-export const metadata = { title: "Kataloğa ekle · BoutiqueOS" };
+export const metadata = { title: "Ürün ekle · BoutiqueOS" };
 
 /**
  * Physical catalogue intake: the person stands in the shop with the garment and enters
@@ -14,15 +14,11 @@ export default async function CatalogIntakePage() {
   const { caps } = await loadCatalogContext();
   if (!caps.canEditCatalog) redirect("/app/urunler");
 
-  const [options, categories, brands] = await Promise.all([listProductOptions(), listCategories(), listBrands()]);
+  const [options, categories, brands] = await Promise.all([listProductOptions(), listCategoryTree(), listBrands()]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader
-        eyebrow={{ href: "/app/urunler", label: "Ürünler" }}
-        title="Kataloğa ekle"
-        description="Elinizdeki ürünü etiketinden okuyarak ekleyin: barkod, ad, renk ve bedenler, fotoğraf. Stok miktarı bu akışta girilmez."
-      />
+      <PageHeader eyebrow={{ href: "/app/urunler", label: "Ürünler" }} title="Ürün ekle" description="Fotoğraf, ad, renk ve bedenler. Stok sonra sayımla girilir." />
       <IntakeWizard initialOptions={options} initialCategories={categories} brands={brands} />
     </div>
   );

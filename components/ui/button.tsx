@@ -3,8 +3,9 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /**
- * One action colour: charcoal. The plum accent is not a button colour — it marks the
- * active place and the focus ring, so it stays rare enough to mean something.
+ * Two action colours: charcoal for ordinary actions, plum (`accent`) for the one
+ * primary action of a screen — "Ürün ekle", "Ürünü kaydet". Plum stays rare enough to
+ * mean "this is the thing to press"; it is never used for two buttons side by side.
  */
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded font-medium transition-colors " +
@@ -14,6 +15,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         solid: "bg-primary text-primary-foreground hover:bg-primary-hover",
+        accent: "bg-accent text-accent-foreground hover:bg-accent-hover",
         outline: "border border-border-strong bg-surface text-text-primary hover:bg-surface-muted",
         ghost: "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
         danger: "border border-danger/40 bg-surface text-danger hover:bg-danger-muted",

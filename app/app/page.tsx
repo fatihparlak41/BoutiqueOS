@@ -44,7 +44,7 @@ export default async function AppHomePage() {
   const receiving = receivingCaps(active.role);
 
   const [products, stock, receipts] = await Promise.all([
-    listProducts({}, { thumbnails: false }),
+    listProducts({}, { thumbnails: false, stock: false }),
     stockAvailabilitySummary(),
     receiving.canRead ? listReceipts({}) : Promise.resolve([]),
   ]);

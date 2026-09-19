@@ -28,6 +28,15 @@ export const VARIANT_STATUS_LABELS: Record<VariantStatus, string> = {
 
 export type NamedRef = { id: string; name: string };
 
+/** A category with its parent, for hierarchical pickers ("Üst Giyim › Bluzlar"). */
+export type CategoryRef = NamedRef & { parent_id: string | null };
+
+/** "Üst Giyim › Bluzlar" for a child, the plain name for a root. */
+export function categoryPath(c: CategoryRef, all: CategoryRef[]): { group: string | null; label: string } {
+  const parent = c.parent_id ? all.find((x) => x.id === c.parent_id) ?? null : null;
+  return { group: parent?.name ?? null, label: c.name };
+}
+
 /** product_options.kind — drives the matrix UX (swatches for colours, chips for sizes). */
 export type OptionKind = "color" | "size" | "other";
 
@@ -126,6 +135,8 @@ export type ProductListRow = {
   /** Effective price span across active variants; null when the product has no active variant. */
   price_min: number | null;
   price_max: number | null;
+  /** Sellable minus active holds at the shell's branch, summed over variants; null when no branch is set. */
+  available_total: number | null;
 };
 
 export type ProductDetail = {

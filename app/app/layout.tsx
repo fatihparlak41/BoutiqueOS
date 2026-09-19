@@ -4,6 +4,7 @@ import { PrimaryNav } from "@/components/shell/primary-nav";
 import { BusinessPlate } from "@/components/shell/business-plate";
 import { AccountMenu } from "@/components/shell/account-menu";
 import { MobileNav } from "@/components/shell/mobile-nav";
+import { ToastProvider } from "@/components/ui/toast";
 
 export const metadata = { title: "BoutiqueOS" };
 
@@ -59,7 +60,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
       <div className="flex min-h-dvh min-w-0 flex-col bg-surface lg:min-h-0">
         <main className="mx-auto w-full max-w-content flex-1 px-5 py-6 sm:px-8 sm:py-8 lg:px-10 lg:py-10">
-          {children}
+          <ToastProvider>{children}</ToastProvider>
         </main>
       </div>
     </div>

@@ -24,7 +24,7 @@ export default async function SalesReportPage({ searchParams }: { searchParams: 
   const params = await searchParams;
   const state = await reportPageState(params);
   if (!state.caps.canViewSales) redirect("/app/raporlar/stok");
-  const [members, categories, products] = await Promise.all([listMembers(), listCategories(), listProducts({}, { thumbnails: false })]);
+  const [members, categories, products] = await Promise.all([listMembers(), listCategories(), listProducts({}, { thumbnails: false, stock: false })]);
   const salespersonId = params.satici && members.some((m) => m.user_id === params.satici) ? params.satici : null;
   const categoryId = params.kategori && categories.some((c) => c.id === params.kategori) ? params.kategori : null;
   const productId = params.urun && UUID.test(params.urun) && products.some((p) => p.id === params.urun) ? params.urun : null;

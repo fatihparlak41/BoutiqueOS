@@ -13,6 +13,7 @@
     "test:jwt-skew": "node --experimental-strip-types tests/auth/check_jwt_skew_retry.ts",
     "test:recovery": "node --experimental-strip-types tests/auth/check_recovery_guard.ts",
     "test:session-ready": "node --experimental-strip-types tests/auth/check_session_ready.ts",
+    "test:ui": "node tests/ui/check_catalog_ux.mjs",
     "test:auth": "npm run test:redirect && npm run test:reset && npm run test:jwt-skew && npm run test:recovery && npm run test:session-ready"
   },
   "dependencies": {

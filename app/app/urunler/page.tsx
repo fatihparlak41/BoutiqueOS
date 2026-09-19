@@ -1,25 +1,20 @@
 import Link from "next/link";
+import { Plus, Shirt } from "lucide-react";
 import {
   listProducts,
   listCategories,
   listBrands,
   loadCatalogContext,
   resolveBarcode,
-  PRODUCT_STATUS_LABELS,
   type ProductStatus,
 } from "@/lib/catalog/queries";
-import { formatPrice, formatPriceRange } from "@/lib/catalog/format";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { PageHeader } from "@/components/ui/page-header";
-import { FilterBar, FilterField } from "@/components/ui/filter-bar";
 import { EmptyState } from "@/components/ui/empty-state";
-import { CellTitle, TBody, TD, TH, THead, TR, TableShell, rowLinkClass } from "@/components/ui/table";
-import { StatusPill } from "@/components/catalog/status-pill";
-import { ProductThumb } from "@/components/catalog/product-thumb";
 import { BarcodeLookup } from "@/components/catalog/barcode-lookup";
+import { ProductFilters } from "@/components/catalog/product-filters";
+import { ProductList } from "@/components/catalog/product-list";
+import { AdvancedAddMenu } from "@/components/catalog/advanced-add-menu";
 
 export const metadata = { title: "Ürünler · BoutiqueOS" };
 
@@ -35,11 +30,12 @@ function isProductStatus(value: string | undefined): value is ProductStatus {
   return value === "draft" || value === "active" || value === "archived";
 }
 
-export default async function ProductsPage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
+/**
+ * Products: one primary action ("Ürün ekle" → the guided flow), a search field, filters
+ * behind a button, and the list. The legacy form (/app/urunler/yeni) stays reachable as
+ * "Gelişmiş ürün ekleme" in the quiet menu next to the primary action.
+ */
+export default async function ProductsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
   const search = params.q?.trim() ?? "";
   const categoryId = params.kategori ?? "";
@@ -47,7 +43,8 @@ export default async function ProductsPage({
   const status = isProductStatus(params.durum) ? params.durum : undefined;
 
   const { caps } = await loadCatalogContext();
-  const barcode = params.barkod?.trim() ?? "";
+  // a scanned code typed into the search box resolves like the old barcode field did
+  const barcode = params.barkod?.trim() || (search && /^[0-9A-Za-z-]{6,}$/.test(search) && /\d/.test(search) ? search : "");
 
   const [products, categories, brands, hit] = await Promise.all([
     listProducts({ search, categoryId: categoryId || undefined, brandId: brandId || undefined, status }),
@@ -59,128 +56,52 @@ export default async function ProductsPage({
   const hasFilter = Boolean(search || categoryId || brandId || status);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Ürünler"
-        description="Ürün modelleri ve satılabilir varyantları. Stok miktarı bu ekranda tutulmaz; mal kabulle gelir."
         actions={
           caps.canEditCatalog ? (
             <>
-              <Link href="/app/urunler/yeni">
-                <Button size="sm" variant="outline">Yeni ürün</Button>
+              <Link href="/app/urunler/katalog-ekle" data-testid="primary-add-product">
+                <Button variant="accent">
+                  <Plus aria-hidden className="h-4 w-4" />
+                  Ürün ekle
+                </Button>
               </Link>
-              <Link href="/app/urunler/katalog-ekle">
-                <Button size="sm">Kataloğa ekle</Button>
-              </Link>
+              <AdvancedAddMenu />
             </>
           ) : undefined
         }
       />
 
-      <BarcodeLookup code={barcode} hit={hit} />
+      {barcode && hit ? <BarcodeLookup code={barcode} hit={hit} showForm={false} /> : null}
 
-      <FilterBar clearHref="/app/urunler" hasFilter={hasFilter}>
-        <FilterField wide>
-          <Label htmlFor="q">Ara</Label>
-          <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı, model kodu veya SKU ön eki" spellCheck={false} />
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="kategori">Kategori</Label>
-          <Select id="kategori" name="kategori" defaultValue={categoryId}>
-            <option value="">Tümü</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="marka">Marka</Label>
-          <Select id="marka" name="marka" defaultValue={brandId}>
-            <option value="">Tümü</option>
-            {brands.map((brand) => (
-              <option key={brand.id} value={brand.id}>
-                {brand.name}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="durum">Durum</Label>
-          <Select id="durum" name="durum" defaultValue={status ?? ""}>
-            <option value="">Tümü</option>
-            {Object.entries(PRODUCT_STATUS_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-      </FilterBar>
-
-      {products.length === 0 ? (
-        hasFilter ? (
-          <EmptyState
-            compact
-            title="Bu filtrelere uyan ürün yok"
-            description="Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
-          />
-        ) : (
-          <EmptyState
-            editorial
-            title="Henüz ürün yok"
-            description="İlk ürünü ekleyerek başlayın; varyantları ürün eklendikten sonra tanımlarsınız."
-            action={
-              caps.canEditCatalog ? (
-                <Link href="/app/urunler/yeni">
-                  <Button>İlk ürünü ekle</Button>
-                </Link>
-              ) : undefined
-            }
-          />
-        )
+      {products.length === 0 && !hasFilter ? (
+        <EmptyState
+          editorial
+          icon={<Shirt />}
+          title="İlk ürününü ekle"
+          description="Ürünlerini, renklerini ve bedenlerini birkaç adımda oluştur."
+          action={
+            caps.canEditCatalog ? (
+              <Link href="/app/urunler/katalog-ekle">
+                <Button variant="accent" size="lg">
+                  <Plus aria-hidden className="h-4 w-4" />
+                  Ürün ekle
+                </Button>
+              </Link>
+            ) : undefined
+          }
+        />
       ) : (
-        <TableShell
-          minWidth="42rem"
-          footer={`${products.length} ürün listeleniyor${products.length === 200 ? " (ilk 200)" : ""}.`}
-        >
-          <THead>
-            <TH>Ürün</TH>
-            <TH>Kategori</TH>
-            <TH>Marka</TH>
-            <TH align="right">Varyant</TH>
-            <TH align="right">Fiyat</TH>
-            <TH>Durum</TH>
-          </THead>
-          <TBody>
-            {products.map((product) => (
-              <TR key={product.id}>
-                <TD>
-                  <span className="flex items-center gap-3">
-                    <ProductThumb url={product.thumbnail_url} alt={product.name} />
-                    <CellTitle sub={[product.style_code, product.sku_prefix].filter(Boolean).join("  ")} subNumeric>
-                      <Link href={`/app/urunler/${product.id}`} className={rowLinkClass}>
-                        {product.name}
-                      </Link>
-                    </CellTitle>
-                  </span>
-                </TD>
-                <TD muted>{product.category?.name ?? "—"}</TD>
-                <TD muted>{product.brand?.name ?? "—"}</TD>
-                <TD muted numeric align="right">{product.variant_count}</TD>
-                <TD muted numeric align="right">
-                  {product.variant_count === 0
-                    ? formatPrice(product.default_sale_price)
-                    : formatPriceRange(product.price_min, product.price_max)}
-                </TD>
-                <TD>
-                  <StatusPill status={product.status} />
-                </TD>
-              </TR>
-            ))}
-          </TBody>
-        </TableShell>
+        <>
+          <ProductFilters search={search} categoryId={categoryId} brandId={brandId} status={status ?? ""} categories={categories} brands={brands} />
+          {products.length === 0 ? (
+            <EmptyState compact title="Bu aramaya uyan ürün yok" description="Yazımı kontrol et ya da filtreleri temizle." action={<Link href="/app/urunler"><Button variant="outline" size="sm">Filtreleri temizle</Button></Link>} />
+          ) : (
+            <ProductList products={products} canEdit={caps.canEditCatalog} footer={`${products.length} ürün${products.length === 200 ? " (ilk 200)" : ""}`} />
+          )}
+        </>
       )}
     </div>
   );

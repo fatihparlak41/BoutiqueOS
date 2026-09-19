@@ -29,7 +29,7 @@ export default async function DimensionsPage({ searchParams }: { searchParams: P
   const [{ branchId, branches }, categories, products, dims] = await Promise.all([
     branchP,
     listCategories(),
-    listProducts({}, { thumbnails: false }),
+    listProducts({}, { thumbnails: false, stock: false }),
     params.sube ? branchP.then((b) => getIntelDimensions(b.branchId, days, catP, prodP)) : getIntelDimensions(null, days, catP, prodP),
   ]);
   const categoryId = catP && categories.some((c) => c.id === catP) ? catP : null;

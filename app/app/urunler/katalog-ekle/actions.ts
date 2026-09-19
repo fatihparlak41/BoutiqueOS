@@ -13,7 +13,7 @@ import { reportDbError } from "@/lib/catalog/errors";
 import { parseMoney } from "@/lib/catalog/format";
 import { IDLE } from "@/lib/catalog/action-state";
 import { uploadImageAction } from "@/app/app/urunler/actions";
-import type { NamedRef, OptionKind, OptionValue, ProductDetail, ProductOption, ProductStatus } from "@/lib/catalog/model";
+import type { CategoryRef, NamedRef, OptionKind, OptionValue, ProductDetail, ProductOption, ProductStatus } from "@/lib/catalog/model";
 import {
   normalizeName,
   slugify,
@@ -243,7 +243,7 @@ export async function addOptionValueAction(input: {
 }
 
 /** A category this business needs; a suggestion becomes a row only when someone picks it. */
-export async function createCategoryAction(name: string): Promise<Result<NamedRef>> {
+export async function createCategoryAction(name: string): Promise<Result<CategoryRef>> {
   const { supabase, businessId, caps } = await loadCatalogContext();
   if (!caps.canEditCatalog) return fail(NO_PERMISSION);
 
@@ -252,15 +252,23 @@ export async function createCategoryAction(name: string): Promise<Result<NamedRe
   const slug = slugify(trimmed);
   if (!slug) return fail("Kategori adı harf ya da rakam içermeli.");
 
+  // Never a near-duplicate: the same name after normalisation (case, spacing, punctuation)
+  // is the existing category, active or not — the picker selects it instead.
+  const { data: existing } = await supabase.from("categories").select("id, name, is_active").eq("business_id", businessId);
+  const same = (existing ?? []).find((c) => normalizeName(c.name as string) === normalizeName(trimmed));
+  if (same) {
+    return fail(same.is_active ? `«${same.name}» adlı kategori zaten var; listeden seçin.` : `«${same.name}» adlı kategori daha önce kapatılmış; Ayarlar'dan yeniden açın.`);
+  }
+
   const { data, error } = await supabase
     .from("categories")
     .insert({ business_id: businessId, name: trimmed, slug, sort_order: 100 })
-    .select("id, name")
+    .select("id, name, parent_id")
     .single();
   if (error) return fail(reportDbError("intakeCreateCategory", error));
 
   revalidatePath("/app/urunler", "layout");
-  return { ok: true, data: { id: data.id as string, name: data.name as string } };
+  return { ok: true, data: { id: data.id as string, name: data.name as string, parent_id: (data.parent_id as string | null) ?? null } };
 }
 
 // ------------------------------------------------------------------ writes

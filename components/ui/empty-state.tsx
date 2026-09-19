@@ -12,6 +12,8 @@ export function EmptyState({
   title,
   description,
   action,
+  secondary,
+  icon,
   editorial = false,
   compact = false,
   className,
@@ -19,6 +21,10 @@ export function EmptyState({
   title: React.ReactNode;
   description?: React.ReactNode;
   action?: React.ReactNode;
+  /** A quieter second choice under the action (a link, a ghost button). */
+  secondary?: React.ReactNode;
+  /** A single lucide icon, drawn quietly above the title. */
+  icon?: React.ReactNode;
   editorial?: boolean;
   compact?: boolean;
   className?: string;
@@ -31,6 +37,7 @@ export function EmptyState({
         className,
       )}
     >
+      {icon ? <span aria-hidden className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full border border-border bg-surface text-text-muted [&>svg]:h-5 [&>svg]:w-5 [&>svg]:stroke-[1.5]">{icon}</span> : null}
       <p
         className={cn(
           editorial
@@ -44,6 +51,7 @@ export function EmptyState({
         <p className="mt-2 max-w-md text-xs leading-relaxed text-text-muted sm:text-sm">{description}</p>
       ) : null}
       {action ? <div className="mt-5">{action}</div> : null}
+      {secondary ? <div className="mt-2 text-xs text-text-muted">{secondary}</div> : null}
     </div>
   );
 }
