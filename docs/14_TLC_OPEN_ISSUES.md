@@ -34,7 +34,17 @@ Aynı sayfa "Renk × beden 0 × 0 · seçeneksiz" ve "Stok yaşı — hiç stokl
 - Beklenen davranış kararı gerekir: arşivli ürünün havuz değeri "Stok değeri"nde görünmeli mi
   (muhasebe gerçeği) yoksa arşiv = "satış dışı, değerleme dışı" mı?
 
-## C. Diğer (bilgi)
+## C. Ürün arşivleme/geri alma iş denetim olayı (takip)
 
-- Kasa oturumu RS-2026-000001 16.09'dan beri açık (docs/10 §28).
-- `settings.timezone` yok (Lefkoşa için `Asia/Nicosia` önerisi, §28).
+`archiveProductAction` yalnız `products.status` + `updated_at` yazar; kim/ne zaman/neden kaydı yok.
+Öneri (ayrı bütünlük işi, UX pass'inde yapılmadı): `rpc_product_set_status(product_id, status, reason)`
++ tenant iş denetim satırı ("product archived / restored", aktör, neden); UI onay diyaloğuna isteğe bağlı
+neden alanı. Genel bir audit çerçevesi acele kurulmaz.
+
+## D. Diğer (bilgi)
+
+- Kasa oturumu RS-2026-000001 16.09'dan beri açık (docs/10 §28) — panelde "uzun süredir açık" uyarısı çıkıyor.
+- `settings.timezone` **2026-09-19 15:00 UTC'de sahip oturumunca `Europe/Istanbul` yapıldı** (bu oturum değil;
+  Lefkoşa için `Asia/Nicosia` önerisi §28'de duruyor).
+- Taslak sayım SC-2026-000001 (2026-09-19 15:10 UTC, Türkan hesabı, 0 satır) — gerçek sahip denemesi.
+- Arşivli üründe "Stok değeri ₺0,00" (B) Pass 2'de okuma tarafında giderildi (docs/10 §31).
