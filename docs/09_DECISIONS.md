@@ -470,3 +470,41 @@ image store, the ledger and the reservation rules stay exactly as they are.
 **Why:** the boutique already has the truth of stock, cost and money in the ledger, the
 reservation engine and the POS sale; an online order must orchestrate those and leave no
 second copy that could disagree with them.
+
+## ADR-23 · A Count Surplus Without a Cost Basis Is Priced Only by an Explicit Manager Cost
+
+**Decision (Phase 15B-0):**
+1. There is no separate "opening stock" engine. Initial real stock enters the ledger the
+   way every correction does: PRODUCT CATALOGUE → PHYSICAL STOCK COUNT → REVIEW → POST
+   (Phase 7A). Quantity truth is the count; nothing writes `inventory_movements` for a
+   count except `rpc_stock_count_post`, and each line yields at most one movement.
+2. The one gap the count engine had is closed by one table: `stock_count_line_costs`
+   (line → `unit_cost_base` cost6 in the business base currency, `cost_source`
+   `documented_purchase` | `owner_declared_opening_cost`, note, actor, timestamps). It is
+   written only by `rpc_stock_count_set_line_cost` (owner/manager, while the document is
+   draft / counting / review; NULL clears), readable only by owner/manager (RLS), never by
+   a client write, and frozen with the document (posted / cancelled) — a posted cost's
+   value, source and `applied_*` snapshot never change.
+3. POST prices a positive difference in this order and no other: a pool with a usable
+   basis (`on_hand > 0 AND value > 0`) → the branch moving average (an entered cost is
+   kept for audit with `applied = false`); no basis but an entered cost → that cost, for
+   exactly the new units (`applied = true`, quantity, value); neither → `COST_REQUIRED`
+   and the whole posting stops. There is no default, no zero, no sale-price-derived cost
+   (`sale_price / markup` is refused by design). A negative difference never asks for a
+   cost: it leaves at the moving average as before.
+4. The review is fingerprinted (`stock_counts.review_hash` = lines' quantities and
+   resolution + cost rows' identity and last change; no cost value enters the hash, so
+   the header stays readable by counting staff). POST refuses a document that changed
+   since its review (`STALE_REVIEW`) and, when the client sends the hash it rendered, a
+   document someone else reviewed again since. Entering or clearing a cost after the
+   review is such a change; the app repeats the review in the same step. The per-line
+   ledger re-read (`STALE_COUNT`) is unchanged.
+5. `stock_count_lines.cost_required` is an operational flag set at review ("this surplus
+   has no basis"); it carries no value and is what stock_staff see ("Maliyet bilgisi
+   yönetici tarafından tamamlanmalıdır"). The app never loads the cost table for
+   non-manager roles; the database would return nothing to them anyway.
+
+**Why:** quantity and accounting cost are separate questions. The count must keep telling
+the truth about the shelf even when the ledger cannot price it, and the price must come
+from a person who says where it came from — never from a default, a formula or a
+spreadsheet that silently becomes accounting truth.
