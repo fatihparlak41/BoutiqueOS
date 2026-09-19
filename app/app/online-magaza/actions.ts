@@ -53,11 +53,15 @@ export async function saveStorefrontAction(_prev: StorefrontActionState, formDat
     fulfillment_branch_id: String(formData.get("fulfillment_branch_id") ?? "").trim(),
     stock_display: String(formData.get("stock_display") ?? "state"),
     low_stock_threshold: Number.parseInt(String(formData.get("low_stock_threshold") ?? "3"), 10),
+    orders_enabled: formData.get("orders_enabled") === "on",
+    order_hold_minutes: Number.parseInt(String(formData.get("order_hold_minutes") ?? "1440"), 10),
+    pickup_note: String(formData.get("pickup_note") ?? "").trim(),
   };
   if (!/^[a-z0-9](?:[a-z0-9-]{1,48}[a-z0-9])$/.test(settings.slug)) return { error: "Mağaza adresi 3–50 karakter olmalı; yalnız küçük harf, rakam ve tire.", ok: false };
   if (settings.store_name.length < 2) return { error: "Mağaza adı gerekli.", ok: false };
   if (settings.fulfillment_branch_id && !UUID.test(settings.fulfillment_branch_id)) return { error: "Şube tanınmadı.", ok: false };
   if (!["state", "exact"].includes(settings.stock_display)) return { error: "Stok gösterimi tanınmadı.", ok: false };
+  if (!Number.isFinite(settings.order_hold_minutes) || settings.order_hold_minutes < 30 || settings.order_hold_minutes > 10080) return { error: "Ayırma süresi 30 dakika ile 7 gün arasında olmalı.", ok: false };
   const supabase = await createClient();
   const { error } = await supabase.rpc("rpc_storefront_upsert", { p_business_id: active.business_id, p_settings: settings });
   if (error) return { error: reportDbError("storefront upsert", error), ok: false };

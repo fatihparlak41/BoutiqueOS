@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 69 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 69,
+SELECT t_check('T01 all 72 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 72,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -5370,6 +5370,264 @@ SELECT t_check('T75h TLC: no storefront, no published product, no public image, 
   (SELECT count(*) FROM storefronts WHERE business_id = t_get('biz')) = 0
   AND (SELECT count(*) FROM products WHERE business_id = t_get('biz') AND (web_published OR web_slug IS NOT NULL OR web_featured)) = 0
   AND (SELECT count(*) FROM product_images WHERE business_id = t_get('biz') AND public_path IS NOT NULL) = 0);
+
+-- ============================================================
+-- T76  Guest order + checkout foundation  (Phase 14B)
+-- ============================================================
+SELECT t_check('T76a order tables: RLS on, zero policies, no anon/authenticated privilege; hold link on reservations; public RPCs are the only anon surface',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('storefront_orders','storefront_order_items','storefront_order_events') AND relrowsecurity) = 3
+  AND (SELECT count(*) FROM pg_policies WHERE tablename IN ('storefront_orders','storefront_order_items','storefront_order_events')) = 0
+  AND NOT has_table_privilege('anon', 'storefront_orders', 'SELECT') AND NOT has_table_privilege('authenticated', 'storefront_orders', 'SELECT')
+  AND NOT has_table_privilege('anon', 'storefront_orders', 'INSERT') AND NOT has_table_privilege('authenticated', 'storefront_order_items', 'SELECT')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'reservations' AND column_name = 'storefront_order_id')
+  AND has_function_privilege('anon', 'rpc_shop_create_order(text, text, jsonb, jsonb, text)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_order(text, text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_cancel_order(text, text, text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_online_orders(uuid, text, text, integer, integer)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_online_order_confirm(uuid, uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_pos_complete_online_order(uuid, uuid, jsonb, uuid, uuid, text)', 'EXECUTE'));
+-- fixtures: the storefront of T75 (zz-store, exact display, threshold 2); a9 joins as stock_staff; keys are 64-hex client secrets
+INSERT INTO business_members (business_id, user_id, role, is_active) VALUES (t_get('bizS'), t_get('a9'), 'stock_staff', true), (t_get('bizS'), t_get('a11'), 'manager', true);
+CREATE FUNCTION t76_key(p_n INT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$ SELECT encode(sha256(('t76-key-' || p_n::text)::bytea), 'hex') $$;
+CREATE FUNCTION t76_order(p_no TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT id FROM storefront_orders WHERE business_id = t_get('bizS') AND order_number = p_no $$;
+CREATE FUNCTION t76_q(p_sql TEXT) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE b BOOLEAN; BEGIN EXECUTE 'SELECT (' || p_sql || ')' INTO b; RETURN COALESCE(b, false); END $$;
+CREATE FUNCTION t76_num(p_sql TEXT) RETURNS NUMERIC LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE n NUMERIC; BEGIN EXECUTE p_sql INTO n; RETURN n; END $$;
+CREATE FUNCTION t76_txt(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE s TEXT; BEGIN EXECUTE p_sql INTO s; RETURN s; END $$;
+CREATE TEMP TABLE _t76 AS SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) AS mov, (SELECT count(*) FROM customers WHERE business_id = t_get('bizS')) AS cust,
+  (SELECT count(*) FROM sales WHERE business_id = t_get('bizS')) AS sales, (SELECT extract(year FROM now())::int) AS yr;
+GRANT SELECT ON _t76 TO authenticated, anon;
+CREATE FUNCTION t76_cust(p_name TEXT DEFAULT 'Misafir Müşteri', p_phone TEXT DEFAULT '0532 111 22 33', p_email TEXT DEFAULT 'guest@example.com') RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_build_object('name', p_name, 'phone', p_phone, 'email', p_email, 'note', 'Öğleden sonra alırım') $$;
+CREATE FUNCTION t76_line(p_sku TEXT, p_qty INT) RETURNS JSONB LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT jsonb_build_object('variant_id', t75_vid(p_sku), 'quantity', p_qty) $$;
+
+-- ---------------- checkout validation (anon) ----------------
+SET ROLE anon;
+SELECT t_err('T76b unknown store', $q$ SELECT rpc_shop_create_order('nope', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust()) $q$, 'STORE_UNAVAILABLE');
+SELECT t_err('T76b2 shipping is not offered', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust(), 'shipping') $q$, 'FULFILLMENT_UNAVAILABLE');
+SELECT t_err('T76b3 the idempotency key must be long', $q$ SELECT rpc_shop_create_order('zz-store', 'short', jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust()) $q$, 'INVALID_INPUT');
+SELECT t_err('T76b4 empty cart', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), '[]'::jsonb, t76_cust()) $q$, 'EMPTY_CART');
+SELECT t_err('T76b5 quantity 11 is over the line limit', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 11)), t76_cust()) $q$, 'INVALID_QTY');
+SELECT t_err('T76b6 more than 30 units', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 10), t76_line('ELB-A-SYH-S', 10), t76_line('ELB-A-BEJ-S', 10), t76_line('CNT-F-STD', 1)), t76_cust()) $q$, 'CART_LIMIT');
+SELECT t_err('T76b7 name required', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust(' ')) $q$, 'INVALID_NAME');
+SELECT t_err('T76b8 phone validated', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust('Ad', '12')) $q$, 'INVALID_PHONE');
+SELECT t_err('T76b9 email validated', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust('Ad', '0532 111 22 33', 'not-an-email')) $q$, 'INVALID_EMAIL');
+SELECT t_err('T76b10 an unpublished product cannot be ordered', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('CKT-E-STD', 1)), t76_cust()) $q$, 'UNAVAILABLE');
+SELECT t_err('T76b11 a web-disabled variant cannot be ordered', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('ELB-A-BEJ-M', 1)), t76_cust()) $q$, 'UNAVAILABLE');
+SELECT t_err('T76b12 a sold-out product is refused with the available count', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('FLR-D-STD', 1)), t76_cust()) $q$, 'INSUFFICIENT');
+SELECT t_err('T76b13 a POS hold is respected (A black S: 5 on hand, 4 held → 2 requested refused)', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(t76_line('ELB-A-SYH-S', 2)), t76_cust()) $q$, 'INSUFFICIENT');
+SELECT t_err('T76b14 another tenant''s variant is unknown here', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(0), jsonb_build_array(jsonb_build_object('variant_id', t_get('v62a'), 'quantity', 1)), t76_cust()) $q$, 'UNAVAILABLE');
+SELECT t_check('T76b15 nothing was created by any refused checkout',
+  t76_q($q$ (SELECT count(*) FROM storefront_orders WHERE business_id = t_get('bizS')) = 0 AND (SELECT count(*) FROM reservations WHERE business_id = t_get('bizS') AND source = 'online') = 0 $q$));
+
+-- ---------------- successful checkout: browser price ignored, totals server-side, hold created ----------------
+CREATE TEMP TABLE _t76_o1 AS SELECT rpc_shop_create_order('zz-store', t76_key(1),
+  jsonb_build_array(t76_line('ELB-A-SYH-M', 1) || '{"unit_price": 1, "price": 1}'::jsonb, t76_line('TRK-B-STD', 2) || '{"unit_price": 1}'::jsonb), t76_cust()) AS r;
+GRANT SELECT ON _t76_o1 TO authenticated, anon;
+SELECT t_check('T76c the order request is created: WEB number, 64-hex token, pending, total 2800 (1200 + 2×800) — the browser''s 1 ignored',
+  (SELECT r ->> 'order_number' = 'WEB-' || (SELECT yr FROM _t76)::text || '-000001' AND r ->> 'tracking_token' ~ '^[0-9a-f]{64}$' AND r ->> 'status' = 'pending_confirmation'
+          AND (r ->> 'total')::numeric = 2800 AND r ->> 'currency' = 'TRY' AND NOT (r ->> 'replayed')::boolean
+          AND (r ->> 'reservation_expires_at')::timestamptz BETWEEN now() + interval '1439 minutes' AND now() + interval '1441 minutes' FROM _t76_o1));
+SELECT t_check('T76c2 items snapshot: names, labels, prices; the hold is an ordinary reservation (guest name, online, no customer) with the RV number',
+  t76_q($q$ (SELECT count(*) = 2 AND sum(line_total) = 2800 AND bool_or(variant_labels = 'Siyah / M') AND bool_or(product_name = 'Keten Elbise — Yaz') FROM storefront_order_items WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'))
+            AND (SELECT status = 'active' AND customer_id IS NULL AND hold_name = 'Misafir Müşteri' AND source = 'online' AND reservation_number LIKE 'RV-%' AND created_by IS NULL
+                 FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'))
+            AND (SELECT count(*) FROM reservation_items ri JOIN reservations r ON r.id = ri.reservation_id WHERE r.storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) = 2 $q$));
+SELECT t_check('T76c3 availability drops (A black M 2→1, B 10→8); on_hand, movements and CRM untouched',
+  (SELECT (r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'available')::int = 1 AND (r -> (t75_vid('TRK-B-STD')::text) ->> 'available')::int = 8 FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M'), t75_vid('TRK-B-STD')]) r)
+  AND t76_q($q$ fn_bucket_qty(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-SYH-M'), 'sellable') = 2 AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) = (SELECT mov FROM _t76)
+            AND (SELECT count(*) FROM customers WHERE business_id = t_get('bizS')) = (SELECT cust FROM _t76) $q$));
+SELECT t_check('T76c4 phone kept as typed and normalised; e-mail lowercased; the created event is by the customer',
+  t76_q($q$ SELECT phone = '0532 111 22 33' AND phone_normalized = '905321112233' AND email = 'guest@example.com' FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') $q$)
+  AND t76_q($q$ (SELECT count(*) FROM storefront_order_events WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') AND event = 'created' AND actor_type = 'customer') = 1 $q$));
+SELECT t_check('T76c5 the same key replays the same order and token; no second order or hold',
+  (SELECT (r ->> 'replayed')::boolean AND r ->> 'order_number' = (SELECT r ->> 'order_number' FROM _t76_o1) AND r ->> 'tracking_token' = (SELECT r ->> 'tracking_token' FROM _t76_o1)
+   FROM rpc_shop_create_order('zz-store', t76_key(1), jsonb_build_array(t76_line('TRK-B-STD', 9)), t76_cust('Baska Biri')) r)
+  AND t76_q($q$ (SELECT count(*) FROM storefront_orders WHERE business_id = t_get('bizS')) = 1 $q$));
+CREATE TEMP TABLE _t76_o2 AS SELECT rpc_shop_create_order('zz-store', t76_key(2), jsonb_build_array(t76_line('ELB-A-SYH-M', 1)), t76_cust('İkinci Müşteri', '+90 533 000 00 02', NULL)) AS r;
+GRANT SELECT ON _t76_o2 TO authenticated, anon;
+SELECT t_check('T76c6 a second customer takes the last A black M (available 1 → 0)',
+  (SELECT r ->> 'order_number' = 'WEB-' || (SELECT yr FROM _t76)::text || '-000002' FROM _t76_o2)
+  AND (SELECT r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'state' = 'sold_out' FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M')]) r),
+  (SELECT r::text FROM _t76_o2) || ' | ' || (SELECT r::text FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M')]) r));
+SELECT t_err('T76c7 a third checkout for the same unit is refused (last unit)', $q$ SELECT rpc_shop_create_order('zz-store', t76_key(3), jsonb_build_array(t76_line('ELB-A-SYH-M', 1)), t76_cust()) $q$, 'INSUFFICIENT');
+SELECT t_check('T76c8 an international phone (+90 533…) is kept and normalised without rewriting',
+  t76_q($q$ SELECT phone = '+90 533 000 00 02' AND phone_normalized = '905330000002' AND email IS NULL FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000002') $q$));
+
+-- ---------------- tracking (anon) ----------------
+SELECT t_check('T76d the customer reads own order by token: number, status, items, pickup branch, expiry, can_cancel; no internals',
+  (SELECT r ->> 'order_number' LIKE 'WEB-%' AND r ->> 'status' = 'pending_confirmation' AND jsonb_array_length(r -> 'items') = 2 AND r -> 'pickup' ->> 'branch' = 'Merkez'
+          AND (r ->> 'can_cancel')::boolean AND (r ->> 'reservation_active')::boolean AND r -> 'items' -> 0 ? 'labels'
+          AND NOT (r ? 'id') AND NOT (r ? 'business_id') AND NOT (r ? 'branch_id') AND NOT (r ? 'actors') AND NOT (r ? 'events') AND NOT (r ? 'items_live')
+   FROM rpc_shop_order('zz-store', (SELECT r ->> 'tracking_token' FROM _t76_o1)) r));
+SELECT t_check('T76d2 a wrong token, the order number, or the token on another store yields nothing',
+  rpc_shop_order('zz-store', repeat('0', 64)) IS NULL AND rpc_shop_order('zz-store', 'WEB-2026-000001') IS NULL AND rpc_shop_order('nope', (SELECT r ->> 'tracking_token' FROM _t76_o1)) IS NULL);
+SELECT t_err('T76d3 anon cannot read the order table', $q$ SELECT count(*) FROM storefront_orders $q$, '42501');
+SELECT t_err('T76d4 nor the items', $q$ SELECT count(*) FROM storefront_order_items $q$, '42501');
+SELECT t_err('T76d5 nor list orders', $q$ SELECT rpc_online_orders(t_get('bizS')) $q$, '42501');
+SELECT t_err('T76d6 nor confirm', $q$ SELECT rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, '42501');
+SELECT t_err('T76d7 nor mark ready', $q$ SELECT rpc_online_order_ready(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, '42501');
+SELECT t_err('T76d8 nor create a sale', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), gen_random_uuid(), '[]'::jsonb, gen_random_uuid()) $q$, '42501');
+SELECT t_err('T76d9 nor touch reservations directly', $q$ UPDATE reservations SET expires_at = now() + interval '30 days' WHERE source = 'online' $q$, '42501');
+SELECT t_err('T76d10 nor insert an order', $q$ INSERT INTO storefront_orders (business_id, storefront_id, branch_id, order_number, customer_name, phone, phone_normalized, currency, subtotal, total, item_count, tracking_token_hash, idempotency_key_hash) VALUES (t_get('bizS'), gen_random_uuid(), t_get('brS'), 'X', 'x y', '05321112233', '905321112233', 'TRY', 0, 0, 1, repeat('a', 64), repeat('b', 64)) $q$, '42501');
+RESET ROLE;
+
+-- ---------------- merchant: who sees what ----------------
+SELECT t_login('a9');
+SELECT t_err('T76e stock_staff has no order access (PII)', $q$ SELECT rpc_online_orders(t_get('bizS')) $q$, 'FORBIDDEN');
+SELECT t_err('T76e2 nor detail', $q$ SELECT rpc_online_order_detail(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, 'FORBIDDEN');
+SELECT t_err('T76e3 nor the POS preload', $q$ SELECT rpc_pos_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_err('T76e4 another tenant''s owner cannot list (business_id injection)', $q$ SELECT rpc_online_orders(t_get('bizS')) $q$, 'FORBIDDEN');
+SELECT t_err('T76e5 nor read a detail', $q$ SELECT rpc_online_order_detail(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, 'FORBIDDEN');
+SELECT t_err('T76e6 nor preload it in POS', $q$ SELECT rpc_pos_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, 'NOT_FOUND');
+SELECT t_err('T76e7 nor convert it', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), gen_random_uuid(), '[]'::jsonb, gen_random_uuid()) $q$, 'NOT_FOUND');
+SELECT t_logout();
+SELECT t_login('a12');
+SELECT t_check('T76f the owner lists 2 new orders with counts; search by phone digits works; detail carries PII, live items, hold, events',
+  (SELECT (r ->> 'total')::int = 2 AND (r -> 'counts' ->> 'new')::int = 2 AND r -> 'rows' -> 0 ->> 'phone' IS NOT NULL FROM rpc_online_orders(t_get('bizS'), 'new') r)
+  AND (SELECT (r ->> 'total')::int = 1 FROM rpc_online_orders(t_get('bizS'), NULL, '0533 000') r)
+  AND (SELECT r ->> 'customer_name' = 'Misafir Müşteri' AND jsonb_array_length(r -> 'items_live') = 2 AND (r -> 'reservation' ->> 'active')::boolean AND jsonb_array_length(r -> 'events') = 1 AND r ->> 'note' = 'Öğleden sonra alırım'
+       FROM rpc_online_order_detail(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) r));
+SELECT t_err('T76f2 the owner cannot inject another business id', $q$ SELECT rpc_online_orders(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_err('T76f3 the status filter is validated', $q$ SELECT rpc_online_orders(t_get('bizS'), 'paid') $q$, 'INVALID_STATUS');
+SELECT t_err('T76f4 ready needs confirmation first', $q$ SELECT rpc_online_order_ready(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$, 'INVALID_STATE');
+SELECT t_err('T76f5 POS conversion needs confirmation first', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), gen_random_uuid(), '[]'::jsonb, gen_random_uuid()) $q$, 'INVALID_STATE');
+SELECT t_check('T76f6 confirm: confirmed_at/by, hold refreshed to a full hold window, event; replay',
+  (SELECT r ->> 'status' = 'confirmed' AND NOT (r ->> 'replayed')::boolean FROM rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) r)
+  AND t76_q($q$ (SELECT status = 'confirmed' AND confirmed_at IS NOT NULL AND confirmed_by = t_get('a12') FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'))
+                AND (SELECT expires_at BETWEEN now() + interval '1439 minutes' AND now() + interval '1441 minutes' FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$)
+  AND (SELECT (r ->> 'replayed')::boolean FROM rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) r));
+SELECT t_logout();
+SET ROLE anon;
+SELECT t_check('T76f7 the customer sees confirmed and may no longer cancel',
+  (SELECT r ->> 'status' = 'confirmed' AND NOT (r ->> 'can_cancel')::boolean FROM rpc_shop_order('zz-store', (SELECT r ->> 'tracking_token' FROM _t76_o1)) r));
+SELECT t_err('T76f8 customer cancellation after confirmation is refused', $q$ SELECT rpc_shop_cancel_order('zz-store', (SELECT r ->> 'tracking_token' FROM _t76_o1), 'vazgectim') $q$, 'CANCEL_NOT_ALLOWED');
+RESET ROLE;
+SELECT t_login('a11');
+SELECT t_check('T76f9 the manager marks it ready (operational) and the customer timeline shows it',
+  (SELECT r ->> 'status' = 'ready' FROM rpc_online_order_ready(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) r)
+  AND t76_q($q$ (SELECT status = 'ready' AND ready_by = t_get('a11') FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) $q$));
+SELECT t_err('T76f10 a manager cannot cancel without a reason', $q$ SELECT rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000002'), ' ') $q$, 'REASON_REQUIRED');
+SELECT t_logout();
+
+-- ---------------- customer cancellation of the second (pending) order ----------------
+SET ROLE anon;
+CREATE TEMP TABLE _t76_o2tok AS SELECT r ->> 'tracking_token' AS tok FROM _t76_o2;
+CREATE TEMP TABLE _t76_c2 AS SELECT rpc_shop_cancel_order('zz-store', (SELECT tok FROM _t76_o2tok), 'başka bir şey buldum') AS r;
+GRANT SELECT ON _t76_c2 TO anon;
+SELECT t_check('T76g the customer cancels the pending order: hold released, availability restored (A black M 0→1), no movement, event by customer; replay',
+  (SELECT r ->> 'status' = 'cancelled' AND NOT (r ->> 'replayed')::boolean FROM _t76_c2)
+  AND (SELECT (r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'available')::int = 1 FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M')]) r)
+  AND t76_q($q$ (SELECT status = 'cancelled' AND cancelled_by_customer AND cancel_reason = 'başka bir şey buldum' FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000002'))
+                AND (SELECT status = 'cancelled' FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000002'))
+                AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) = (SELECT mov FROM _t76) $q$)
+  AND (SELECT (r ->> 'replayed')::boolean FROM rpc_shop_cancel_order('zz-store', (SELECT tok FROM _t76_o2tok)) r),
+  t76_txt($q$ SELECT (SELECT status::text || '/' || cancelled_by_customer::text || '/' || COALESCE(cancel_reason, 'null') FROM storefront_orders WHERE order_number LIKE 'WEB-%000002') || ' res=' || (SELECT string_agg(status::text, ',') FROM reservations WHERE storefront_order_id = (SELECT id FROM storefront_orders WHERE order_number LIKE 'WEB-%000002')) || ' avail=' || fn_shop_available(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-SYH-M'))::text $q$));
+SELECT t_check('T76g2 the tracking page of the cancelled order says cancelled by the customer', (SELECT r ->> 'status' = 'cancelled' AND (r ->> 'cancelled_by_customer')::boolean FROM rpc_shop_order('zz-store', (SELECT tok FROM _t76_o2tok)) r));
+RESET ROLE;
+
+-- ---------------- merchant cancellation + expiry + re-reserve ----------------
+SET ROLE anon;
+SELECT rpc_shop_create_order('zz-store', t76_key(4), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust('Üçüncü', '0555 000 00 03', NULL)) ->> 'order_number' AS o3;
+SELECT rpc_shop_create_order('zz-store', t76_key(5), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust('Dördüncü', '0555 000 00 04', NULL)) ->> 'order_number' AS o4;
+RESET ROLE;
+SELECT t_login('a12');
+SELECT t_check('T76h the owner cancels order 3 with a reason: hold released, event carries the reason, replay',
+  (SELECT r ->> 'status' = 'cancelled' FROM rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003'), 'müşteri aradı, vazgeçti') r)
+  AND t76_q($q$ (SELECT status = 'cancelled' AND cancelled_by = t_get('a12') AND NOT cancelled_by_customer FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003'))
+                AND (SELECT status = 'cancelled' AND cancelled_by = t_get('a12') FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003')) $q$)
+  AND (SELECT (r ->> 'replayed')::boolean FROM rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003'), 'tekrar') r));
+SELECT t_logout();
+-- fixture: order 4's hold lapses (the reservation guard allows expires_at to move while active)
+UPDATE reservations SET expires_at = now() - interval '1 minute' WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004');
+SET ROLE anon;
+SELECT t_check('T76h2 a lapsed hold reads as expired to the customer before any sweep, and no longer reduces availability (B 10 − 2 held by order 1 = 8)',
+  (SELECT r ->> 'status' = 'expired' AND NOT (r ->> 'reservation_active')::boolean FROM rpc_shop_order('zz-store', t76_txt($q$ SELECT encode(sha256(convert_to('token:' || t76_key(5) || ':' || (SELECT id::text FROM storefronts WHERE slug = 'zz-store'), 'UTF8')), 'hex') $q$)) r)
+  AND (SELECT (r -> (t75_vid('TRK-B-STD')::text) ->> 'available')::int = 8 FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('TRK-B-STD')]) r));
+RESET ROLE;
+SELECT t_login('a12');
+SELECT t_err('T76h3 confirming a lapsed order is refused', $q$ SELECT rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) $q$, 'RESERVATION_EXPIRED');
+SELECT t_check('T76h4 the list shows it as expired (derived) and the sweep materialises exactly it; a second sweep does nothing',
+  (SELECT r -> 'rows' -> 0 ->> 'public_status' = 'expired' FROM rpc_online_orders(t_get('bizS'), NULL, 'Dördüncü') r)
+  AND (SELECT (r ->> 'expired')::int = 1 FROM rpc_online_orders_sweep(t_get('bizS')) r)
+  AND t76_q($q$ (SELECT status = 'expired' AND expired_at IS NOT NULL FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'))
+                AND (SELECT status = 'expired' FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) $q$)
+  AND (SELECT (r ->> 'expired')::int = 0 FROM rpc_online_orders_sweep(t_get('bizS')) r),
+  (SELECT r::text FROM rpc_online_orders(t_get('bizS'), NULL, 'Dördüncü') r) || ' | ' || t76_txt($q$ SELECT string_agg(o.order_number || ':' || o.status::text, ',') FROM storefront_orders o WHERE o.business_id = t_get('bizS') $q$));
+SELECT t_check('T76h5 re-reserve reopens the expired order with a fresh hold (stock re-checked), then it can be confirmed',
+  (SELECT r ->> 'status' = 'pending_confirmation' FROM rpc_online_order_rereserve(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) r)
+  AND t76_q($q$ (SELECT count(*) FROM reservations WHERE hold_name = 'Dördüncü') = 2 AND (SELECT r.status = 'active' AND r.expires_at > now() FROM fn_online_order_reservation(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) r)
+                AND (SELECT count(*) FROM storefront_order_events WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004') AND event = 'rereserved') = 1 $q$)
+  AND (SELECT r ->> 'status' = 'confirmed' FROM rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) r));
+SELECT t_err('T76h6 re-reserving a live hold is refused', $q$ SELECT rpc_online_order_rereserve(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) $q$, 'HOLD_ACTIVE');
+SELECT t_logout();
+-- guards even for the superuser
+SELECT t_err('T76h7 a cancelled order never moves', $q$ UPDATE storefront_orders SET status = 'confirmed' WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003') $q$, 'ORDER_FINAL');
+SELECT t_err('T76h8 orders are never deleted', $q$ DELETE FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003') $q$, 'ORDER_RETAINED');
+SELECT t_err('T76h9 items are frozen', $q$ UPDATE storefront_order_items SET unit_price = 1 WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') $q$, 'ORDER_ROW_FROZEN');
+SELECT t_err('T76h10 the snapshot is locked', $q$ UPDATE storefront_orders SET total = 1, subtotal = 1 WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') $q$, 'ORDER_SNAPSHOT_LOCKED');
+SELECT t_err('T76h11 a sale can only be bound by the POS conversion', $q$ UPDATE storefront_orders SET converted_sale_id = (SELECT id FROM sales LIMIT 1) WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') $q$, 'ORDER_SALE_ONLY_BY_POS');
+
+-- ---------------- POS conversion (the one real sale) ----------------
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('bizS'), t_get('brS'), 'ZZ Kasa') RETURNING id) SELECT t_set('regS', id) FROM x;
+-- price rule fixture: B's list price rises to 900 (order holds 800 → honoured 800); A's list falls to 1000 (order 1200 → charged 1000)
+UPDATE products SET default_sale_price = 900 WHERE id = t75_pid('TRK-B');
+UPDATE products SET default_sale_price = 1000 WHERE id = t75_pid('ELB-A');
+SELECT t_login('a12');
+SELECT t_set('sessS', rpc_open_register_session(t_get('regS'), '[{"currency":"TRY","amount":0}]'::jsonb));
+SELECT t_check('T76i the POS preload carries the verified lines with the honoured price (B 800 of 900, A 1000 of 1200)',
+  (SELECT r ->> 'order_number' LIKE 'WEB-%' AND (r ->> 'reservation_active')::boolean AND jsonb_array_length(r -> 'lines') = 2
+          AND (SELECT (l ->> 'unit_price')::numeric = 800 AND (l ->> 'list_price')::numeric = 900 FROM jsonb_array_elements(r -> 'lines') l WHERE l ->> 'sku' = 'TRK-B-STD')
+          AND (SELECT (l ->> 'unit_price')::numeric = 1000 AND (l ->> 'order_price')::numeric = 1200 FROM jsonb_array_elements(r -> 'lines') l WHERE l ->> 'sku' = 'ELB-A-SYH-M')
+   FROM rpc_pos_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001')) r));
+SELECT t_err('T76i2 conversion needs a real session', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), gen_random_uuid(), '[{"method":"cash","currency":"TRY","amount":2600}]'::jsonb, gen_random_uuid()) $q$, 'INVALID_REGISTER_SESSION');
+SELECT t_err('T76i3 conversion needs the client transaction id', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":2600}]'::jsonb, NULL) $q$, 'CLIENT_TRANSACTION_REQUIRED');
+SELECT t_err('T76i4 the existing payment rule applies (short payment)', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":100}]'::jsonb, gen_random_uuid()) $q$, 'PAYMENT_SHORT');
+SELECT t_set('ctidS', gen_random_uuid());
+CREATE TEMP TABLE _t76_sale AS SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":2600}]'::jsonb, t_get('ctidS'), t_get('a12'), NULL) AS r;
+SELECT t_check('T76i5 one real sale through the sale core: total 2600 (1000 + 2×800), not replayed, order number attached',
+  (SELECT (r ->> 'total')::numeric = 2600 AND NOT (r ->> 'replayed')::boolean AND r ->> 'order_number' LIKE 'WEB-%' AND r ->> 'sale_number' LIKE 'S-%' FROM _t76_sale));
+SELECT t_check('T76i6 the order is completed and bound to that sale; the hold is converted and linked; events converted + completed',
+  t76_q($q$ (SELECT o.status = 'completed' AND o.completed_at IS NOT NULL AND o.converted_sale_id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale) FROM storefront_orders o WHERE o.id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'))
+            AND (SELECT status = 'converted' AND converted_to_sale_id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale) AND fulfilled_at IS NOT NULL FROM reservations WHERE storefront_order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'))
+            AND (SELECT count(*) FROM storefront_order_events WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001') AND event IN ('converted','completed')) = 2 $q$));
+SELECT t_check('T76i7 exactly one sale, one movement per line, COGS from the historical pool, on_hand decremented once (A black M 2→1, B 10→8)',
+  t76_q($q$ (SELECT count(*) FROM sales WHERE business_id = t_get('bizS')) = (SELECT sales FROM _t76) + 1
+            AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) = (SELECT mov FROM _t76) + 2
+            AND (SELECT count(*) FROM sale_items si JOIN sale_item_costs c ON c.sale_item_id = si.id WHERE si.sale_id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale) AND c.unit_cost_at_sale > 0) = 2
+            AND fn_bucket_qty(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-SYH-M'), 'sellable') = 1 AND fn_bucket_qty(t_get('bizS'), t_get('brS'), t75_vid('TRK-B-STD'), 'sellable') = 8
+            AND (SELECT count(*) FROM sale_items WHERE sale_id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale) AND unit_price_at_sale = 800) = 1
+            AND (SELECT count(*) FROM sale_items WHERE sale_id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale) AND unit_price_at_sale = 1000) = 1 $q$));
+SELECT t_check('T76i8 a retry with the same client transaction id replays the sale; a new id on the completed order replays too — never a second sale',
+  (SELECT (r ->> 'replayed')::boolean AND r ->> 'sale_id' = (SELECT r ->> 'sale_id' FROM _t76_sale) FROM rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":2600}]'::jsonb, t_get('ctidS')) r)
+  AND (SELECT (r ->> 'replayed')::boolean AND r ->> 'sale_id' = (SELECT r ->> 'sale_id' FROM _t76_sale) FROM rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":2600}]'::jsonb, gen_random_uuid()) r)
+  AND t76_q($q$ (SELECT count(*) FROM sales WHERE business_id = t_get('bizS')) = (SELECT sales FROM _t76) + 1 $q$));
+SELECT t_check('T76i9 the sale carries the online-order note and the sales report counts only the real sale (net 2600), never the order total',
+  t76_q($q$ (SELECT note LIKE 'Online sipariş WEB-%' FROM sales WHERE id = (SELECT (r ->> 'sale_id')::uuid FROM _t76_sale)) $q$)
+  AND (SELECT (j -> 'current' ->> 'transactions')::int = 1 AND (j -> 'current' ->> 'net_sales')::numeric = 2600
+       FROM (SELECT rpc_report_overview(t_get('bizS'), (now() AT TIME ZONE 'Europe/Istanbul')::date, (now() AT TIME ZONE 'Europe/Istanbul')::date, NULL, (now() AT TIME ZONE 'Europe/Istanbul')::date - 1, (now() AT TIME ZONE 'Europe/Istanbul')::date - 1) AS j) x));
+SELECT t_err('T76i10 a completed order cannot be cancelled', $q$ SELECT rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000001'), 'geç kaldı') $q$, 'INVALID_STATE');
+SELECT t_logout();
+UPDATE products SET default_sale_price = 800 WHERE id = t75_pid('TRK-B');
+UPDATE products SET default_sale_price = 1200 WHERE id = t75_pid('ELB-A');
+SET ROLE anon;
+SELECT t_check('T76i11 the customer sees completed; the sale id is not on the public page',
+  (SELECT r ->> 'status' = 'completed' AND NOT (r ? 'converted_sale') AND NOT (r::text LIKE '%sale_id%') FROM rpc_shop_order('zz-store', (SELECT r ->> 'tracking_token' FROM _t76_o1)) r));
+RESET ROLE;
+-- conversion vs cancel: order 4 is confirmed; a manager cancels it, then a conversion attempt finds no valid state and creates nothing
+SELECT t_login('a9');
+SELECT t_err('T76j stock_staff cannot cancel an order', $q$ SELECT rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'), 'x y z') $q$, 'FORBIDDEN');
+SELECT t_err('T76j2 stock_staff cannot convert', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":800}]'::jsonb, gen_random_uuid()) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('a12');
+SELECT t_ok('T76j3 the owner cancels the confirmed order 4', $q$ SELECT rpc_online_order_cancel(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'), 'müşteri gelmedi') $q$);
+SELECT t_err('T76j4 converting the cancelled order creates nothing', $q$ SELECT rpc_pos_complete_online_order(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'), t_get('sessS'), '[{"method":"cash","currency":"TRY","amount":800}]'::jsonb, gen_random_uuid()) $q$, 'INVALID_STATE');
+SELECT t_check('T76j5 still exactly one sale for the tenant; the hold of order 4 is cancelled and B is back to 8 available (10 − 2 sold)',
+  t76_q($q$ (SELECT count(*) FROM sales WHERE business_id = t_get('bizS')) = (SELECT sales FROM _t76) + 1 AND (SELECT r.status = 'cancelled' FROM fn_online_order_reservation(t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) r)
+            AND fn_shop_available(t_get('bizS'), t_get('brS'), t75_vid('TRK-B-STD')) = 8 $q$));
+SELECT t_logout();
+SELECT t_check('T76k TLC: no online order, no online hold, no sale from any of this',
+  (SELECT count(*) FROM storefront_orders WHERE business_id = t_get('biz')) = 0 AND (SELECT count(*) FROM reservations WHERE business_id = t_get('biz') AND source = 'online') = 0);
 
 -- ============================================================
 -- SUMMARY

@@ -90,6 +90,24 @@ export function StorefrontSettingsForm({ settings, branches, siteOrigin }: { set
           <Input id="sf-low" name="low_stock_threshold" type="number" min={1} max={50} defaultValue={settings?.low_stock_threshold ?? 3} />
         </div>
       </div>
+      <div className="space-y-3 border-t border-border pt-4 sm:col-span-2">
+        <p className="text-sm font-medium text-text-primary">Online sipariş</p>
+        <label className="flex items-center gap-2 text-sm text-text-primary">
+          <input type="checkbox" name="orders_enabled" defaultChecked={settings?.orders_enabled ?? true} /> Sipariş talebi alınsın
+          <span className="text-xs text-text-muted">— müşteri ad ve telefonla talep bırakır; ürünler ayrılır; ödeme kasada teslim sırasında yapılır.</span>
+        </label>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="sf-hold">Ayırma süresi (dakika)</Label>
+            <Input id="sf-hold" name="order_hold_minutes" type="number" min={30} max={10080} defaultValue={settings?.order_hold_minutes ?? 1440} />
+            <p className="text-2xs text-text-muted">Talepten itibaren ürünler bu kadar süre ayrılır; onay süreyi yeniden başlatır. 1440 = 24 saat.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="sf-pickup">Teslim notu <span className="text-text-muted">(isteğe bağlı)</span></Label>
+            <Input id="sf-pickup" name="pickup_note" defaultValue={settings?.pickup_note ?? ""} maxLength={300} placeholder="ör. Hafta içi 10:00–19:00" />
+          </div>
+        </div>
+      </div>
       <div className="flex items-center gap-3 sm:col-span-2">
         <Button type="submit" size="sm" disabled={pending}>{pending ? "Kaydediliyor…" : "Kaydet"}</Button>
         <Feedback error={state.error} ok={state.ok} okText="Kaydedildi." />

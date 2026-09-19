@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { listMembers, listRegisters, loadPosContext, posItemsFor } from "@/lib/pos/queries";
+import { getPosOnlineOrder, listMembers, listRegisters, loadPosContext, posItemsFor } from "@/lib/pos/queries";
 import { getReservation, listActiveReservationsForBranch } from "@/lib/crm/queries";
-import type { PosReservation } from "@/lib/pos/model";
+import type { PosOnlineOrder, PosReservation } from "@/lib/pos/model";
 import { formatDateTime } from "@/lib/receiving/format";
 import { PosTerminal } from "@/components/pos/pos-terminal";
 import { CreateRegisterForm, OpenSessionForm } from "@/components/pos/session-panel";
@@ -17,9 +17,9 @@ export const metadata = { title: "Kasa · BoutiqueOS" };
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export default async function PosPage({ searchParams }: { searchParams: Promise<{ rezervasyon?: string }> }) {
+export default async function PosPage({ searchParams }: { searchParams: Promise<{ rezervasyon?: string; siparis?: string }> }) {
   // caps (own discount authority) and the branch's registers / members / holds in one round
-  const [{ caps, branchId, tenant }, registers, members, pending, { rezervasyon }] = await Promise.all([
+  const [{ caps, branchId, tenant }, registers, members, pending, { rezervasyon, siparis }] = await Promise.all([
     loadPosContext(), listRegisters(), listMembers(), listActiveReservationsForBranch(10), searchParams,
   ]);
   if (!caps.canSell) redirect("/app");
@@ -41,6 +41,23 @@ export default async function PosPage({ searchParams }: { searchParams: Promise<
         customer: r.customer ? { id: r.customer.id, full_name: r.customer.full_name, phone: r.customer.phone ?? "" } : null,
         lines: r.items.flatMap((i) => { const item = items.find((x) => x.variant_id === i.variant.variant_id); return item ? [{ item, quantity: i.quantity }] : []; }),
       };
+    }
+  }
+
+  // an online order to complete: verified, reserved lines with the server-honoured price; the sale binds to the order
+  let order: PosOnlineOrder | null = null;
+  let orderNotice: string | null = null;
+  if (siparis && UUID.test(siparis)) {
+    const o = await getPosOnlineOrder(siparis);
+    if (!o) orderNotice = "Online sipariş bulunamadı.";
+    else if (o.status !== "confirmed" && o.status !== "ready") orderNotice = o.status === "completed" ? "Bu sipariş zaten teslim edilmiş." : "Bu sipariş kasada tamamlanacak durumda değil (önce onaylayın).";
+    else if (!o.reservation_active) orderNotice = "Siparişin stok ayırma süresi dolmuş; sipariş sayfasından yeniden ayırın.";
+    else if (o.branch_id !== branchId) orderNotice = "Sipariş başka bir şubeden teslim edilecek.";
+    else {
+      const items = await posItemsFor(o.lines.map((l) => l.variant_id));
+      const lines = o.lines.flatMap((l) => { const item = items.find((x) => x.variant_id === l.variant_id); return item ? [{ item, quantity: l.quantity, unit_price: l.unit_price }] : []; });
+      if (lines.length !== o.lines.length) orderNotice = "Siparişteki bir ürün kasada bulunamadı.";
+      else order = { id: o.id, order_number: o.order_number, customer_name: o.customer_name, phone: o.phone, reservation_expires_at: o.reservation_expires_at, lines };
     }
   }
 
@@ -69,7 +86,8 @@ export default async function PosPage({ searchParams }: { searchParams: Promise<
       ) : null}
 
       {reservationNotice ? <p className="border-l-2 border-danger bg-panel px-3 py-2 text-xs text-danger" role="alert">{reservationNotice}</p> : null}
-      {anyOpen ? <PosTerminal key={reservation?.id ?? "free"} registers={registers} members={members} caps={caps} reservation={reservation} /> : null}
+      {orderNotice ? <p className="border-l-2 border-danger bg-panel px-3 py-2 text-xs text-danger" role="alert">{orderNotice}</p> : null}
+      {anyOpen ? <PosTerminal key={order?.id ?? reservation?.id ?? "free"} registers={registers} members={members} caps={caps} reservation={reservation} order={order} /> : null}
 
       {anyOpen && pending.length > 0 && !reservation ? (
         <section className="space-y-2" data-testid="pos-reservations">

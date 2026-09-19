@@ -24,6 +24,9 @@ export type StorefrontSettings = {
   stock_display: StockDisplay;
   low_stock_threshold: number;
   logo_path: string | null;
+  orders_enabled: boolean;
+  order_hold_minutes: number;
+  pickup_note: string | null;
 };
 
 export type AdminProductRow = {

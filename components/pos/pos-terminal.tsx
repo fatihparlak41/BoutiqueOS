@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { ProductThumb } from "@/components/catalog/product-thumb";
 import { Notice } from "@/components/catalog/intake/primitives";
-import { completeSaleAction, lookupBarcodeAction, searchCustomersAction, searchItemsAction } from "@/app/app/pos/actions";
+import { completeOnlineOrderAction, completeSaleAction, lookupBarcodeAction, searchCustomersAction, searchItemsAction } from "@/app/app/pos/actions";
 import {
   PAYMENT_LABELS,
   PAYMENT_METHODS,
@@ -22,6 +22,7 @@ import {
   type PosCustomer,
   type PosItem,
   type PosMember,
+  type PosOnlineOrder,
   type PosReservation,
   type Register,
 } from "@/lib/pos/model";
@@ -45,15 +46,19 @@ const money = (n: number) => formatMoney(n, "TRY");
 type Payment = { id: string; method: PaymentMethod; amount: string };
 type Stage = "items" | "cart" | "pay";
 
-export function PosTerminal({ registers, members, caps, reservation = null }: { registers: Register[]; members: PosMember[]; caps: PosCaps; reservation?: PosReservation | null }) {
+export function PosTerminal({ registers, members, caps, reservation = null, order = null }: { registers: Register[]; members: PosMember[]; caps: PosCaps; reservation?: PosReservation | null; order?: PosOnlineOrder | null }) {
   const router = useRouter();
   const openRegisters = registers.filter((r) => r.open_session);
   const [registerId, setRegisterId] = useState(openRegisters[0]?.id ?? "");
   const register = openRegisters.find((r) => r.id === registerId) ?? openRegisters[0];
   const session = register?.open_session ?? null;
 
-  const [stage, setStage] = useState<Stage>(reservation ? "cart" : "items");
-  const [lines, setLines] = useState<CartLine[]>(() => (reservation ? reservation.lines.map((l) => ({ item: l.item, quantity: l.quantity, unit_price: l.item.price })) : []));
+  // an online order pins everything: its lines, quantities and server-honoured prices; nothing is added or repriced
+  const locked = Boolean(order);
+  const [stage, setStage] = useState<Stage>(reservation || order ? "cart" : "items");
+  const [lines, setLines] = useState<CartLine[]>(() =>
+    order ? order.lines.map((l) => ({ item: l.item, quantity: l.quantity, unit_price: l.unit_price }))
+      : reservation ? reservation.lines.map((l) => ({ item: l.item, quantity: l.quantity, unit_price: l.item.price })) : []);
   const [last, setLast] = useState<PosItem | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
@@ -64,7 +69,7 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
   const [searching, setSearching] = useState(false);
   const [customer, setCustomer] = useState<PosCustomer | null>(reservation?.customer ?? null);
   // a held line cannot go below its held quantity or leave the cart: the sale must cover the hold
-  const heldQty = (variantId: string) => reservation?.lines.find((l) => l.item.variant_id === variantId)?.quantity ?? 0;
+  const heldQty = (variantId: string) => (order?.lines.find((l) => l.item.variant_id === variantId)?.quantity ?? reservation?.lines.find((l) => l.item.variant_id === variantId)?.quantity) ?? 0;
   const [customerTerm, setCustomerTerm] = useState("");
   const [customerResults, setCustomerResults] = useState<PosCustomer[] | null>(null);
   const self = members.find((m) => m.is_self);
@@ -99,6 +104,7 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
   const focusScan = () => window.setTimeout(() => scanRef.current?.focus(), 0);
 
   function addItem(item: PosItem, delta = 1) {
+    if (locked) return;
     setLines((prev) => {
       const i = prev.findIndex((l) => l.item.variant_id === item.variant_id);
       if (i === -1) return [...prev, { item, quantity: Math.max(1, delta), unit_price: item.price }];
@@ -111,14 +117,16 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
     setError(null);
   }
   function setQty(variantId: string, quantity: number) {
+    if (locked) return;
     setLines((prev) => prev.map((l) => (l.item.variant_id === variantId ? { ...l, quantity: Math.max(1, heldQty(variantId), Math.min(9999, quantity)) } : l)));
   }
   function setPrice(variantId: string, raw: string) {
+    if (locked) return;
     const v = parseAmount(raw);
     setLines((prev) => prev.map((l) => (l.item.variant_id === variantId ? { ...l, unit_price: v === null ? l.unit_price : Math.min(l.item.price, v) } : l)));
   }
   function removeLine(variantId: string) {
-    if (heldQty(variantId) > 0) return;
+    if (locked || heldQty(variantId) > 0) return;
     setLines((prev) => prev.filter((l) => l.item.variant_id !== variantId));
   }
   function undoLast() {
@@ -185,7 +193,16 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
     setSubmitting(true);
     setError(null);
     start(async () => {
-      const res = await completeSaleAction({
+      const res = order
+        ? await completeOnlineOrderAction({
+            order_id: order.id,
+            register_session_id: session.id,
+            client_transaction_id: ctid,
+            payments: payments.map((p) => ({ method: p.method, amount: parseAmount(p.amount) ?? 0 })).filter((p) => p.amount > 0),
+            salesperson_id: salespersonId || null,
+            note: note || null,
+          })
+        : await completeSaleAction({
         register_session_id: session.id,
         client_transaction_id: ctid,
         lines: lines.map((l) => ({ variant_id: l.item.variant_id, quantity: l.quantity, unit_price: l.unit_price, expected_list_price: l.item.price })),
@@ -338,7 +355,7 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
                       <Plus className="h-4 w-4" />
                     </button>
                   </div>
-                  {caps.canDiscount ? (
+                  {caps.canDiscount && !locked ? (
                     <label className="flex items-center gap-1 text-2xs text-muted">
                       Birim
                       <input
@@ -463,6 +480,12 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
   return (
     <div className="space-y-4">
       <SessionBar register={register} registers={registers} selectedId={register.id} onSelect={setRegisterId} caps={caps} />
+      {order ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border border-accent/30 bg-accent-muted/60 px-3 py-2 text-xs" data-testid="pos-order-banner">
+          <span>Online Sipariş <strong data-numeric>{order.order_number}</strong> · {order.customer_name} · <span data-numeric>{order.phone}</span>. Ürünler ve fiyatlar siparişten gelir ve değiştirilemez; satış tamamlanınca sipariş teslim edildi olur.</span>
+          <a href={`/app/online-siparisler/${order.id}`} className="underline-offset-2 hover:underline">Siparişe dön</a>
+        </div>
+      ) : null}
       {reservation ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border border-success/30 bg-success-muted/40 px-3 py-2 text-xs" data-testid="pos-reservation-banner">
           <span>Rezervasyon <strong data-numeric>{reservation.reservation_number}</strong> teslim ediliyor{reservation.customer ? ` · ${reservation.customer.full_name}` : ""}. Ayrılan ürünler sepette; satış tamamlanınca rezervasyon kapanır.</span>
@@ -472,7 +495,7 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
 
       {/* desktop / tablet */}
       <div className="hidden gap-6 lg:grid lg:grid-cols-[1fr_1.15fr_1fr]">
-        <div>{findPanel}</div>
+        <div>{locked ? <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">Online sipariş teslimi: sepete ürün eklenemez.</p> : findPanel}</div>
         <div>{cartPanel}</div>
         <div>{payPanel}</div>
       </div>
@@ -493,7 +516,7 @@ export function PosTerminal({ registers, members, caps, reservation = null }: { 
           ))}
         </div>
         <div className="pb-24">
-          {stage === "items" ? findPanel : stage === "cart" ? cartPanel : payPanel}
+          {stage === "items" ? (locked ? cartPanel : findPanel) : stage === "cart" ? cartPanel : payPanel}
         </div>
         {stage !== "pay" ? (
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface px-4 py-3">

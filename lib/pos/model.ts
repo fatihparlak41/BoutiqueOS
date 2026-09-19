@@ -61,6 +61,29 @@ export type SalePayload = {
   reservation_id: string | null;
 };
 
+/**
+ * An online order handed to the terminal (Phase 14B): lines are pre-loaded, pinned and priced
+ * by the server (LEAST(order price, current list)); nothing can be added, removed or repriced.
+ * The sale is created by rpc_pos_complete_online_order, which binds it to the order.
+ */
+export type PosOnlineOrder = {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  phone: string;
+  reservation_expires_at: string | null;
+  lines: Array<{ item: PosItem; quantity: number; unit_price: number }>;
+};
+
+export type OnlineOrderSalePayload = {
+  order_id: string;
+  register_session_id: string;
+  client_transaction_id: string;
+  payments: Array<{ method: PaymentMethod; amount: number }>;
+  salesperson_id: string | null;
+  note: string | null;
+};
+
 /** A reservation handed to the terminal: its lines are pre-loaded and pinned, its customer is the sale's customer. */
 export type PosReservation = {
   id: string;

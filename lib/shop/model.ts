@@ -26,6 +26,10 @@ export type Store = {
   stock_display: StockDisplay;
   low_stock_threshold: number;
   currency: string;
+  orders_enabled: boolean;
+  order_hold_minutes: number;
+  pickup_note: string | null;
+  pickup_branch: string | null;
   categories: ShopCategory[];
   published_count: number;
 };
@@ -151,3 +155,90 @@ export function cartCount(cart: Cart): number {
 export function cartTotal(cart: Cart): number {
   return cart.lines.reduce((n, l) => n + l.quantity * l.unit_price, 0);
 }
+
+// ---------------------------------------------------------------- guest order (Phase 14B)
+
+export type OnlineOrderStatus = "pending_confirmation" | "confirmed" | "ready" | "completed" | "cancelled" | "expired";
+
+export const ORDER_STATUS_LABELS: Record<OnlineOrderStatus, string> = {
+  pending_confirmation: "Onay bekliyor",
+  confirmed: "Onaylandı",
+  ready: "Teslime hazır",
+  completed: "Teslim edildi",
+  cancelled: "İptal edildi",
+  expired: "Süresi doldu",
+};
+
+/** What the customer sees on the tracking page (rpc_shop_order). Order-safe: no internal ids. */
+export type PublicOrder = {
+  order_number: string;
+  status: OnlineOrderStatus;
+  stored_status: OnlineOrderStatus;
+  fulfillment_method: "store_pickup" | "local_delivery" | "shipping";
+  customer_name: string;
+  phone: string;
+  email: string | null;
+  note: string | null;
+  currency: string;
+  subtotal: number;
+  discount_total: number;
+  total: number;
+  item_count: number;
+  reservation_expires_at: string | null;
+  reservation_active: boolean | null;
+  created_at: string;
+  confirmed_at: string | null;
+  ready_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  expired_at: string | null;
+  cancelled_by_customer: boolean;
+  can_cancel: boolean;
+  pickup: { branch: string; note: string | null; store_name: string; whatsapp: string | null; instagram: string | null; phone: string | null } | null;
+  items: Array<{ product_slug: string; name: string; labels: string; image_path: string | null; quantity: number; unit_price: number; line_total: number }>;
+  timeline: Array<{ event: string; at: string }>;
+};
+
+export type CheckoutResult = { order_number: string; tracking_token: string; status: OnlineOrderStatus; total: number; currency: string; reservation_expires_at: string | null; replayed: boolean };
+
+/** A problem the server found with a cart line at checkout (CART_PROBLEMS). */
+export type CartProblem = { variant_id: string; code: "UNAVAILABLE" | "INSUFFICIENT"; available?: number; name?: string; labels?: string };
+
+export function checkoutKeyStorage(slug: string): string {
+  return `bos_checkout:${slug}`;
+}
+export function ordersStorage(slug: string): string {
+  return `bos_orders:${slug}`;
+}
+
+/** The browser's high-entropy idempotency key for one checkout attempt of one store (kept until the order exists). */
+export function getOrCreateCheckoutKey(slug: string): string {
+  try {
+    const existing = window.localStorage.getItem(checkoutKeyStorage(slug));
+    if (existing && /^[0-9a-f]{64}$/.test(existing)) return existing;
+  } catch { /* no storage */ }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const key = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  try { window.localStorage.setItem(checkoutKeyStorage(slug), key); } catch { /* no storage */ }
+  return key;
+}
+
+export function clearCheckoutKey(slug: string): void {
+  try { window.localStorage.removeItem(checkoutKeyStorage(slug)); } catch { /* no storage */ }
+}
+
+/** Remembers this browser's order tokens so the customer can find their orders again. */
+export function rememberOrder(slug: string, orderNumber: string, token: string): void {
+  try {
+    const raw = window.localStorage.getItem(ordersStorage(slug));
+    const list: Array<{ order_number: string; token: string; at: string }> = raw ? JSON.parse(raw) : [];
+    if (!list.some((o) => o.token === token)) list.unshift({ order_number: orderNumber, token, at: new Date().toISOString() });
+    window.localStorage.setItem(ordersStorage(slug), JSON.stringify(list.slice(0, 10)));
+  } catch { /* no storage */ }
+}
+
+export function orderStatusText(status: OnlineOrderStatus): string {
+  return ORDER_STATUS_LABELS[status];
+}
+

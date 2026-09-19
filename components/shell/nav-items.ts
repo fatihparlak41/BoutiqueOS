@@ -13,6 +13,7 @@ import {
   Lightbulb,
   Settings,
   Globe,
+  ShoppingBag,
   type LucideIcon,
 } from "lucide-react";
 
@@ -48,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "İade / Değişim", icon: Undo2, href: "/app/pos/iade" },
       { label: "Müşteriler", icon: Users, href: "/app/musteriler" },
       { label: "Rezervasyonlar", icon: BookmarkCheck, href: "/app/rezervasyonlar" },
+      { label: "Online Siparişler", icon: ShoppingBag, href: "/app/online-siparisler" },
     ],
   },
   {

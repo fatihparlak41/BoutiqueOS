@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { loadPosContext, lookupBarcode, searchCustomers, searchItems } from "@/lib/pos/queries";
-import { PAYMENT_METHODS, type PosCustomer, type PosItem, type SalePayload, type SaleResult } from "@/lib/pos/model";
+import { PAYMENT_METHODS, type OnlineOrderSalePayload, type PosCustomer, type PosItem, type SalePayload, type SaleResult } from "@/lib/pos/model";
 import { reportDbError } from "@/lib/db-errors";
 import type { ActionState } from "@/lib/catalog/action-state";
 import type { Result } from "@/lib/catalog/intake";
@@ -178,3 +178,48 @@ export async function completeSaleAction(payload: SalePayload): Promise<Result<S
     },
   };
 }
+
+/**
+ * Completes an online order at the POS. The terminal sends only the session, payments,
+ * salesperson and note: items, quantities and prices come from the order on the server,
+ * and rpc_pos_complete_online_order runs the ordinary sale core (session, payments, stock,
+ * COGS, reservation fulfilment) and binds the sale to the order in the same transaction.
+ * A retry with the same client_transaction_id — or on a completed order — replays.
+ */
+export async function completeOnlineOrderAction(payload: OnlineOrderSalePayload): Promise<Result<SaleResult>> {
+  const { supabase, caps } = await loadPosContext();
+  if (!caps.canSell) return { ok: false, error: NO_PERMISSION };
+  if (!payload || !UUID.test(payload.order_id) || !UUID.test(payload.register_session_id) || !UUID.test(payload.client_transaction_id)) {
+    return { ok: false, error: "Sipariş bilgisi eksik. Sayfayı yenileyin." };
+  }
+  if (!Array.isArray(payload.payments) || payload.payments.length === 0) return { ok: false, error: "Ödeme girilmedi." };
+  for (const p of payload.payments) {
+    if (!PAYMENT_METHODS.includes(p.method) || !Number.isFinite(p.amount) || p.amount <= 0) return { ok: false, error: "Ödeme satırı geçersiz." };
+  }
+  const salespersonId = payload.salesperson_id && UUID.test(payload.salesperson_id) ? payload.salesperson_id : null;
+  const { data, error } = await supabase.rpc("rpc_pos_complete_online_order", {
+    p_order_id: payload.order_id,
+    p_register_session_id: payload.register_session_id,
+    p_payments: payload.payments.map((p) => ({ method: p.method, currency: "TRY", amount: Math.round(p.amount * 100) / 100 })),
+    p_client_transaction_id: payload.client_transaction_id,
+    p_salesperson_id: salespersonId,
+    p_note: payload.note?.trim().slice(0, 300) || null,
+  });
+  if (error) return { ok: false, error: reportDbError("completeOnlineOrder", error) };
+  const r = (data ?? {}) as Record<string, unknown>;
+  revalidatePath("/app/pos");
+  revalidatePath("/app/stok");
+  revalidatePath("/app/rezervasyonlar");
+  revalidatePath("/app/online-siparisler", "layout");
+  return {
+    ok: true,
+    data: {
+      sale_id: String(r.sale_id),
+      sale_number: String(r.sale_number),
+      total: Number(r.total),
+      change_given: Number(r.change_given ?? 0),
+      replayed: Boolean(r.replayed),
+    },
+  };
+}
+

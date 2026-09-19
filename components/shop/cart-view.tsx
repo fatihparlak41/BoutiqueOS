@@ -111,8 +111,15 @@ export function CartView({ store }: { store: Store }) {
 
       <aside className="shop-summary">
         <div className="shop-row"><span>Ara toplam</span><span className="shop-price">{formatShopPrice(total, store.currency)}</span></div>
-        <p className="shop-note">Online ödeme ve sipariş henüz açık değil. Sepetinizi mağazaya iletin; teslimat ve ödeme mağazayla birlikte kararlaştırılır. Sepet stok ayırmaz.</p>
-        {wa ? <a className="shop-btn" href={wa} target="_blank" rel="noopener noreferrer">WhatsApp ile mağazaya ilet</a> : null}
+        {store.orders_enabled ? (
+          <>
+            <Link href={`/shop/${store.slug}/checkout`} className="shop-btn" aria-disabled={problems.length > 0} onClick={(e) => { if (problems.length > 0) e.preventDefault(); }}>Sipariş Talebi Oluştur</Link>
+            <p className="shop-note">Ad ve telefonla sipariş talebi bırakırsınız; ürünler {store.order_hold_minutes >= 60 ? `${Math.round(store.order_hold_minutes / 60)} saat` : `${store.order_hold_minutes} dakika`} sizin için ayrılır, ödeme mağazada teslim sırasında yapılır. Online ödeme yoktur. Sepet tek başına stok ayırmaz.</p>
+          </>
+        ) : (
+          <p className="shop-note">Online sipariş şu an kapalı. Sepetinizi mağazaya iletin; teslimat ve ödeme mağazayla birlikte kararlaştırılır. Sepet stok ayırmaz.</p>
+        )}
+        {wa ? <a className={store.orders_enabled ? "shop-btn shop-btn-ghost" : "shop-btn"} href={wa} target="_blank" rel="noopener noreferrer">WhatsApp ile mağazaya ilet</a> : null}
         {store.instagram ? <a className="shop-btn shop-btn-ghost" href={`https://instagram.com/${store.instagram}`} target="_blank" rel="noopener noreferrer">Instagram&apos;dan yazın</a> : null}
         {store.contact_email ? <a className="shop-btn shop-btn-ghost" href={`mailto:${store.contact_email}`}>E-posta gönderin</a> : null}
         <Link href={`/shop/${store.slug}/urunler`} className="shop-note" style={{ textAlign: "center" }}>Alışverişe devam et</Link>

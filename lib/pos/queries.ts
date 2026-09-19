@@ -275,3 +275,15 @@ export async function getSaleReceipt(saleId: string): Promise<SaleReceipt | null
     payments: (payments ?? []).map((p) => ({ id: p.id as string, method: p.method as PaymentMethod | "bank_transfer", amount: num(p.amount), currency: p.currency as string })),
   };
 }
+
+/** The verified, reserved lines of an online order for the terminal (rpc_pos_online_order; selling roles). */
+export async function getPosOnlineOrder(orderId: string): Promise<{ id: string; order_number: string; status: string; branch_id: string; customer_name: string; phone: string; reservation_active: boolean; reservation_expires_at: string | null; lines: Array<{ variant_id: string; quantity: number; unit_price: number; order_price: number; list_price: number; name: string; labels: string; sku: string }> } | null> {
+  const { supabase } = await loadPosContext();
+  const { data, error } = await supabase.rpc("rpc_pos_online_order", { p_order_id: orderId });
+  if (error) {
+    if (/NOT_FOUND/.test(error.message)) return null;
+    throw new Error(`Online sipariş okunamadı: ${error.message}`);
+  }
+  return data as Awaited<ReturnType<typeof getPosOnlineOrder>>;
+}
+

@@ -3,7 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { createClient } from "@supabase/supabase-js";
 import { publicSupabaseEnv } from "@/lib/env";
-import type { AvailabilityMap, ProductList, ShopHome, ShopProduct, SortKey, Store } from "@/lib/shop/model";
+import type { AvailabilityMap, ProductList, PublicOrder, ShopHome, ShopProduct, SortKey, Store } from "@/lib/shop/model";
 
 /**
  * Public storefront reads. No cookies, no session, no tenant bootstrap: one anon client
@@ -77,3 +77,12 @@ export async function getAvailability(slug: string, variantIds: string[]): Promi
   if (error) throw new Error(`Stok durumu okunamadı: ${error.message}`);
   return (data ?? {}) as AvailabilityMap;
 }
+
+/** The customer's order by tracking token. Never cached; null for any unknown token. */
+export async function getPublicOrder(slug: string, token: string): Promise<PublicOrder | null> {
+  if (!/^[0-9a-f]{64}$/.test(token)) return null;
+  const { data, error } = await anon().rpc("rpc_shop_order", { p_slug: slug, p_token: token });
+  if (error) throw new Error(`Sipariş okunamadı: ${error.message}`);
+  return (data ?? null) as PublicOrder | null;
+}
+
