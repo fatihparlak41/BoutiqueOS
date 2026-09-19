@@ -44,7 +44,10 @@ neden alanı. Genel bir audit çerçevesi acele kurulmaz.
 ## D. Diğer (bilgi)
 
 - Kasa oturumu RS-2026-000001 16.09'dan beri açık (docs/10 §28) — panelde "uzun süredir açık" uyarısı çıkıyor.
-- `settings.timezone` **2026-09-19 15:00 UTC'de sahip oturumunca `Europe/Istanbul` yapıldı** (bu oturum değil;
-  Lefkoşa için `Asia/Nicosia` önerisi §28'de duruyor).
+- `settings.timezone` **2026-09-19 15:00 UTC'de sahip oturumunca `Europe/Istanbul` yapıldı** (bu oturum değil).
+  Not (UX pass 3, yalnız belge): `Asia/Nicosia` Kuzey Kıbrıs'ın yaz saati geçişlerini `Europe/Istanbul`'dan
+  (yıl boyu UTC+3, DST yok) daha doğru modelleyebilir; karar sahibindir, hiçbir değer değiştirilmedi.
+- Kasa oturumu için uygulama artık POS ekranında "Kasa oturumu 16 Eylül'den beri açık." + Detay uyarısı
+  gösterir; kapatma yalnız sahibin/yöneticinin "Kasayı kapat" onayıyla (UX pass 3, docs/10 §32).
 - Taslak sayım SC-2026-000001 (2026-09-19 15:10 UTC, Türkan hesabı, 0 satır) — gerçek sahip denemesi.
 - Arşivli üründe "Stok değeri ₺0,00" (B) Pass 2'de okuma tarafında giderildi (docs/10 §31).
