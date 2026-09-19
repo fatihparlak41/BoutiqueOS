@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
@@ -17,8 +18,10 @@ import { BottomNav, bottomNavHidden } from "./bottom-nav";
  */
 export function MobileNav({ role, badges, plate, account }: { role: UserRole; badges?: Record<string, number>; plate: React.ReactNode; account: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
   const topTrigger = bottomNavHidden(pathname);
+  useEffect(() => setMounted(true), []);
 
   return (
     <>
@@ -35,7 +38,9 @@ export function MobileNav({ role, badges, plate, account }: { role: UserRole; ba
         </button>
       ) : null}
 
-      <BottomNav role={role} badges={badges} onMenu={() => setOpen(true)} />
+      {/* portalled to <body>: the top bar's backdrop-filter would otherwise become the
+          containing block of a fixed child and pin the bar to the top of the screen */}
+      {mounted ? createPortal(<BottomNav role={role} badges={badges} onMenu={() => setOpen(true)} />, document.body) : null}
 
       <Sheet open={open} onClose={() => setOpen(false)} title="Menü" className="w-[min(22rem,90vw)]">
         <div className="flex h-full flex-col">
