@@ -1041,3 +1041,52 @@ Sipariş / satış / hold / olay geçmişi **korundu** (3 sipariş: WEB-1 comple
 
 ### Ertelenen (14B)
 Online ödeme sağlayıcı / webhook, kargo ve kargo firması entegrasyonu, e-ticaret müşteri hesapları, sadakat, pazaryeri, gerçek TLC mağazası (sahibin kararı), müşteri e-posta / SMS bildirimleri (takip token'ı yalnız ekranda), sipariş notunun POS fişine basılması, sales_staff için canlı rol smoke'u (T76e / T76j ile DB düzeyinde kanıtlı), mağaza kredisi.
+
+## 28. Faz 15A — Gerçek TLC onboarding preflight (salt-okuma, 2026-09-19)
+
+Bu bölüm 15A'nın yetkili çıktısıdır; TLC'ye **hiçbir yazma yapılmadı** (`tlc15a_1.sql` / `tlc15a_2.sql`, `supabase db query --linked`).
+
+### Yetkili TLC snapshot (2026-09-19)
+İşletme `b0000000…0001` **active**, TRY; settings: accepted_currencies TRY/GBP/EUR/USD, exchange_window_days 3, money_refund false, store_credit false, sales_visibility_scope own, allocation invoice_value_proportional; **timezone yok** (Europe/Istanbul varsayılır; Lefkoşa = Asia/Nicosia, kışın 1 saat fark), return_policy / reservation_default_hours yok; updated_at 2026-09-09. Üyeler: 3 aktif **owner** — `77bf787b` fatihparlak1 (platform admin de), `3918a623` trknilhn (Türkan), `853bcf24` thingslikecrop; max_discount 0; sales_staff/stock_staff yok. Şube: tek, `b1000000…0001` Lefkoşa Mağaza (LFT, varsayılan). Kasa: "Ana Kasa" `e0000000…0001`.
+Katalog: **2 ürün / 20 varyant (hepsi active)**, 2 barkod, 1 görsel (+1 storage nesnesi), 17 kategori (seed, created_by null; 1 ürün → Crop Toplar), 2 marka (Sarıfatih 09-08, TEST TLC Studio 09-09), seçenekler Size (XS…40, STD, XXL, One Size) / Color (15) / Cup Size / Length / **TEST Beden** / **TEST Renk**; web_published 0, public_path 0.
+Envanter: yalnız sellable **7** (S 5 @400 = 2.000; M 2 @420 = 840; toplam 2.840 TRY); damaged/quarantine 0; hareket 3 (2 mal kabul 09-09, 1 satış 09-16); 0 stok sayımı; 0 rezervasyon.
+Tedarik: 10 tedarikçi (1 TEST + 9 gerçek e-Arşiv kaynaklı, hepsi TRY/İstanbul, notlarda VKN/TCKN + fatura no); mal kabul **9 draft / 1 posted / 5 cancelled**, satır 4 (posted 2 + cancelled 2), masraf 0, ters kayıt 0, PO 0, fx 0; borç 1 kayıt 3.260 TRY (TEST Supplier). POS: 1 oturum RS-2026-000001 **hâlâ açık** (Türkan, 2026-09-16 12:03 UTC, açılış 2.500; nakit hareketi +1.250), 1 satış S-2026-000001 (M ×1, 1.250 nakit, COGS 420), iade 0. CRM: 0 müşteri, 0 rezervasyon. SaaS: başvuru 0, abonelik 0, fatura 0, storefront 0, online sipariş 0, platform denetim 0. Damgalar: products 09-16 12:38:08, variants 09-16 12:38:04, movements/sales 09-16 12:03:46, receipts 09-09 10:10:30, suppliers 09-09 10:06:21.
+
+### Delta (2026-09-17 taban çizgisi → bugün)
+**Sıfır fark.** 14B dahil tüm fazların alias/admin hesapları TLC'ye yazmadı; taban çizgisindeki "kasa oturumu hâlâ açık" durumu devam ediyor. Eski belgede olmayan ayrıntılar: tedarikçi notlarında fatura numarası + net/KDV/brüt; GR-000006, GR-000007 ile aynı faturanın (EAR2026000000110) iptal edilmiş kopyası; tüm faturaların alıcısı "Gökhan İlhan / Gökhan İlhan Trading" (TLC tüzel kişiliği değil).
+
+### Mevcut kayıt sınıflandırması
+| Kayıt | Sınıf | Kanıt |
+|---|---|---|
+| Ürün **TEST Keten Crop Bluz** `3ca92303` (2 varyant, 2 barkod, 1 görsel, stok 7 / 2.840) | **B** (Faz 3 smoke; created_by null, 09-08 13:50, marka TEST TLC Studio, GR-000001 `TEST-FTR-001`, TEST Supplier) — **ama gerçek satış geçmişi taşıyor** | S-2026-000001 (Türkan hesabı) bu ürünün M varyantını sattı; görsel gerçek sahip yüklemesi (§13). Faz 15A'da dokunulmadı. |
+| Ürün **FATİH PARLAK** `c38f5cc0` (18 varyant, 0 barkod, 0 görsel, 0 stok) | **C** (sahip hesabıyla oluşturuldu, içerik test: fiyat 121.212, sku_prefix/style `test`, kategori yok, TEST Beden/TEST Renk sabit) | created_by `3918a623`, 2026-09-16 12:37; arşivlenmesinin muhasebe etkisi yok (0 hareket / 0 havuz). |
+| Satış **S-2026-000001** + kasa oturumu **RS-2026-000001** (açık) + nakit hareketi | **A** (gerçek sahip işlemi) | değişmez; oturum sahibin normal kapanışını bekliyor (`REGISTER_ALREADY_OPEN` gün-1 açılışını engeller). |
+| Tedarikçi **TEST Supplier Phase 3**, marka **TEST TLC Studio**, seçenekler **TEST Beden / TEST Renk**, GR-000002..005 (cancelled), GR-000001 (posted) | **B** | 09-09 07:21–10:02, `77bf787b`, adlarında TEST; GR-000001 stok 8 + borç 3.260 yazdı (1 satıldı → ters kayıt `INSUFFICIENT_STOCK` ile **imkânsız**). |
+| 9 gerçek tedarikçi + GR-000007..015 (draft, 0 satır) + GR-000006 (cancelled kopya) | **A** (gerçek fatura kanıtı) | notlar `77bf787b` tarafından e-Arşiv PDF'lerinden 09-09 10:05–10:08'de girildi; PDF'ler repoda yok. |
+| Marka **Sarıfatih** | **C** | 09-08 13:50 (ilk ürünle aynı dakika, created_by yok); FATİH PARLAK'a bağlı. |
+| 17 kategori, seçenek değerleri (TEST'ler hariç) | **A** (pilot analizinden seed) | seed dosyası + pilot-analiz.html. |
+
+### Gerçek fatura mutabakatı (kaynak: yalnız taslak notları; PDF yok; satır yok)
+| Fiş | Tedarikçi | Fatura | Tarih | Net | KDV %10 | Brüt |
+|---|---|---|---|---|---|---|
+| GR-000007 | FIRAT YİĞİT | EAR2026000000110 | 2026-09-03 | 19.091,10 | 1.909,11 | 21.000,21 |
+| GR-000008 | SNCR GROUP | DIA2026000000416 | 2026-09-02 | 20.100,00 | 2.010,00 | 22.110,00 |
+| GR-000009 | AKYÜZ TEKSTİL | AMA2026000000700 | 2026-09-02 | 17.046,00 | 1.704,60 | 18.750,60 |
+| GR-000010 | KHLOE | KHL2026000000274 | 2026-09-02 | 20.460,00 | 2.046,00 | 22.506,00 |
+| GR-000011 | BİRER GİYİM | MSF2026000004260 | 2026-09-02 | 17.000,00 | 1.700,00 | 18.700,00 |
+| GR-000012 | SEVENDAY | SEE2026000000124 | 2026-09-02 | 24.000,00 | 2.400,00 | 26.400,00 |
+| GR-000013 | BEDRETTİN YILDIRIM | YLD2026000000085 | 2026-09-03 | 5.000,00 | 500,00 | 5.500,00 |
+| GR-000014 | NİSARE TEKSTİL | EAN2026000000876 | 2026-09-02 | 40.625,00 | 4.062,50 | 44.687,50 |
+| GR-000015 | HASAN NAVRUZ | EAR2026000000547 | 2026-09-02 | 12.540,00 | 1.254,00 | 13.794,00 |
+| **Toplam** | 9 fatura | | | **175.862,10** | **17.586,21** | **193.448,31** |
+Her satırda net × 1,10 = brüt tutarlı. Hiçbir taslakta kalem/adet/birim fiyat yok; "Perry" adlı tedarikçi DB'de yok (Birer / Perry aynı fatura olabilir — doğrulanmadı). KDV modeli yok (8A); tutarlar belgedeki gibi girilir. Faturalar sistem öncesi (2–3 Eylül) dönemi kapsıyor ve mağaza o günden beri manuel defterle sattı → fatura adetleri ≠ bugünkü fiziksel stok.
+
+### Kararlar (öneri; hiçbiri uygulanmadı)
+- **Açılış stoğu yolu:** her fiziksel birim deftere **tam bir kez** girer — ya POST edilmiş fiş satırıyla ya da açılış girişiyle; FULL sayım havuzu boş varyanta birim **ekleyemez** (`COST_REQUIRED`, 7A tasarımı) → çift sayım yapısal olarak imkânsız. Sıra: katalog → (varyant başına) maliyet kaynağı kararı → açılış girişi → FULL sayım (doğrulama) → inceleme → POST (yalnız farklar).
+- **9 gerçek taslak:** öneri **C (nedenle iptal, notlar kanıt olarak kalır)** ya da **B (taslak bırak)**; **A (tamamla-POST) mevcut mal için önerilmez** (adet/renk/beden kanıtı yok, sistem öncesi satışlar kayıtsız → stok/borç şişer; "borç yok" beyanı da bununla çelişir). Yeni faturalar normal 8A akışıyla POST edilir.
+- **Maliyet:** TEST Keten tarihsel 400/420 korunur; sayımda 0'a düşerse −2.840 `adjustment` ile yazılır (onay). Yeni gerçek stok: (1) fatura birim fiyatı (sahibin ürün→fatura eşlemesi) > (2) sahibin beyan ettiği alış (`manual_cost`, notta "beyan") > (3) ürünü ertele. `satış ÷ 3` **kabul edilmez**.
+- **Kod boşluğu:** `rpc_post_inventory_adjustment` için UI yok → açılış stoğu (adet + birim maliyet) girilemez. 15B seçenekleri: (a) sayım incelemesinde havuzu boş satıra manager+ birim maliyet alanı (tek akış, migration + T63 ek testleri; öneri) — (b) ayrı "Açılış stoğu" ekranı. Mimari karar kullanıcıda.
+- **Gün-1 öncesi sahip eylemleri:** RS-2026-000001'i kapat; `Asia/Nicosia` saat dilimi (`/app/ayarlar/raporlama`); FATİH PARLAK'ı arşivle (onayla); sales_staff/stock_staff üyelikleri (`/app/ayarlar/ekip`); barkod yazıcı modeli (etiket basma yok).
+
+### Hazırlık kontrolleri (bu oturum, koşuldu)
+fresh-DB **1664/0** (T60–T62 ürün ana verisi / arşiv / onboarding + barkod + görsel/storage RLS, T63 sayım, T64–T65 mal kabul + maliyet görünürlüğü, T66–T67 POS + kasa rolleri, T68 iade, T69 CRM/rezervasyon), `online_order/pos_double_submit/reservation_last_unit/pos_vs_reservation` PASS, lint_sql 0/0, lint / typecheck / test:auth 62/0; build son kod commit'inde (96e4584). **Kod değişikliği gerekmedi, üretilmedi.**
