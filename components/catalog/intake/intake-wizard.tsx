@@ -298,7 +298,7 @@ export function IntakeWizard({
         ) : null}
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
           <Link href="/app/stok/sayim" className="contents">
-            <Button size="lg" className="w-full sm:w-auto">Stok say</Button>
+            <Button size="lg" variant="accent" className="w-full sm:w-auto">Stok say</Button>
           </Link>
           <Button size="lg" variant="outline" onClick={resetAll} className="w-full sm:w-auto">Yeni ürün ekle</Button>
           <Link href={`/app/urunler/${result.product_id}`} className="contents">
