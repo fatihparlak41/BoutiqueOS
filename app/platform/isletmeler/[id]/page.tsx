@@ -6,8 +6,10 @@ import { formatPlanPrice } from "@/lib/saas/model";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
 import { TableShell, THead, TH, TBody, TR, TD } from "@/components/ui/table";
-import { BusinessPill, SubscriptionPill, ApplicationPill, fmtDate, fmtDateTime } from "@/components/platform/pills";
+import { BusinessPill, SubscriptionPill, ApplicationPill, InvoicePill, fmtDate, fmtDateTime } from "@/components/platform/pills";
 import { BusinessStatusForm, SubscriptionStatusForm } from "@/components/platform/forms";
+import { CancelSubscriptionForm, IssueInvoiceForm } from "@/components/platform/billing-forms";
+import { formatMoney } from "@/lib/saas/model";
 
 export const metadata = { title: "İşletme · Platform · BoutiqueOS" };
 
@@ -74,12 +76,35 @@ export default async function BusinessDetailPage({ params }: { params: Promise<{
                     </div>
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-text-muted sm:grid-cols-4">
                       <div><dt>Başlangıç</dt><dd className="text-text-secondary" data-numeric>{fmtDate(s.starts_at)}</dd></div>
-                      <div><dt>Bitiş</dt><dd className="text-text-secondary" data-numeric>{fmtDate(s.ends_at)}</dd></div>
-                      <div><dt>Etkinleştirme</dt><dd className="text-text-secondary" data-numeric>{fmtDate(s.activated_at)}</dd></div>
-                      <div><dt>Kaynak</dt><dd className="text-text-secondary">{s.source}</dd></div>
+                      <div><dt>Bitiş</dt><dd className="text-text-secondary" data-numeric>{fmtDate(s.ends_at)}{s.lapsed ? " · dönem bitti" : ""}</dd></div>
+                      <div><dt>Yenileme</dt><dd className="text-text-secondary" data-numeric>{s.cancel_at_period_end ? "dönem sonunda iptal" : fmtDate(s.renews_at)}</dd></div>
+                      <div><dt>Fatura</dt><dd className="text-text-secondary" data-numeric>{s.invoice_count}</dd></div>
                     </dl>
+                    {s.latest_invoice ? (
+                      <p className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                        <Link href={`/platform/faturalar/${s.latest_invoice.id}`} className="underline-offset-4 hover:underline" data-numeric>{s.latest_invoice.invoice_number}</Link>
+                        <span data-numeric>{formatMoney(s.latest_invoice.total, s.latest_invoice.currency)}</span>
+                        <InvoicePill status={s.latest_invoice.status} overdue={s.latest_invoice.overdue} />
+                        {s.latest_invoice.status === "open" ? <span className="text-text-muted">vade {fmtDate(s.latest_invoice.due_at)}</span> : null}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-text-muted">Henüz fatura kesilmedi. Abonelik, ilk faturası ödendiğinde etkinleşir.</p>
+                    )}
                     {s.note ? <p className="text-xs text-text-muted">{s.note}</p> : null}
-                    <SubscriptionStatusForm key={s.status} subscriptionId={s.id} current={s.status} />
+                    {s.status === "cancelled" || s.status === "expired" ? (
+                      <p className="text-xs text-text-muted">Bu abonelik kapanmış; yeni dönem için yeni bir abonelik açılır.</p>
+                    ) : (
+                      <div className="space-y-2 border-t border-border pt-3">
+                        <IssueInvoiceForm
+                          subscriptionId={s.id}
+                          kind={s.invoice_count === 0 ? "first" : "renewal"}
+                          disabled={Boolean(s.latest_invoice && s.latest_invoice.status === "open") || s.cancel_at_period_end}
+                          disabledReason={s.cancel_at_period_end ? "Dönem sonunda iptal planlı; yenileme faturası kesilmez." : "Açık bir fatura var; önce ödemesini kaydedin ya da iptal edin."}
+                        />
+                        <SubscriptionStatusForm key={s.status} subscriptionId={s.id} current={s.status} />
+                        <CancelSubscriptionForm key={`c-${s.cancel_at_period_end}`} subscriptionId={s.id} scheduled={s.cancel_at_period_end} />
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

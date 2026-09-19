@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 62 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 62,
+SELECT t_check('T01 all 67 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 67,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -4732,16 +4732,19 @@ SELECT t_logout();
 -- ---------------- subscription lifecycle (manual, platform only) ----------------
 SELECT t_login('u8');
 SELECT t_err('T73h the status is validated', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'paid') $q$, 'INVALID_STATUS');
-SELECT t_ok('T73h2 the platform activates the subscription after out-of-band payment',
-  $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active', 'havale alindi') $q$);
-SELECT t_check('T73h3 activation sets the period from the plan interval (annual)',
-  t73_q($q$ SELECT status = 'active' AND starts_at IS NOT NULL AND activated_at IS NOT NULL AND ends_at = starts_at + interval '1 year' AND renews_at = ends_at AND note = 'havale alindi'
+SELECT t_err('T73h2 manual activation without a paid invoice is refused (13B: payment activates)',
+  $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active', 'havale alindi') $q$, 'USE_PAYMENT');
+SELECT t_ok('T73h2b the platform issues the first invoice and records the full bank transfer',
+  $q$ SELECT rpc_platform_record_payment((rpc_platform_issue_invoice(t73_sub('a9')) ->> 'invoice_id')::uuid, (SELECT price_amount FROM saas_plans WHERE code = 'starter'), 'USD', 'bank_transfer', 'HAVALE-T73', now(), 'havale alindi') $q$);
+SELECT t_check('T73h3 the paid invoice activates the subscription for one calendar year',
+  t73_q($q$ SELECT status = 'active' AND starts_at IS NOT NULL AND activated_at IS NOT NULL AND ends_at = starts_at + interval '1 year' AND renews_at = ends_at
    FROM business_subscriptions WHERE business_id = t73_biz('a9') $q$));
 SELECT t_ok('T73h4 past_due keeps the dates', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'past_due') $q$);
 SELECT t_ok('T73h5 cancellation', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'cancelled', 'istek') $q$);
 SELECT t_err('T73h6 a cancelled subscription is final', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a9'), 'active') $q$, 'INVALID_STATE');
-SELECT t_check('T73h7 every subscription change is audited',
-  t73_q($q$ (SELECT count(*) FROM platform_audit_log WHERE action = 'set_subscription_status' AND target_business_id = t73_biz('a9')) = 3 $q$));
+SELECT t_check('T73h7 every subscription change is audited (payment activation + two manual moves)',
+  t73_q($q$ (SELECT count(*) FROM platform_audit_log WHERE action = 'set_subscription_status' AND target_business_id = t73_biz('a9')) = 2
+            AND (SELECT count(*) FROM platform_audit_log WHERE action = 'record_payment' AND target_business_id = t73_biz('a9')) = 1 $q$));
 SELECT t_check('T73h8 the business itself stayed active: subscription state never touches tenant status',
   t73_q($q$ SELECT status = 'active' FROM businesses WHERE id = t73_biz('a9') $q$));
 -- plans are data
@@ -4812,6 +4815,307 @@ SELECT t_check('T73m TLC was not touched by any of this',
   (SELECT status = 'active' FROM businesses WHERE id = t_get('biz'))
   AND (SELECT count(*) FROM business_subscriptions WHERE business_id = t_get('biz')) = 0
   AND (SELECT count(*) FROM business_applications WHERE business_id = t_get('biz')) = 0);
+
+-- ============================================================
+-- T74  SaaS billing foundation — manual billing only  (Phase 13B)
+-- ============================================================
+SELECT t_check('T74a billing tables exist with RLS on and zero policies (reads and writes only through RPCs)',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('saas_invoices','saas_invoice_items','saas_payments','saas_invoice_sequences','platform_settings') AND relrowsecurity) = 5
+  AND (SELECT count(*) FROM pg_policies WHERE tablename IN ('saas_invoices','saas_invoice_items','saas_payments','saas_invoice_sequences','platform_settings')) = 0);
+SELECT t_check('T74a2 tenants and anon hold no privilege on the billing ledger',
+  NOT has_table_privilege('authenticated', 'saas_invoices', 'SELECT') AND NOT has_table_privilege('authenticated', 'saas_invoices', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'saas_invoice_items', 'SELECT') AND NOT has_table_privilege('authenticated', 'saas_payments', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'saas_payments', 'INSERT') AND NOT has_table_privilege('authenticated', 'platform_settings', 'SELECT')
+  AND NOT has_table_privilege('anon', 'saas_invoices', 'SELECT') AND NOT has_table_privilege('anon', 'saas_payments', 'SELECT'));
+SELECT t_check('T74a3 the billing ledger is separate from POS money (no FK into sale_payments / cash / supplier tables)',
+  (SELECT count(*) FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_class f ON f.oid = c.confrelid
+   WHERE c.contype = 'f' AND r.relname IN ('saas_invoices','saas_invoice_items','saas_payments')
+     AND f.relname NOT IN ('businesses','business_subscriptions','saas_plans','profiles','saas_invoices')) = 0);
+SELECT t_check('T74a4 provider columns exist, are nullable and are constrained to NULL in 13B',
+  (SELECT count(*) FROM information_schema.columns WHERE table_name = 'saas_payments' AND column_name IN ('provider','provider_reference') AND is_nullable = 'YES') = 2
+  AND (SELECT count(*) FROM information_schema.columns WHERE table_name = 'saas_invoices' AND column_name IN ('provider','provider_invoice_id') AND is_nullable = 'YES') = 2
+  AND (SELECT count(*) FROM pg_constraint WHERE conname IN ('chk_saas_pay_no_provider','chk_saas_inv_no_provider')) = 2);
+SELECT t_check('T74a5 payment methods are the three manual ones; no card method exists',
+  (SELECT array_agg(enumlabel::text ORDER BY enumsortorder) FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'saas_payment_method') = ARRAY['bank_transfer','cash_manual','other_manual']);
+SELECT t_check('T74a6 billing settings are data', (SELECT count(*) FROM platform_settings WHERE key IN ('invoice_due_days','billing_grace_days')) = 2);
+
+-- fixtures: a10 owns ZZAYLIN2 (active, EUR/CY) with a PENDING subscription on the USD starter plan; a11 becomes its manager
+CREATE FUNCTION t74_inv(p_user TEXT, p_status TEXT DEFAULT NULL) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT id FROM saas_invoices WHERE subscription_id = t73_sub(p_user) AND (p_status IS NULL OR status::text = p_status) ORDER BY invoice_number DESC LIMIT 1 $$;
+CREATE FUNCTION t74_no(p_user TEXT, p_status TEXT DEFAULT NULL) RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT invoice_number FROM saas_invoices WHERE id = t74_inv(p_user, p_status) $$;
+CREATE FUNCTION t74_total(p_user TEXT, p_status TEXT DEFAULT NULL) RETURNS NUMERIC LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT total FROM saas_invoices WHERE id = t74_inv(p_user, p_status) $$;
+CREATE FUNCTION t73_q_num(p_sql TEXT) RETURNS NUMERIC LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE n NUMERIC; BEGIN EXECUTE p_sql INTO n; RETURN n; END $$;
+CREATE FUNCTION t74_price() RETURNS NUMERIC LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT price_amount FROM saas_plans WHERE code = 'starter' $$;
+INSERT INTO business_members (business_id, user_id, role, is_active) VALUES (t73_biz('a10'), t_get('a11'), 'manager', true);
+CREATE TEMP TABLE _t74 AS SELECT (SELECT count(*) FROM saas_invoices) AS inv, (SELECT count(*) FROM saas_payments) AS pay, (SELECT count(*) FROM platform_audit_log) AS audit,
+  (SELECT extract(year FROM now())::int) AS yr;
+GRANT SELECT ON _t74 TO authenticated;
+
+-- ---------------- who reads what ----------------
+SELECT t_login('a10');
+SELECT t_check('T74b the owner reads own billing: pending subscription, no invoice, grace setting',
+  (SELECT r -> 'subscription' ->> 'status' = 'pending' AND r -> 'subscription' -> 'plan' ->> 'code' = 'starter' AND jsonb_array_length(r -> 'invoices') = 0
+          AND (r -> 'settings' ->> 'billing_grace_days')::int >= 0 FROM rpc_my_billing(t73_biz('a10')) r));
+SELECT t_err('T74b2 the owner cannot read another business''s billing (TLC)', $q$ SELECT rpc_my_billing(t_get('biz')) $q$, 'FORBIDDEN');
+SELECT t_err('T74b3 nor a business they are not a member of', $q$ SELECT rpc_my_billing(t73_biz('a9')) $q$, 'FORBIDDEN');
+SELECT t_err('T74b4 the owner cannot issue an invoice', $q$ SELECT rpc_platform_issue_invoice(t73_sub('a10')) $q$, 'FORBIDDEN');
+SELECT t_err('T74b5 the owner cannot record a payment', $q$ SELECT rpc_platform_record_payment(gen_random_uuid(), 1, 'USD', 'bank_transfer', 'X1') $q$, 'FORBIDDEN');
+SELECT t_err('T74b6 the owner cannot activate own subscription', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a10'), 'active') $q$, 'FORBIDDEN');
+SELECT t_err('T74b7 the owner cannot list platform invoices', $q$ SELECT rpc_platform_invoices() $q$, 'FORBIDDEN');
+SELECT t_err('T74b8 the owner cannot read the billing overview', $q$ SELECT rpc_platform_billing_overview() $q$, 'FORBIDDEN');
+SELECT t_err('T74b9 the owner cannot write the ledger directly', $q$ INSERT INTO saas_payments (business_id, subscription_id, invoice_id, amount, currency, method, reference, paid_at, recorded_by) VALUES (t73_biz('a10'), t73_sub('a10'), gen_random_uuid(), 1, 'USD', 'bank_transfer', 'X', now(), t_get('a10')) $q$, '42501');
+SELECT t_err('T74b10 nor read it', $q$ SELECT count(*) FROM saas_invoices $q$, '42501');
+SELECT t_err('T74b11 nor change billing settings', $q$ SELECT rpc_platform_set_billing_setting('invoice_due_days', 1) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('a11');
+SELECT t_err('T74b12 a manager has no SaaS billing surface', $q$ SELECT rpc_my_billing(t73_biz('a10')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_err('T74b13 the TLC owner cannot read the ZZ tenant''s billing', $q$ SELECT rpc_my_billing(t73_biz('a10')) $q$, 'FORBIDDEN');
+SELECT t_check('T74b14 TLC has no subscription and rpc_my_billing says so without inventing one',
+  (SELECT r -> 'subscription' IS NULL OR r ->> 'subscription' IS NULL FROM rpc_my_billing(t_get('biz')) r) AND (SELECT count(*) FROM business_subscriptions WHERE business_id = t_get('biz')) = 0);
+SELECT t_logout();
+
+-- ---------------- issue the first invoice (snapshot) ----------------
+SELECT t_login('u8');
+SELECT t_check('T74c the overview counts the pending subscription as awaiting its first invoice',
+  (SELECT (r ->> 'awaiting_first_invoice')::int = 1 AND (r -> 'settings' ->> 'invoice_due_days')::int = 14 FROM rpc_platform_billing_overview() r));
+SELECT t_ok('T74c2 the platform issues the first invoice', $q$ SELECT rpc_platform_issue_invoice(t73_sub('a10'), 'ilk donem') $q$);
+SELECT t_check('T74c3 the invoice is a snapshot of the plan: number, price, plan currency (not the business currency), interval, period, due, tax policy',
+  t73_q($q$ SELECT i.invoice_number = 'BOS-' || (SELECT yr FROM _t74)::text || '-' || lpad(((SELECT inv FROM _t74) + 1)::text, 6, '0')
+                   AND i.status = 'open' AND i.plan_code = 'starter' AND i.currency = 'USD' AND i.subtotal = t74_price() AND i.tax_amount = 0 AND i.tax_policy = 'none_unconfigured'
+                   AND i.total = t74_price() AND i.amount_paid = 0 AND i.billing_interval = 'annual'
+                   AND i.billing_period_end = i.billing_period_start + interval '1 year' AND i.due_at = i.issued_at + interval '14 days'
+                   AND i.business_id = t73_biz('a10') AND i.note = 'ilk donem'
+            FROM saas_invoices i WHERE i.id = t74_inv('a10') $q$));
+SELECT t_check('T74c4 one item line carries the plan price; the audit trail has the issue',
+  t73_q($q$ (SELECT count(*) = 1 AND min(line_total) = t74_price() AND min(quantity) = 1 FROM saas_invoice_items WHERE invoice_id = t74_inv('a10'))
+            AND (SELECT count(*) FROM platform_audit_log WHERE action = 'issue_invoice' AND target_business_id = t73_biz('a10')) = 1 $q$));
+SELECT t_check('T74c5 issuing again replays the open invoice (exactly one invoice per period)',
+  (SELECT (r ->> 'replayed')::boolean AND (r ->> 'invoice_id')::uuid = t74_inv('a10') FROM rpc_platform_issue_invoice(t73_sub('a10')) r)
+  AND t73_q($q$ (SELECT count(*) FROM saas_invoices WHERE subscription_id = t73_sub('a10')) = 1 $q$));
+SELECT t_check('T74c6 the subscription is still pending: issuing an invoice activates nothing',
+  t73_q($q$ SELECT status = 'pending' AND starts_at IS NULL FROM business_subscriptions WHERE id = t73_sub('a10') $q$));
+SELECT t_check('T74c7 the invoice detail carries items, empty payments, the subscription and the business',
+  (SELECT r ->> 'status' = 'open' AND jsonb_array_length(r -> 'items') = 1 AND jsonb_array_length(r -> 'payments') = 0 AND r -> 'business' ->> 'code' = 'ZZAYLIN2'
+          AND r -> 'subscription' ->> 'status' = 'pending' AND NOT (r ->> 'overdue')::boolean FROM rpc_platform_invoice_detail(t74_inv('a10')) r));
+SELECT t_logout();
+SELECT t_login('a10');
+SELECT t_check('T74c8 the owner sees the open invoice with its amounts and no platform internals',
+  (SELECT jsonb_array_length(r -> 'invoices') = 1 AND r -> 'invoices' -> 0 ->> 'status' = 'open' AND (r -> 'invoices' -> 0 ->> 'total')::numeric = t74_price()
+          AND (r -> 'invoices' -> 0 ->> 'balance')::numeric = t74_price() AND NOT (r -> 'invoices' -> 0 ->> 'overdue')::boolean
+          AND r -> 'invoices' -> 0 ? 'invoice_number' AND NOT (r -> 'invoices' -> 0 ? 'issued_by') AND NOT (r -> 'invoices' -> 0 ? 'provider')
+   FROM rpc_my_billing(t73_biz('a10')) r));
+SELECT t_logout();
+
+-- ---------------- payment validation ----------------
+SELECT t_login('u8');
+SELECT t_err('T74d a card method does not exist', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), t74_price(), 'USD', 'card', 'REF-1') $q$, 'INVALID_METHOD');
+SELECT t_err('T74d2 the currency must match the invoice', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), t74_price(), 'EUR', 'bank_transfer', 'REF-1') $q$, 'CURRENCY_MISMATCH');
+SELECT t_err('T74d3 zero is not a payment', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 0, 'USD', 'bank_transfer', 'REF-1') $q$, 'INVALID_AMOUNT');
+SELECT t_err('T74d4 sub-cent amounts are refused', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 10.001, 'USD', 'bank_transfer', 'REF-1') $q$, 'INVALID_AMOUNT');
+SELECT t_err('T74d5 a reference is required', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 10, 'USD', 'bank_transfer', ' ') $q$, 'REFERENCE_REQUIRED');
+SELECT t_err('T74d6 overpayment is refused (no credit balance)', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), t74_price() + 0.01, 'USD', 'bank_transfer', 'REF-1') $q$, 'OVERPAYMENT');
+SELECT t_err('T74d7 a payment cannot be dated in the future', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 10, 'USD', 'bank_transfer', 'REF-1', now() + interval '3 days') $q$, 'INVALID_DATE');
+SELECT t_err('T74d8 an unknown invoice', $q$ SELECT rpc_platform_record_payment(gen_random_uuid(), 10, 'USD', 'bank_transfer', 'REF-1') $q$, 'NOT_FOUND');
+
+-- ---------------- partial payment, idempotent reference, full payment activates ----------------
+SELECT t_check('T74e a partial bank transfer is recorded; the invoice stays open; nothing activates',
+  (SELECT r ->> 'invoice_status' = 'open' AND (r ->> 'amount_paid')::numeric = t74_price() - 10 AND (r ->> 'balance')::numeric = 10 AND NOT (r ->> 'subscription_activated')::boolean AND NOT (r ->> 'replayed')::boolean
+   FROM rpc_platform_record_payment(t74_inv('a10'), t74_price() - 10, 'USD', 'bank_transfer', 'HAVALE-001', now() - interval '1 hour', 'kismi') r)
+  AND t73_q($q$ SELECT status = 'pending' FROM business_subscriptions WHERE id = t73_sub('a10') $q$));
+SELECT t_check('T74e2 the same reference recorded again is one payment (two admins, one bank line)',
+  (SELECT (r ->> 'replayed')::boolean FROM rpc_platform_record_payment(t74_inv('a10'), t74_price() - 10, 'USD', 'bank_transfer', ' havale-001 ') r)
+  AND t73_q($q$ (SELECT count(*) FROM saas_payments WHERE invoice_id = t74_inv('a10')) = 1 AND (SELECT amount_paid = t74_price() - 10 FROM saas_invoices WHERE id = t74_inv('a10')) $q$));
+SELECT t_err('T74e3 the remaining balance cannot be exceeded', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 10.01, 'USD', 'bank_transfer', 'HAVALE-002') $q$, 'OVERPAYMENT');
+SELECT t_err('T74e4 a partially paid invoice cannot be voided', $q$ SELECT rpc_platform_void_invoice(t74_inv('a10'), 'yanlis') $q$, 'HAS_PAYMENTS');
+SELECT t_check('T74e5 the closing cash payment settles the invoice and activates the subscription in one transaction',
+  (SELECT r ->> 'invoice_status' = 'paid' AND (r ->> 'balance')::numeric = 0 AND (r ->> 'subscription_activated')::boolean
+   FROM rpc_platform_record_payment(t74_inv('a10'), 10, 'USD', 'cash_manual', 'MAKBUZ-7', now(), 'nakit') r));
+SELECT t_check('T74e6 invoice paid with paid_at; subscription active for exactly the invoiced period (calendar year), renews at period end',
+  t73_q($q$ (SELECT status = 'paid' AND paid_at IS NOT NULL AND amount_paid = total FROM saas_invoices WHERE id = t74_inv('a10'))
+            AND (SELECT s.status = 'active' AND s.starts_at = i.billing_period_start AND s.ends_at = i.billing_period_end AND s.renews_at = i.billing_period_end
+                        AND s.ends_at = s.starts_at + interval '1 year' AND s.activated_at IS NOT NULL
+                 FROM business_subscriptions s JOIN saas_invoices i ON i.id = t74_inv('a10') WHERE s.id = t73_sub('a10')) $q$));
+SELECT t_check('T74e7 two payments, both audited, the last one marked invoice_paid; the business status never moved',
+  t73_q($q$ (SELECT count(*) FROM saas_payments WHERE invoice_id = t74_inv('a10')) = 2
+            AND (SELECT count(*) FROM platform_audit_log WHERE action = 'record_payment' AND target_business_id = t73_biz('a10')) = 2
+            AND (SELECT count(*) FROM platform_audit_log WHERE action = 'record_payment' AND target_business_id = t73_biz('a10') AND (payload ->> 'invoice_paid')::boolean AND payload ->> 'to' = 'active') = 1
+            AND (SELECT status = 'active' FROM businesses WHERE id = t73_biz('a10')) $q$));
+SELECT t_err('T74e8 a paid invoice takes no further payment', $q$ SELECT rpc_platform_record_payment(t74_inv('a10'), 1, 'USD', 'bank_transfer', 'HAVALE-003') $q$, 'INVALID_STATE');
+SELECT t_check('T74e9 the exact same reference on the paid invoice still replays instead of erroring (retry after timeout)',
+  (SELECT (r ->> 'replayed')::boolean FROM rpc_platform_record_payment(t74_inv('a10'), 10, 'USD', 'cash_manual', 'MAKBUZ-7') r));
+SELECT t_logout();
+
+-- ---------------- immutability (even for the superuser) ----------------
+SELECT t_err('T74f a paid invoice is immutable', $q$ UPDATE saas_invoices SET note = 'x' WHERE id = t74_inv('a10') $q$, 'INVOICE_IMMUTABLE');
+SELECT t_err('T74f2 an issued invoice is never deleted', $q$ DELETE FROM saas_invoices WHERE id = t74_inv('a10') $q$, 'INVOICE_RETAINED');
+SELECT t_err('T74f3 payments are frozen', $q$ UPDATE saas_payments SET amount = 1 WHERE invoice_id = t74_inv('a10') $q$, 'BILLING_ROW_FROZEN');
+SELECT t_err('T74f4 payments are never deleted', $q$ DELETE FROM saas_payments WHERE invoice_id = t74_inv('a10') $q$, 'BILLING_ROW_FROZEN');
+SELECT t_err('T74f5 items are frozen', $q$ DELETE FROM saas_invoice_items WHERE invoice_id = t74_inv('a10') $q$, 'BILLING_ROW_FROZEN');
+SELECT t_err('T74f6 no provider reference can be written on a payment', $q$ INSERT INTO saas_payments (business_id, subscription_id, invoice_id, amount, currency, method, reference, paid_at, recorded_by, provider, provider_reference) VALUES (t73_biz('a10'), t73_sub('a10'), t74_inv('a10'), 1, 'USD', 'other_manual', 'PROV', now(), t_get('u8'), 'stripe', 'pi_1') $q$, 'chk_saas_pay_no_provider');
+
+-- ---------------- renewal, plan price change, void ----------------
+SELECT t_login('u8');
+SELECT t_check('T74g the renewal invoice starts where the paid period ends and gets the next number',
+  (SELECT NOT (r ->> 'replayed')::boolean FROM rpc_platform_issue_invoice(t73_sub('a10')) r)
+  AND t73_q($q$ SELECT n.billing_period_start = p.billing_period_end AND n.billing_period_end = n.billing_period_start + interval '1 year' AND n.status = 'open'
+                       AND n.invoice_number = 'BOS-' || (SELECT yr FROM _t74)::text || '-' || lpad(((SELECT inv FROM _t74) + 2)::text, 6, '0')
+                FROM saas_invoices n, saas_invoices p WHERE n.id = t74_inv('a10', 'open') AND p.id = t74_inv('a10', 'paid') $q$));
+SELECT t_check('T74g2 a second renewal request replays the open one (no duplicate renewal)',
+  (SELECT (r ->> 'replayed')::boolean FROM rpc_platform_issue_invoice(t73_sub('a10')) r)
+  AND t73_q($q$ (SELECT count(*) FROM saas_invoices WHERE subscription_id = t73_sub('a10') AND status = 'open') = 1 $q$));
+SELECT t_ok('T74g3 the catalogue price changes', $q$ SELECT rpc_platform_upsert_plan('starter', 'BoutiqueOS Starter', NULL, 'annual', t74_price() + 10, 'USD', true, 10) $q$);
+SELECT t_check('T74g4 neither the paid nor the open invoice moved (snapshots)',
+  t73_q($q$ (SELECT count(*) FROM saas_invoices WHERE subscription_id = t73_sub('a10') AND subtotal = t74_price() - 10) = 2 $q$));
+SELECT t_err('T74g5 voiding needs a reason', $q$ SELECT rpc_platform_void_invoice(t74_inv('a10', 'open'), ' ') $q$, 'REASON_REQUIRED');
+SELECT t_check('T74g6 the open renewal is voided with actor and reason, kept as history, audited',
+  (SELECT r ->> 'status' = 'void' AND NOT (r ->> 'replayed')::boolean FROM rpc_platform_void_invoice(t74_inv('a10', 'open'), 'fiyat degisti') r)
+  AND t73_q($q$ (SELECT status = 'void' AND voided_by = t_get('u8') AND void_reason = 'fiyat degisti' AND voided_at IS NOT NULL FROM saas_invoices WHERE id = t74_inv('a10', 'void'))
+                AND (SELECT count(*) FROM platform_audit_log WHERE action = 'void_invoice' AND target_business_id = t73_biz('a10')) = 1 $q$));
+SELECT t_check('T74g7 voiding again replays', (SELECT (r ->> 'replayed')::boolean FROM rpc_platform_void_invoice(t74_inv('a10', 'void'), 'tekrar') r));
+SELECT t_err('T74g8 a void invoice is immutable too', $q$ SELECT rpc_platform_record_payment(t74_inv('a10', 'void'), 1, 'USD', 'bank_transfer', 'X9') $q$, 'INVALID_STATE');
+SELECT t_check('T74g9 the re-issued renewal covers the same period at the NEW catalogue price and a new number',
+  (SELECT NOT (r ->> 'replayed')::boolean FROM rpc_platform_issue_invoice(t73_sub('a10')) r)
+  AND t73_q($q$ SELECT n.billing_period_start = v.billing_period_start AND n.subtotal = t74_price() AND n.invoice_number > v.invoice_number AND n.status = 'open'
+                FROM saas_invoices n, saas_invoices v WHERE n.id = t74_inv('a10', 'open') AND v.id = t74_inv('a10', 'void') $q$));
+SELECT t_ok('T74g10 the catalogue price goes back', $q$ SELECT rpc_platform_upsert_plan('starter', 'BoutiqueOS Starter', NULL, 'annual', t74_price() - 10, 'USD', true, 10) $q$);
+SELECT t_check('T74g11 the paid invoice and its item still carry the price they were issued at',
+  t73_q($q$ (SELECT subtotal = t74_price() FROM saas_invoices WHERE id = t74_inv('a10', 'paid')) AND (SELECT unit_amount = t74_price() FROM saas_invoice_items WHERE invoice_id = t74_inv('a10', 'paid')) $q$));
+
+-- ---------------- overdue is derived; the sweep materialises past_due; payment re-activates ----------------
+SELECT t_check('T74h before the due date nothing is overdue',
+  (SELECT (r ->> 'total')::int = 0 FROM rpc_platform_invoices('overdue') r) AND (SELECT (r -> 'invoices' ->> 'overdue')::int = 0 FROM rpc_platform_billing_overview() r));
+SELECT t_logout();
+-- test fixture only: push the open renewal past its due date (the guard forbids this on the code path)
+ALTER TABLE saas_invoices DISABLE TRIGGER trg_saas_invoice_guard;
+UPDATE saas_invoices SET due_at = now() - interval '3 days' WHERE id = t74_inv('a10', 'open');
+ALTER TABLE saas_invoices ENABLE TRIGGER trg_saas_invoice_guard;
+SELECT t_login('u8');
+SELECT t_check('T74h2 overdue is derived from due_at, without any job',
+  (SELECT (r ->> 'total')::int = 1 AND (r -> 'rows' -> 0 ->> 'overdue')::boolean AND (r -> 'rows' -> 0 ->> 'days_overdue')::int >= 3 FROM rpc_platform_invoices('overdue') r)
+  AND t73_q($q$ SELECT status = 'active' FROM business_subscriptions WHERE id = t73_sub('a10') $q$));
+SELECT t_check('T74h3 the sweep marks the subscription past_due (audited) and does nothing to the business',
+  (SELECT (r ->> 'marked_past_due')::int = 1 AND (r ->> 'cancelled_at_period_end')::int = 0 FROM rpc_platform_billing_sweep() r)
+  AND t73_q($q$ (SELECT status = 'past_due' AND ends_at IS NOT NULL FROM business_subscriptions WHERE id = t73_sub('a10'))
+                AND (SELECT status = 'active' FROM businesses WHERE id = t73_biz('a10'))
+                AND (SELECT count(*) FROM platform_audit_log WHERE action = 'billing_sweep' AND target_business_id = t73_biz('a10')) = 1 $q$));
+SELECT t_check('T74h4 a second sweep changes nothing', (SELECT (r ->> 'marked_past_due')::int = 0 FROM rpc_platform_billing_sweep() r));
+SELECT t_logout();
+SELECT t_login('a10');
+SELECT t_check('T74h5 the owner sees the overdue renewal, its grace end and the past_due subscription; the tenant still works',
+  (SELECT (r -> 'invoices' -> 0 ->> 'overdue')::boolean AND r -> 'invoices' -> 0 ? 'grace_ends_at' AND r -> 'subscription' ->> 'status' = 'past_due' FROM rpc_my_billing(t73_biz('a10')) r)
+  AND fn_is_business_active(t73_biz('a10')));
+SELECT t_logout();
+SELECT t_login('u8');
+SELECT t_check('T74h6 paying the renewal in full re-activates the subscription and moves ends_at to the renewal period end',
+  (SELECT (r ->> 'subscription_activated')::boolean FROM rpc_platform_record_payment(t74_inv('a10', 'open'), t74_total('a10', 'open'), 'USD', 'bank_transfer', 'HAVALE-RENEW') r)
+  AND t73_q($q$ SELECT s.status = 'active' AND s.ends_at = i.billing_period_end AND s.starts_at < i.billing_period_start
+                FROM business_subscriptions s JOIN saas_invoices i ON i.id = t74_inv('a10', 'paid') WHERE s.id = t73_sub('a10') $q$));
+SELECT t_check('T74h7 two paid invoices, one void, no open; numbers strictly increase in issue order',
+  t73_q($q$ (SELECT count(*) FILTER (WHERE status = 'paid') = 2 AND count(*) FILTER (WHERE status = 'void') = 1 AND count(*) FILTER (WHERE status = 'open') = 0 FROM saas_invoices WHERE subscription_id = t73_sub('a10'))
+            AND (SELECT count(*) FROM (SELECT invoice_number, lag(invoice_number) OVER (ORDER BY issued_at, created_at) prev FROM saas_invoices) x WHERE prev IS NOT NULL AND invoice_number <= prev) = 0 $q$));
+
+-- ---------------- cancellation ----------------
+SELECT t_err('T74i cancellation needs a reason', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'at_period_end', '') $q$, 'REASON_REQUIRED');
+SELECT t_err('T74i2 the mode is validated', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'later', 'istek') $q$, 'INVALID_MODE');
+SELECT t_check('T74i3 cancel at period end keeps the paid period, clears the renewal date and blocks renewals',
+  (SELECT (r ->> 'cancel_at_period_end')::boolean AND r ->> 'status' = 'active' FROM rpc_platform_cancel_subscription(t73_sub('a10'), 'at_period_end', 'musteri istegi') r)
+  AND t73_q($q$ SELECT status = 'active' AND cancel_at_period_end AND renews_at IS NULL AND ends_at IS NOT NULL FROM business_subscriptions WHERE id = t73_sub('a10') $q$));
+SELECT t_err('T74i4 no renewal is issued for a scheduled cancellation', $q$ SELECT rpc_platform_issue_invoice(t73_sub('a10')) $q$, 'CANCEL_SCHEDULED');
+SELECT t_check('T74i5 the scheduled cancellation is withdrawn ("keep") and the renewal date returns',
+  (SELECT NOT (r ->> 'cancel_at_period_end')::boolean FROM rpc_platform_cancel_subscription(t73_sub('a10'), 'keep', 'vazgecti') r)
+  AND t73_q($q$ SELECT NOT cancel_at_period_end AND renews_at = ends_at FROM business_subscriptions WHERE id = t73_sub('a10') $q$));
+SELECT t_ok('T74i6 a renewal can be issued again', $q$ SELECT rpc_platform_issue_invoice(t73_sub('a10')) $q$);
+SELECT t_err('T74i7 immediate cancellation is refused while an invoice is open', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'immediate', 'kapat') $q$, 'OPEN_INVOICE');
+SELECT t_err('T74i8 the manual status path refuses it for the same reason', $q$ SELECT rpc_platform_set_subscription_status(t73_sub('a10'), 'cancelled') $q$, 'OPEN_INVOICE');
+SELECT t_ok('T74i9 the open renewal is voided', $q$ SELECT rpc_platform_void_invoice(t74_inv('a10', 'open'), 'iptal edildi') $q$);
+-- period-end materialisation: schedule the cancellation, then let the period end (fixture backdate on the subscription)
+SELECT t_ok('T74i10 schedule again', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'at_period_end', 'donem sonu') $q$);
+SELECT t_logout();
+UPDATE business_subscriptions SET ends_at = now() - interval '1 minute' WHERE id = t73_sub('a10');
+SELECT t_login('u8');
+SELECT t_check('T74i11 the sweep cancels the subscription when its period has ended (audited); the business stays active',
+  (SELECT (r ->> 'cancelled_at_period_end')::int = 1 FROM rpc_platform_billing_sweep() r)
+  AND t73_q($q$ (SELECT status = 'cancelled' AND cancelled_at IS NOT NULL FROM business_subscriptions WHERE id = t73_sub('a10')) AND (SELECT status = 'active' FROM businesses WHERE id = t73_biz('a10')) $q$));
+SELECT t_err('T74i12 a cancelled subscription takes no invoice', $q$ SELECT rpc_platform_issue_invoice(t73_sub('a10')) $q$, 'INVALID_STATE');
+SELECT t_err('T74i13 nor a cancellation', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'immediate', 'kapat') $q$, 'INVALID_STATE');
+SELECT t_logout();
+
+-- ---------------- immediate cancellation on a fresh tenant + settings ----------------
+SELECT t_set('a12', 'aaaaaaaa-0000-4000-8000-000000000024');
+INSERT INTO auth.users (id, instance_id, aud, role, email, email_confirmed_at, raw_user_meta_data) VALUES
+  (t_get('a12'), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'applicant-d@boutiqueos.test', now(), '{}') ON CONFLICT (id) DO NOTHING;
+INSERT INTO profiles (id) VALUES (t_get('a12')) ON CONFLICT DO NOTHING;
+SELECT t_login('a12');
+SELECT t_ok('T74j applicant D applies', $q$ SELECT rpc_submit_business_application('ZZ Billing Test', 'TR', 'TRY') $q$);
+SELECT t_logout();
+SELECT t_login('u8');
+SELECT t_ok('T74j2 approved', $q$ SELECT rpc_platform_approve_application(t73_app('a12')) $q$);
+SELECT t_err('T74j3 settings keys are an allow-list', $q$ SELECT rpc_platform_set_billing_setting('vat_rate', 20) $q$, 'INVALID_SETTING');
+SELECT t_err('T74j4 settings values are bounded', $q$ SELECT rpc_platform_set_billing_setting('invoice_due_days', 400) $q$, 'INVALID_VALUE');
+SELECT t_ok('T74j5 the due window becomes 30 days (audited)', $q$ SELECT rpc_platform_set_billing_setting('invoice_due_days', 30) $q$);
+SELECT t_check('T74j6 the new invoice is due in 30 days and the pending subscription is untouched',
+  (SELECT NOT (r ->> 'replayed')::boolean FROM rpc_platform_issue_invoice(t73_sub('a12')) r)
+  AND t73_q($q$ (SELECT due_at = issued_at + interval '30 days' AND currency = 'USD' FROM saas_invoices WHERE id = t74_inv('a12'))
+                AND (SELECT status = 'pending' FROM business_subscriptions WHERE id = t73_sub('a12'))
+                AND (SELECT count(*) FROM platform_audit_log WHERE action = 'set_billing_setting') = 1 $q$));
+SELECT t_ok('T74j7 back to 14 days', $q$ SELECT rpc_platform_set_billing_setting('invoice_due_days', 14) $q$);
+SELECT t_err('T74j8 immediate cancellation waits for the open invoice', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a12'), 'immediate', 'vazgecti') $q$, 'OPEN_INVOICE');
+SELECT t_ok('T74j9 void it', $q$ SELECT rpc_platform_void_invoice(t74_inv('a12'), 'vazgecti') $q$);
+SELECT t_check('T74j10 immediate cancellation ends the subscription now, audited with the mode',
+  (SELECT r ->> 'status' = 'cancelled' FROM rpc_platform_cancel_subscription(t73_sub('a12'), 'immediate', 'vazgecti') r)
+  AND t73_q($q$ (SELECT status = 'cancelled' AND cancelled_at IS NOT NULL AND NOT cancel_at_period_end FROM business_subscriptions WHERE id = t73_sub('a12'))
+                AND (SELECT payload ->> 'mode' = 'immediate' FROM platform_audit_log WHERE action = 'cancel_subscription' AND target_business_id = t73_biz('a12') ORDER BY occurred_at DESC LIMIT 1) $q$));
+
+-- ---------------- lists, pagination, overview ----------------
+SELECT t_check('T74k the invoice list filters by status and searches by number / business code, paginated',
+  (SELECT (r ->> 'total')::int = 6 FROM rpc_platform_invoices() r)              -- T73: 1 paid · a10: 2 paid + 2 void · a12: 1 void
+  AND (SELECT (r ->> 'total')::int = 3 FROM rpc_platform_invoices('paid') r)
+  AND (SELECT (r ->> 'total')::int = 3 FROM rpc_platform_invoices('void') r)
+  AND (SELECT (r ->> 'total')::int = 0 FROM rpc_platform_invoices('open') r)
+  AND (SELECT (r ->> 'total')::int = 4 FROM rpc_platform_invoices(NULL, 'ZZAYLIN2') r)
+  AND (SELECT (r ->> 'total')::int = 6 AND jsonb_array_length(r -> 'rows') = 2 AND (r ->> 'limit')::int = 2 AND (r ->> 'offset')::int = 2 FROM rpc_platform_invoices(NULL, NULL, 2, 2) r)
+  AND (SELECT (r ->> 'total')::int = 1 AND r -> 'rows' -> 0 ->> 'status' = 'paid' FROM rpc_platform_invoices(NULL, t74_no('a10', 'paid')) r));
+SELECT t_err('T74k2 the status filter is validated', $q$ SELECT rpc_platform_invoices('draft') $q$, 'INVALID_STATUS');
+SELECT t_check('T74k3 the subscription list carries business, plan, period, latest invoice and counts',
+  (SELECT (r ->> 'total')::int >= 3 FROM rpc_platform_subscriptions() r)
+  AND (SELECT (r ->> 'total')::int = 1 AND r -> 'rows' -> 0 -> 'business' ->> 'code' = 'ZZAYLIN2' AND (r -> 'rows' -> 0 ->> 'invoice_count')::int = 2
+              AND r -> 'rows' -> 0 -> 'latest_invoice' ->> 'status' = 'paid' AND r -> 'rows' -> 0 -> 'plan' ->> 'code' = 'starter'
+       FROM rpc_platform_subscriptions('cancelled', 'ZZAYLIN2') r));
+SELECT t_check('T74k4 the business detail shows each subscription''s latest invoice and count',
+  (SELECT (r -> 'subscriptions' -> 0 ->> 'invoice_count')::int = 2 AND r -> 'subscriptions' -> 0 -> 'latest_invoice' ->> 'status' = 'paid' AND (r -> 'subscriptions' -> 0 ->> 'cancel_at_period_end')::boolean
+   FROM rpc_platform_business_detail(t73_biz('a10')) r));
+SELECT t_check('T74k5 the overview aggregates by currency and never counts TLC',
+  (SELECT (r -> 'invoices' ->> 'paid_30d')::int = 3 AND (r -> 'invoices' ->> 'open')::int = 0 AND (r -> 'paid_30d_totals' ->> 'USD')::numeric = t73_q_num($q$ SELECT sum(amount) FROM saas_payments $q$)
+          AND (r -> 'subscriptions' ->> 'cancelled')::int >= 2 AND (r ->> 'awaiting_first_invoice')::int = 0
+   FROM rpc_platform_billing_overview() r));
+SELECT t_logout();
+
+-- ---------------- money, TLC, isolation ----------------
+SELECT t_check('T74l amounts are exact decimals (money2), totals add up, no float',
+  (SELECT count(*) FROM saas_invoices WHERE total <> subtotal + tax_amount OR scale(total) > 2 OR scale(amount_paid) > 2) = 0
+  AND (SELECT count(*) FROM saas_payments WHERE scale(amount) > 2) = 0
+  AND (SELECT sum(amount) FROM saas_payments WHERE invoice_id = t74_inv('a10', 'paid')) = (SELECT amount_paid FROM saas_invoices WHERE id = t74_inv('a10', 'paid')));
+SELECT t_check('T74l2 TLC has no invoice, payment or subscription and its status/settings did not move',
+  (SELECT count(*) FROM saas_invoices WHERE business_id = t_get('biz')) = 0 AND (SELECT count(*) FROM saas_payments WHERE business_id = t_get('biz')) = 0
+  AND (SELECT count(*) FROM business_subscriptions WHERE business_id = t_get('biz')) = 0 AND (SELECT status = 'active' FROM businesses WHERE id = t_get('biz')));
+SELECT t_check('T74l3 the POS money tables were not touched by any billing action',
+  (SELECT count(*) FROM sale_payments WHERE business_id = t73_biz('a10')) = 0 AND (SELECT count(*) FROM cash_movements WHERE business_id = t73_biz('a10')) = 0);
+SELECT t_login('a10');
+SELECT t_check('T74l4 the owner of a cancelled subscription still reads own history (2 paid, 2 void), payments listed without actors',
+  (SELECT jsonb_array_length(r -> 'invoices') = 4 AND r -> 'subscription' ->> 'status' = 'cancelled'
+          AND (SELECT count(*) FROM jsonb_array_elements(r -> 'invoices') i WHERE i ->> 'status' = 'paid') = 2
+          AND (SELECT bool_and(NOT (p ? 'recorded_by')) FROM jsonb_array_elements(r -> 'invoices') i, jsonb_array_elements(i -> 'payments') p)
+   FROM rpc_my_billing(t73_biz('a10')) r));
+SELECT t_err('T74l5 the owner cannot read applicant D''s billing', $q$ SELECT rpc_my_billing(t73_biz('a12')) $q$, 'FORBIDDEN');
+SELECT t_err('T74l6 nor void an invoice', $q$ SELECT rpc_platform_void_invoice(t74_inv('a10', 'paid'), 'x') $q$, 'FORBIDDEN');
+SELECT t_err('T74l7 nor cancel own subscription through the platform RPC', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'immediate', 'x') $q$, 'FORBIDDEN');
+SELECT t_err('T74l8 nor run the sweep', $q$ SELECT rpc_platform_billing_sweep() $q$, 'FORBIDDEN');
+SELECT t_logout();
 
 -- ============================================================
 -- SUMMARY

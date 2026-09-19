@@ -1,4 +1,4 @@
-import type { ApplicationStatus, BillingInterval, BusinessStatus, SubscriptionStatus } from "@/lib/saas/model";
+import type { ApplicationStatus, BillingInterval, BillingInvoice, BillingSubscription, BusinessStatus, InvoiceStatus, PaymentMethod, SubscriptionStatus } from "@/lib/saas/model";
 
 /** Shapes returned by the rpc_platform_* reads (JSONB, platform admin only). */
 
@@ -64,10 +64,29 @@ export type PlatformSubscription = {
   billing_interval: BillingInterval;
   starts_at: string | null;
   ends_at: string | null;
+  renews_at: string | null;
   activated_at: string | null;
   cancelled_at: string | null;
   source: string;
   note: string | null;
+  cancel_at_period_end: boolean;
+  lapsed: boolean;
+  latest_invoice: LatestInvoice | null;
+  invoice_count: number;
+};
+
+/** The newest live (non-void) invoice of a subscription, as the lists and the business page show it. */
+export type LatestInvoice = {
+  id: string;
+  invoice_number: string;
+  status: InvoiceStatus;
+  total: number;
+  currency: string;
+  amount_paid: number;
+  due_at: string;
+  overdue: boolean;
+  billing_period_start?: string;
+  billing_period_end?: string;
 };
 
 export type PlatformBusinessDetail = {
@@ -107,10 +126,70 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   set_business_status: "İşletme durumu değişti",
   set_subscription_status: "Abonelik durumu değişti",
   upsert_plan: "Plan güncellendi",
+  issue_invoice: "Fatura kesildi",
+  record_payment: "Ödeme kaydedildi",
+  void_invoice: "Fatura iptal edildi",
+  cancel_subscription: "Abonelik iptali",
+  billing_sweep: "Faturalama taraması",
+  set_billing_setting: "Faturalama ayarı değişti",
 };
 
 /** Payload keys shown in the audit table, in reading order (from → to first). */
-export const AUDIT_PAYLOAD_KEYS = ["from", "to", "reason", "note", "plan", "code"] as const;
+export const AUDIT_PAYLOAD_KEYS = ["from", "to", "mode", "reason", "note", "plan", "code", "invoice_number", "amount", "currency", "method", "reference", "key"] as const;
+
+// ---------------------------------------------------------------- billing console (Phase 13B)
+
+export type PlatformBillingOverview = {
+  settings: { invoice_due_days: number; billing_grace_days: number };
+  invoices: { open: number; overdue: number; paid_30d: number; void: number };
+  open_totals: Record<string, number>;
+  paid_30d_totals: Record<string, number>;
+  subscriptions: Partial<Record<SubscriptionStatus, number>>;
+  awaiting_first_invoice: number;
+  renewal_due_30d: number;
+  lapsed: number;
+  scheduled_cancellations: number;
+};
+
+export type PlatformInvoiceRow = BillingInvoice & { business: { id: string; name: string; code: string }; subscription_id: string };
+export type PlatformInvoiceList = { rows: PlatformInvoiceRow[]; total: number; limit: number; offset: number };
+
+export type PlatformPayment = {
+  id: string;
+  amount: number;
+  currency: string;
+  method: PaymentMethod;
+  status: "recorded" | "reversed";
+  reference: string;
+  paid_at: string;
+  note: string | null;
+  recorded_at: string;
+  recorded_by: string | null;
+};
+
+export type PlatformInvoiceDetail = BillingInvoice & {
+  business: { id: string; name: string; code: string; status: BusinessStatus };
+  subscription: BillingSubscription;
+  issued_by: string | null;
+  voided_by: string | null;
+  items: Array<{ line_no: number; description: string; quantity: number; unit_amount: number; line_total: number }>;
+  payments: PlatformPayment[];
+};
+
+export type PlatformSubscriptionRow = BillingSubscription & {
+  business: { id: string; name: string; code: string; status: BusinessStatus };
+  latest_invoice: LatestInvoice | null;
+  invoice_count: number;
+};
+export type PlatformSubscriptionList = { rows: PlatformSubscriptionRow[]; total: number; limit: number; offset: number };
+
+/** List filters accepted by the RPCs; "overdue" and "lapsed" are derived views, not stored states. */
+export const INVOICE_FILTERS = ["open", "overdue", "paid", "void"] as const;
+export const SUBSCRIPTION_FILTERS = ["pending", "active", "past_due", "cancelled", "expired", "lapsed"] as const;
+export type InvoiceFilter = (typeof INVOICE_FILTERS)[number];
+export type SubscriptionFilter = (typeof SUBSCRIPTION_FILTERS)[number];
+export const INVOICE_FILTER_LABELS: Record<InvoiceFilter, string> = { open: "Ödeme bekliyor", overdue: "Vadesi geçmiş", paid: "Ödendi", void: "İptal" };
+export const SUBSCRIPTION_FILTER_LABELS: Record<SubscriptionFilter, string> = { pending: "Ödeme bekliyor", active: "Aktif", past_due: "Gecikmiş", cancelled: "İptal", expired: "Süresi doldu", lapsed: "Dönemi bitmiş" };
 
 export function pageOffset(page: string | undefined): number {
   const n = Number.parseInt(page ?? "1", 10);

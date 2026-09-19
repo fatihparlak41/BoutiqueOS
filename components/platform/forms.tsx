@@ -147,21 +147,18 @@ export function BusinessStatusForm({ businessId, current }: { businessId: string
   );
 }
 
+/**
+ * Manual moves only. "active" is deliberately absent: since 13B a subscription becomes
+ * active when its invoice is paid (RecordPaymentForm), never by hand. Cancellation has
+ * its own form (at period end / immediate); this one keeps the bookkeeping moves.
+ */
 const SUB_TRANSITIONS: Record<SubscriptionStatus, Array<{ to: SubscriptionStatus; label: string }>> = {
-  pending: [
-    { to: "active", label: "Ödeme alındı — etkinleştir" },
-    { to: "cancelled", label: "İptal et" },
-  ],
+  pending: [],
   active: [
     { to: "past_due", label: "Gecikmiş işaretle" },
-    { to: "cancelled", label: "İptal et" },
     { to: "expired", label: "Süresi doldu" },
   ],
-  past_due: [
-    { to: "active", label: "Ödeme alındı — etkinleştir" },
-    { to: "cancelled", label: "İptal et" },
-    { to: "expired", label: "Süresi doldu" },
-  ],
+  past_due: [{ to: "expired", label: "Süresi doldu" }],
   cancelled: [],
   expired: [],
 };
@@ -170,7 +167,7 @@ export function SubscriptionStatusForm({ subscriptionId, current }: { subscripti
   const [state, formAction, pending] = useActionState(setSubscriptionStatusAction, PLATFORM_IDLE);
   const [target, setTarget] = useState<SubscriptionStatus | null>(null);
   const options = SUB_TRANSITIONS[current];
-  if (options.length === 0) return <p className="text-xs text-text-muted">Bu abonelik kapanmış; yeni dönem için yeni bir abonelik açılır (13B).</p>;
+  if (options.length === 0) return null;
   return (
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="subscription_id" value={subscriptionId} />

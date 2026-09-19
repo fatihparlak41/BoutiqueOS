@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { withFreshJwtRetry } from "@/lib/auth/jwt-skew";
 import { tenantReadOutcome } from "@/lib/auth/session-ready";
-import { readApplicationDraft, type ApplicationDraft, type MyOnboarding, type PublicPlan } from "@/lib/saas/model";
+import { readApplicationDraft, type ApplicationDraft, type MyBilling, type MyOnboarding, type PublicPlan } from "@/lib/saas/model";
 
 /**
  * Read side of onboarding. Every call is one RPC that authorises itself: the public
@@ -69,4 +69,16 @@ export async function noTenantDestination(): Promise<string> {
   // registered, confirmed, never submitted: the draft from /kayit is waiting to be sent
   if (!onboarding.application && draft) return "/basvuru";
   return "/no-access";
+}
+
+/**
+ * The owner's own commercial record (Phase 13B). One RPC that proves the owner role in
+ * the database; managers and staff get FORBIDDEN, which the page never reaches because
+ * it checks the role first. Nothing here can mutate anything.
+ */
+export async function getMyBilling(businessId: string): Promise<MyBilling> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("rpc_my_billing", { p_business_id: businessId });
+  if (error) throw new Error(`Abonelik bilgisi okunamadı: ${error.message}`);
+  return data as MyBilling;
 }

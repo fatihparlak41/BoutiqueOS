@@ -8,6 +8,9 @@ const ITEMS: Array<{ href: string; label: string; exact?: boolean }> = [
   { href: "/platform", label: "Genel bakış", exact: true },
   { href: "/platform/basvurular", label: "Başvurular" },
   { href: "/platform/isletmeler", label: "İşletmeler" },
+  { href: "/platform/faturalama", label: "Faturalama", exact: true },
+  { href: "/platform/faturalar", label: "Faturalar" },
+  { href: "/platform/abonelikler", label: "Abonelikler" },
   { href: "/platform/planlar", label: "Planlar" },
 ];
 

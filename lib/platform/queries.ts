@@ -3,7 +3,20 @@ import "server-only";
 import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { PAGE_SIZE, type PlatformApplicationDetail, type PlatformApplicationList, type PlatformBusinessDetail, type PlatformBusinessList, type PlatformPlan } from "@/lib/platform/model";
+import {
+  PAGE_SIZE,
+  type InvoiceFilter,
+  type PlatformApplicationDetail,
+  type PlatformApplicationList,
+  type PlatformBillingOverview,
+  type PlatformBusinessDetail,
+  type PlatformBusinessList,
+  type PlatformInvoiceDetail,
+  type PlatformInvoiceList,
+  type PlatformPlan,
+  type PlatformSubscriptionList,
+  type SubscriptionFilter,
+} from "@/lib/platform/model";
 
 /**
  * Platform console reads. Every RPC below proves the platform role itself
@@ -68,4 +81,37 @@ export async function listPlans(): Promise<PlatformPlan[]> {
   const { data, error } = await supabase.rpc("rpc_platform_plans");
   if (error) throw new Error(`Planlar okunamadı: ${error.message}`);
   return (data ?? []) as PlatformPlan[];
+}
+
+// ---------------------------------------------------------------- billing (Phase 13B)
+
+export async function getBillingOverview(): Promise<PlatformBillingOverview> {
+  const { supabase } = await requirePlatformAdmin();
+  const { data, error } = await supabase.rpc("rpc_platform_billing_overview");
+  if (error) throw new Error(`Faturalama özeti okunamadı: ${error.message}`);
+  return data as PlatformBillingOverview;
+}
+
+export async function listInvoices(status: InvoiceFilter | null, q: string | null, offset: number): Promise<PlatformInvoiceList> {
+  const { supabase } = await requirePlatformAdmin();
+  const { data, error } = await supabase.rpc("rpc_platform_invoices", { p_status: status, p_q: q, p_limit: PAGE_SIZE, p_offset: offset });
+  if (error) throw new Error(`Faturalar okunamadı: ${error.message}`);
+  return data as PlatformInvoiceList;
+}
+
+export async function getInvoice(id: string): Promise<PlatformInvoiceDetail | null> {
+  const { supabase } = await requirePlatformAdmin();
+  const { data, error } = await supabase.rpc("rpc_platform_invoice_detail", { p_invoice_id: id });
+  if (error) {
+    if (/NOT_FOUND/.test(error.message)) return null;
+    throw new Error(`Fatura okunamadı: ${error.message}`);
+  }
+  return data as PlatformInvoiceDetail;
+}
+
+export async function listSubscriptions(status: SubscriptionFilter | null, q: string | null, offset: number): Promise<PlatformSubscriptionList> {
+  const { supabase } = await requirePlatformAdmin();
+  const { data, error } = await supabase.rpc("rpc_platform_subscriptions", { p_status: status, p_q: q, p_limit: PAGE_SIZE, p_offset: offset });
+  if (error) throw new Error(`Abonelikler okunamadı: ${error.message}`);
+  return data as PlatformSubscriptionList;
 }

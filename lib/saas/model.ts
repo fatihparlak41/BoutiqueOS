@@ -135,5 +135,79 @@ export type RegisterState = { error: string | null; done: boolean; email: string
 export const REGISTER_IDLE: RegisterState = { error: null, done: false, email: null };
 export type ApplyState = { error: string | null };
 export const APPLY_IDLE: ApplyState = { error: null };
-export type PlatformActionState = { error: string | null; ok: boolean };
+export type PlatformActionState = { error: string | null; ok: boolean; message?: string };
 export const PLATFORM_IDLE: PlatformActionState = { error: null, ok: false };
+
+// ---------------------------------------------------------------- billing (Phase 13B, manual billing only)
+
+export type InvoiceStatus = "open" | "paid" | "void";
+export type PaymentMethod = "bank_transfer" | "cash_manual" | "other_manual";
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  open: "Ödeme bekliyor",
+  paid: "Ödendi",
+  void: "İptal edildi",
+};
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  bank_transfer: "Havale / EFT",
+  cash_manual: "Nakit (elden)",
+  other_manual: "Diğer (manuel)",
+};
+
+/** The three ways money can arrive in 13B. There is no card, no checkout, no provider. */
+export const PAYMENT_METHODS: PaymentMethod[] = ["bank_transfer", "cash_manual", "other_manual"];
+
+/** What the owner and the platform both see of an invoice (fn_saas_invoice_json). */
+export type BillingInvoice = {
+  id: string;
+  invoice_number: string;
+  status: InvoiceStatus;
+  overdue: boolean;
+  days_overdue: number;
+  grace_ends_at: string;
+  plan_code: string;
+  plan_name: string;
+  billing_interval: BillingInterval;
+  currency: string;
+  subtotal: number;
+  tax_amount: number;
+  tax_policy: "none_unconfigured";
+  total: number;
+  amount_paid: number;
+  balance: number;
+  billing_period_start: string;
+  billing_period_end: string;
+  issued_at: string;
+  due_at: string;
+  paid_at: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  note: string | null;
+};
+
+/** What the owner sees of a payment: amount, method, date, reference. No actor, no provider. */
+export type BillingPaymentPublic = { amount: number; currency: string; method: PaymentMethod; paid_at: string; reference: string };
+
+export type BillingSubscription = {
+  id: string;
+  status: SubscriptionStatus;
+  starts_at: string | null;
+  ends_at: string | null;
+  renews_at: string | null;
+  activated_at: string | null;
+  cancelled_at: string | null;
+  cancel_at_period_end: boolean;
+  lapsed: boolean;
+  plan: { id: string; code: string; name: string; price_amount: number; currency: string; billing_interval: BillingInterval } | null;
+};
+
+export type MyBilling = {
+  subscription: BillingSubscription | null;
+  invoices: Array<BillingInvoice & { payments: BillingPaymentPublic[] }>;
+  settings: { billing_grace_days: number };
+};
+
+export function formatMoney(amount: number, currency: string): string {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount);
+}
