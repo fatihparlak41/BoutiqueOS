@@ -65,8 +65,8 @@ export function ReservationDetail({ reservation: r, canFulfil }: { reservation: 
         <Link href="/app/rezervasyonlar" className="text-xs text-muted underline-offset-2 hover:underline">← Rezervasyonlar</Link>
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="font-serif text-xl leading-tight tracking-tightish" data-numeric>{r.reservation_number}</h2>
-          <span className={cn("border px-1.5 py-0.5 text-2xs", r.status === "active" && !r.is_past_due ? "border-success/40 text-success" : r.is_past_due ? "border-danger/40 text-danger" : "border-line-strong text-muted")} data-testid="rsv-status">
-            {r.is_past_due ? "Süresi geçti (bekliyor)" : RESERVATION_STATUS_LABELS[r.status]}
+          <span className={cn("border px-1.5 py-0.5 text-2xs", r.status === "active" && !r.is_past_due ? "border-success/40 text-success" : r.is_past_due ? "border-warning/40 text-warning" : "border-line-strong text-muted")} data-testid="rsv-status">
+            {r.is_past_due ? "Süresi doldu" : RESERVATION_STATUS_LABELS[r.status]}
           </span>
         </div>
         <p className="text-xs text-muted" data-numeric>{formatDateTime(r.created_at)} · {r.branch_name}{r.created_by_name ? ` · ${r.created_by_name}` : ""}</p>
@@ -90,7 +90,7 @@ export function ReservationDetail({ reservation: r, canFulfil }: { reservation: 
               <ProductThumb url={it.variant.thumbnail_url} alt={it.variant.product_name} size="sm" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-ink">{it.variant.product_name}</p>
-                <p className="truncate text-2xs text-muted">{[it.variant.color, it.variant.size].filter(Boolean).join(" / ") || it.variant.options || "Tek varyant"} · <span data-numeric>{it.variant.sku}</span></p>
+                <p className="truncate text-2xs text-muted">{[it.variant.color, it.variant.size].filter(Boolean).join(" / ") || it.variant.options || "Tek seçenek"} · <span data-numeric>{it.variant.sku}</span></p>
                 {editable ? <p className="text-2xs text-muted" data-numeric>{it.available} adet başka müsait</p> : null}
               </div>
               {editing ? (

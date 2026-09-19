@@ -2,8 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireTenant } from "@/lib/tenant";
 import { getOnlineOrder } from "@/lib/orders/queries";
-import { EVENT_LABELS, orderCaps } from "@/lib/orders/model";
-import { ORDER_STATUS_LABELS, formatShopPrice } from "@/lib/shop/model";
+import { EVENT_LABELS, orderCaps, MERCHANT_STATUS_LABELS } from "@/lib/orders/model";
+import { formatShopPrice } from "@/lib/shop/model";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
 import { Badge } from "@/components/ui/badge";
@@ -40,7 +40,7 @@ export default async function OnlineOrderDetailPage({ params }: { params: Promis
         eyebrow={{ href: "/app/online-siparisler", label: "Online Siparişler" }}
         title={o.order_number}
         description={<>{o.customer_name} · <span data-numeric>{o.phone}</span>{o.email ? ` · ${o.email}` : ""} · talep {fmtDateTime(o.created_at)} · mağazadan teslim ({o.pickup?.branch ?? "—"})</>}
-        actions={<span className="flex gap-1"><OrderPill status={o.stored_status} />{lapsed ? <Badge tone="warning">{ORDER_STATUS_LABELS[o.status]}</Badge> : null}</span>}
+        actions={<span className="flex gap-1"><OrderPill status={o.stored_status} />{lapsed ? <Badge tone="warning">{MERCHANT_STATUS_LABELS[o.status]}</Badge> : null}</span>}
       />
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">

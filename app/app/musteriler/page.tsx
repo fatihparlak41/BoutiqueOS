@@ -2,6 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { listRecentCustomers, listSources, loadCrmContext } from "@/lib/crm/queries";
 import { CustomerSearch } from "@/components/crm/customer-search";
+import { PageHeader } from "@/components/ui/page-header";
+import { Button } from "@/components/ui/button";
+import { UserPlus } from "lucide-react";
 
 export const metadata = { title: "Müşteriler · BoutiqueOS" };
 
@@ -12,13 +15,18 @@ export default async function CustomersPage() {
   const [recent, sources] = await Promise.all([listRecentCustomers(30), listSources()]);
   return (
     <div className="max-w-3xl space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="font-serif text-xl leading-tight tracking-tightish">Müşteriler</h2>
-          <p className="mt-1 text-xs text-muted">Ad, telefon, e-posta ya da Instagram ile arayın; satış ve rezervasyon geçmişi müşteri sayfasında.</p>
-        </div>
-        <Link href="/app/musteriler/yeni" className="inline-flex h-11 items-center bg-primary px-4 text-sm text-primary-foreground sm:h-9" data-testid="customer-new">Yeni müşteri</Link>
-      </header>
+      <PageHeader
+        title="Müşteriler"
+        description="Kim ne aldı, kim ne bekliyor — satış ve rezervasyon geçmişi müşteri sayfasında."
+        actions={
+          <Link href="/app/musteriler/yeni" data-testid="customer-new">
+            <Button variant="accent">
+              <UserPlus aria-hidden className="h-4 w-4" />
+              Yeni müşteri
+            </Button>
+          </Link>
+        }
+      />
       <CustomerSearch recent={recent} sources={sources} />
     </div>
   );

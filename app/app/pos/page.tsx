@@ -6,6 +6,9 @@ import type { PosOnlineOrder, PosReservation } from "@/lib/pos/model";
 import { formatDateTime } from "@/lib/receiving/format";
 import { PosTerminal } from "@/components/pos/pos-terminal";
 import { CreateRegisterForm, OpenSessionForm } from "@/components/pos/session-panel";
+import { PageHeader } from "@/components/ui/page-header";
+import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/catalog/intake/primitives";
 
 export const metadata = { title: "Kasa · BoutiqueOS" };
 
@@ -63,43 +66,40 @@ export default async function PosPage({ searchParams }: { searchParams: Promise<
 
   return (
     <div className="max-w-6xl space-y-6">
-      <header>
-        <h2 className="font-serif text-xl leading-tight tracking-tightish">Kasa</h2>
-        <p className="mt-1 text-xs text-muted">{tenant.branch?.name ?? "—"} · barkod okutun, sepeti kurun, ödemeyi alın.</p>
-      </header>
+      <PageHeader title="Kasa" description={`${tenant.branch?.name ?? "—"} · barkod okut, sepeti kur, ödemeyi al.`} />
 
       {registers.length === 0 ? (
         caps.canManageRegisters ? (
           <CreateRegisterForm />
         ) : (
-          <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">Bu şubede henüz kasa tanımlı değil. Yönetici bir kasa oluşturmalı.</p>
+          <Notice tone="info">Bu şubede henüz kasa tanımlı değil. Kasayı işletme sahibi ya da yönetici oluşturur.</Notice>
         )
       ) : null}
 
       {registers.length > 0 && !anyOpen ? (
         <div className="space-y-4">
-          <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">
-            {caps.canManageRegisters ? "Satış için açık bir kasa oturumu gerekir." : "Satış için açık bir kasa oturumu gerekir. Kasayı yönetici açar."}
-          </p>
+          <Notice tone="info">
+            {caps.canManageRegisters ? "Satış için önce kasayı aç." : "Satış için açık bir kasa gerekir; kasayı işletme sahibi ya da yönetici açar."}
+          </Notice>
           {caps.canManageRegisters ? <OpenSessionForm registers={registers} /> : null}
         </div>
       ) : null}
 
-      {reservationNotice ? <p className="border-l-2 border-danger bg-panel px-3 py-2 text-xs text-danger" role="alert">{reservationNotice}</p> : null}
-      {orderNotice ? <p className="border-l-2 border-danger bg-panel px-3 py-2 text-xs text-danger" role="alert">{orderNotice}</p> : null}
+      {reservationNotice ? <Notice tone="danger">{reservationNotice}</Notice> : null}
+      {orderNotice ? <Notice tone="danger">{orderNotice}</Notice> : null}
       {anyOpen ? <PosTerminal key={order?.id ?? reservation?.id ?? "free"} registers={registers} members={members} caps={caps} reservation={reservation} order={order} /> : null}
 
       {anyOpen && pending.length > 0 && !reservation ? (
         <section className="space-y-2" data-testid="pos-reservations">
-          <h3 className="text-sm font-medium tracking-tightish">Bekleyen rezervasyonlar</h3>
+          <h3 className="text-sm font-medium tracking-tightish">Teslim bekleyen rezervasyonlar</h3>
           <ul className="divide-y divide-line border-y border-line text-sm">
             {pending.map((r) => (
               <li key={r.id} className="flex items-center justify-between gap-3 py-2">
                 <div className="min-w-0">
                   <p data-numeric>{r.reservation_number} <span className="text-muted">· {r.customer?.full_name ?? "—"}</span></p>
-                  <p className="truncate text-2xs text-muted" data-numeric>{r.items.map((i) => `${i.quantity}× ${i.variant.product_name}`).join(", ")} · {formatDateTime(r.expires_at)}</p>
+                  <p className="truncate text-2xs text-muted" data-numeric>{r.items.map((i) => `${i.quantity}× ${i.variant.product_name}`).join(", ")} · son gün {formatDateTime(r.expires_at)}</p>
                 </div>
-                <Link href={`/app/pos?rezervasyon=${r.id}`} className="inline-flex h-11 shrink-0 items-center border border-line-strong px-3 text-xs sm:h-9" data-testid="pos-fulfil">Teslim et</Link>
+                <Link href={`/app/pos?rezervasyon=${r.id}`} data-testid="pos-fulfil"><Button variant="outline" size="sm">Teslim et</Button></Link>
               </li>
             ))}
           </ul>

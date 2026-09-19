@@ -16,7 +16,7 @@ import { formatQuantity } from "@/lib/receiving/format";
  * Purchase cost never appears here — it is not in VariantRow to begin with.
  */
 function Combination({ variant }: { variant: VariantRow }) {
-  if (variant.options.length === 0) return <span className="text-text-muted">Tek varyant</span>;
+  if (variant.options.length === 0) return <span className="text-text-muted">Tek seçenek</span>;
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       {variant.options.map((o) =>
@@ -91,11 +91,10 @@ export function VariantMatrix({
                       </div>
                       <Badge tone={v.status === "active" ? "success" : "quiet"}>{VARIANT_STATUS_LABELS[v.status]}</Badge>
                     </div>
-                    <p className="mt-1 text-2xs text-text-muted" data-numeric>{v.sku}</p>
                     <p className="mt-1 text-2xs"><Codes variant={v} /></p>
                     <p className="mt-2 flex flex-wrap gap-x-4 text-xs text-text-secondary" data-numeric>
                       <span>{formatPrice(v.sale_price_override ?? defaultPrice)}</span>
-                      {st ? <span>uygun {formatQuantity(st.available)}</span> : null}
+                      {st ? <span>satılabilir {formatQuantity(st.available)}</span> : null}
                     </p>
                   </div>
                 </CardBody>
@@ -108,11 +107,10 @@ export function VariantMatrix({
       <div className="hidden lg:block">
         <TableShell minWidth="52rem">
           <THead>
-            <TH>Varyant</TH>
-            <TH>SKU</TH>
+            <TH>Seçenek</TH>
             <TH>Barkod</TH>
             <TH align="right">Fiyat</TH>
-            {stock ? <TH align="right">Uygun</TH> : null}
+            {stock ? <TH align="right">Satılabilir</TH> : null}
             <TH>Durum</TH>
           </THead>
           <TBody>
@@ -129,7 +127,6 @@ export function VariantMatrix({
                       </CellTitle>
                     </span>
                   </TD>
-                  <TD muted numeric nowrap>{v.sku}</TD>
                   <TD muted><Codes variant={v} /></TD>
                   <TD muted numeric align="right" nowrap>
                     {formatPrice(v.sale_price_override ?? defaultPrice)}

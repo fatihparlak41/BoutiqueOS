@@ -1,34 +1,21 @@
 import Link from "next/link";
-import { formatQuantity } from "@/lib/receiving/format";
-import { BUCKET_LABELS, type StockRow } from "@/lib/stock/model";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardBody } from "@/components/ui/card";
 import { CellTitle, TBody, TD, TH, THead, TR, TableShell, rowLinkClass } from "@/components/ui/table";
+import { formatQuantity } from "@/lib/receiving/format";
+import type { StockRow } from "@/lib/stock/model";
+import { cn } from "@/lib/utils";
 
 /**
- * Two presentations of one array. The page fetches `rows` once and hands the same data to
- * both; nothing is queried or recomputed here.
+ * "Neyden kaç tane var?" — the stock list in a shop's words. Three numbers matter on
+ * the floor: Rafta (everything on hand), Ayrılmış (held for a customer) and Satılabilir
+ * (what can be sold now). Damaged / quarantine appear only when they are not zero.
  *
- * A 62rem table is fine at a desk and useless on a phone — checking "do we have an M?"
- * should not start with a sideways scroll. Below lg the rows become cards that lead with
- * the number a salesperson acts on (uygun), and quarantine/damaged appear only when they
- * are not zero, so the common case stays quiet.
+ * Phone: one compact row per colour · size, the sellable number first; details unfold
+ * on the variant page. Desktop: a table with the same three numbers up front.
  */
-
-function Metric({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
-  return (
-    <div>
-      <dt className="text-2xs text-text-muted">{label}</dt>
-      <dd className={strong ? "text-lg font-medium text-text-primary" : "text-sm text-text-secondary"} data-numeric>
-        {formatQuantity(value)}
-      </dd>
-    </div>
-  );
-}
-
 function Identity({ row }: { row: StockRow }) {
   return (
-    <CellTitle sub={row.options}>
+    <CellTitle sub={row.options === "Seçeneksiz" ? "Tek seçenek" : row.options}>
       <Link href={`/app/stok/${row.variant_id}`} className={rowLinkClass}>
         {row.product_name}
       </Link>
@@ -37,42 +24,36 @@ function Identity({ row }: { row: StockRow }) {
   );
 }
 
+function Extras({ row, compact = false }: { row: StockRow; compact?: boolean }) {
+  if (row.quarantine === 0 && row.damaged === 0) return null;
+  return (
+    <span className={cn("flex flex-wrap gap-1.5", compact ? "mt-1.5" : "")}>
+      {row.quarantine > 0 ? <Badge tone="warning">Karantina <span data-numeric>{formatQuantity(row.quarantine)}</span></Badge> : null}
+      {row.damaged > 0 ? <Badge tone="danger">Hasarlı <span data-numeric>{formatQuantity(row.damaged)}</span></Badge> : null}
+    </span>
+  );
+}
+
 export function StockCards({ rows }: { rows: StockRow[] }) {
   return (
-    <ul className="space-y-2 lg:hidden">
+    <ul className="divide-y divide-border border-y border-border lg:hidden" data-testid="stock-cards">
       {rows.map((row) => (
-        <li key={row.variant_id}>
-          <Card>
-            <CardBody>
-              <Identity row={row} />
-              <p className="mt-1 text-2xs text-text-muted" data-numeric>
-                {row.sku}
-                {row.primary_barcode ? `  ${row.primary_barcode}` : ""}
-              </p>
-
-              <dl className="mt-3 grid grid-cols-4 gap-3 border-t border-border pt-3">
-                <Metric label="Uygun" value={row.available} strong />
-                <Metric label={BUCKET_LABELS.sellable} value={row.sellable} />
-                <Metric label="Rezerve" value={row.reserved} />
-                <Metric label="Toplam" value={row.on_hand} />
-              </dl>
-
-              {row.quarantine > 0 || row.damaged > 0 ? (
-                <p className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-                  {row.quarantine > 0 ? (
-                    <Badge tone="warning">
-                      {BUCKET_LABELS.quarantine} <span data-numeric>{formatQuantity(row.quarantine)}</span>
-                    </Badge>
-                  ) : null}
-                  {row.damaged > 0 ? (
-                    <Badge tone="danger">
-                      {BUCKET_LABELS.damaged} <span data-numeric>{formatQuantity(row.damaged)}</span>
-                    </Badge>
-                  ) : null}
-                </p>
-              ) : null}
-            </CardBody>
-          </Card>
+        <li key={row.variant_id} className="py-3">
+          <Link href={`/app/stok/${row.variant_id}`} className="flex items-center gap-3 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-text-primary">
+                {row.product_name}
+                {row.product_status === "archived" ? <Badge tone="quiet" className="ml-2 align-middle">Arşivde</Badge> : null}
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-text-secondary">{row.options === "Seçeneksiz" ? "Tek seçenek" : row.options}</span>
+              {row.reserved > 0 ? <span className="mt-0.5 block text-2xs text-text-muted" data-numeric>Ayrılmış {formatQuantity(row.reserved)} · Rafta {formatQuantity(row.on_hand)}</span> : null}
+              <Extras row={row} compact />
+            </span>
+            <span className="shrink-0 text-right">
+              <span className={cn("block text-2xl font-medium leading-none", row.available > 0 ? "text-text-primary" : "text-warning")} data-numeric>{formatQuantity(row.available)}</span>
+              <span className="mt-1 block text-2xs text-text-muted">satılabilir</span>
+            </span>
+          </Link>
         </li>
       ))}
     </ul>
@@ -81,36 +62,25 @@ export function StockCards({ rows }: { rows: StockRow[] }) {
 
 export function StockTable({ rows }: { rows: StockRow[] }) {
   return (
-    <div className="hidden lg:block">
-      <TableShell minWidth="62rem">
+    <div className="hidden lg:block" data-testid="stock-table">
+      <TableShell minWidth="52rem">
         <THead>
-          <TH>Ürün / varyant</TH>
-          <TH>SKU / barkod</TH>
-          <TH align="right">{BUCKET_LABELS.sellable}</TH>
-          <TH align="right">{BUCKET_LABELS.quarantine}</TH>
-          <TH align="right">{BUCKET_LABELS.damaged}</TH>
-          <TH align="right">Toplam</TH>
-          <TH align="right">Rezerve</TH>
-          <TH align="right">Uygun</TH>
+          <TH>Ürün</TH>
+          <TH>Barkod</TH>
+          <TH align="right">Rafta</TH>
+          <TH align="right">Ayrılmış</TH>
+          <TH align="right">Satılabilir</TH>
+          <TH>Durum</TH>
         </THead>
         <TBody>
           {rows.map((row) => (
             <TR key={row.variant_id}>
-              <TD>
-                <Identity row={row} />
-              </TD>
-              <TD muted numeric>
-                {row.sku}
-                {row.primary_barcode ? (
-                  <span className="mt-0.5 block text-2xs text-text-muted">{row.primary_barcode}</span>
-                ) : null}
-              </TD>
-              <TD muted numeric align="right">{formatQuantity(row.sellable)}</TD>
-              <TD muted numeric align="right">{formatQuantity(row.quarantine)}</TD>
-              <TD muted numeric align="right">{formatQuantity(row.damaged)}</TD>
-              <TD numeric align="right" className="font-medium">{formatQuantity(row.on_hand)}</TD>
+              <TD><Identity row={row} /></TD>
+              <TD muted numeric>{row.primary_barcode ?? <span className="text-text-muted">—</span>}</TD>
+              <TD numeric align="right">{formatQuantity(row.on_hand)}</TD>
               <TD muted numeric align="right">{formatQuantity(row.reserved)}</TD>
-              <TD numeric align="right" className="font-medium">{formatQuantity(row.available)}</TD>
+              <TD numeric align="right" className={cn("font-medium", row.available <= 0 && "text-warning")}>{formatQuantity(row.available)}</TD>
+              <TD><Extras row={row} /></TD>
             </TR>
           ))}
         </TBody>

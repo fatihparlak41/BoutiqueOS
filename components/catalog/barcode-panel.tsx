@@ -65,7 +65,7 @@ export function BarcodePanel({
       <h5 className="text-xs font-medium text-ink-70">Barkodlar</h5>
 
       {variant.barcodes.length === 0 ? (
-        <p className="text-2xs text-muted">Bu varyantın barkodu yok.</p>
+        <p className="text-2xs text-muted">Bu seçeneğin barkodu yok.</p>
       ) : (
         <ul className="divide-y divide-line border-y border-line">
           {variant.barcodes.map((barcode) => (

@@ -5,11 +5,9 @@ import { countCaps } from "@/lib/stock/count-model";
 import { Button } from "@/components/ui/button";
 import { STOCK_STATE_LABELS, type StockState } from "@/lib/stock/model";
 import { listBrands, listCategories } from "@/lib/catalog/queries";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { PageHeader } from "@/components/ui/page-header";
-import { FilterBar, FilterField } from "@/components/ui/filter-bar";
+import { SearchFilters } from "@/components/ui/search-filters";
+import { Boxes, ClipboardCheck } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StockCards, StockTable } from "@/components/stock/stock-rows";
 
@@ -54,83 +52,49 @@ export default async function StockPage({
 
   const hasFilter = Boolean(search || categoryId || brandId || state || includeArchived);
   const activeBranch = rows[0]?.branch_name ?? branches.find((b) => b.id === branchId)?.name ?? branches[0]?.name ?? "—";
+  const carry = { ...(search ? { q: search } : {}), ...(categoryId ? { kategori: categoryId } : {}), ...(brandId ? { marka: brandId } : {}), ...(branchId ? { sube: branchId } : {}), ...(state ? { durum: state } : {}) };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Stok"
-        description="Miktarlar değişmez stok defterinden gelir. Bu ekranda elle stok girişi yoktur."
+        description={`Neyden kaç tane var — ${activeBranch}.`}
         actions={
           countCaps(role).canCount ? (
             <Link href="/app/stok/sayim">
-              <Button size="sm" variant="outline">Stok sayımı</Button>
+              <Button variant="accent">
+                <ClipboardCheck aria-hidden className="h-4 w-4" />
+                Stok say
+              </Button>
             </Link>
           ) : undefined
         }
       />
 
-      <FilterBar clearHref="/app/stok" hasFilter={hasFilter}>
-        <FilterField wide>
-          <Label htmlFor="q">Ara</Label>
-          <Input id="q" name="q" defaultValue={search} placeholder="Ürün adı, SKU veya barkod" spellCheck={false} />
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="kategori">Kategori</Label>
-          <Select id="kategori" name="kategori" defaultValue={categoryId}>
-            <option value="">Tümü</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="marka">Marka</Label>
-          <Select id="marka" name="marka" defaultValue={brandId}>
-            <option value="">Tümü</option>
-            {brands.map((brand) => (
-              <option key={brand.id} value={brand.id}>
-                {brand.name}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="sube">Şube</Label>
-          <Select id="sube" name="sube" defaultValue={branchId}>
-            {branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-        <FilterField>
-          <Label htmlFor="durum">Stok durumu</Label>
-          <Select id="durum" name="durum" defaultValue={state ?? ""}>
-            <option value="">Tümü</option>
-            {Object.entries(STOCK_STATE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </FilterField>
-      </FilterBar>
+      <SearchFilters
+        basePath="/app/stok"
+        search={search}
+        placeholder="Ürün adı ya da barkod okut"
+        hidden={{ ...(branchId ? { sube: branchId } : {}), ...(includeArchived ? { arsiv: "1" } : {}) }}
+        inline
+        selects={[
+          { name: "kategori", label: "Kategori", value: categoryId, options: categories.map((c) => ({ value: c.id, label: c.name })) },
+          { name: "marka", label: "Marka", value: brandId, options: brands.map((b) => ({ value: b.id, label: b.name })) },
+          ...(branches.length > 1 ? [{ name: "sube", label: "Şube", value: branchId, options: branches.map((b) => ({ value: b.id, label: b.name })), allLabel: "Varsayılan" }] : []),
+          { name: "durum", label: "Stok durumu", value: state ?? "", options: Object.entries(STOCK_STATE_LABELS).map(([value, label]) => ({ value, label })) },
+        ]}
+      />
 
       {rows.length === 0 ? (
         hasFilter ? (
-          <EmptyState
-            compact
-            title="Bu filtrelere uyan varyant yok"
-            description="Aramayı daraltmayı ya da filtreleri temizlemeyi deneyin."
-          />
+          <EmptyState compact title="Bu aramaya uyan ürün yok" description="Yazımı kontrol et ya da filtreleri temizle." action={<Link href="/app/stok"><Button variant="outline" size="sm">Filtreleri temizle</Button></Link>} />
         ) : (
           <EmptyState
             editorial
-            title="Stokta henüz bir şey yok"
-            description="Önce ürün ve varyant tanımlayın, sonra mal kabulle stoğa alın. Miktarlar burada kendiliğinden görünür."
+            icon={<Boxes />}
+            title="Rafta henüz bir şey yok"
+            description="Ürünlerini ekle, sonra raftakileri say; miktarlar burada kendiliğinden görünür."
+            action={countCaps(role).canCount ? <Link href="/app/stok/sayim"><Button variant="outline">Stok say</Button></Link> : undefined}
           />
         )
       ) : (
@@ -138,9 +102,8 @@ export default async function StockPage({
           <StockCards rows={rows} />
           <StockTable rows={rows} />
           <p className="text-2xs leading-relaxed text-text-muted" data-numeric>
-            {rows.length} varyant, şube: {activeBranch}. Toplam = satılabilir + karantina + hasarlı; uygun =
-            satılabilir − rezerve. Arşivdeki ürünler yalnız stoğu kaldığı sürece listelenir
-            {includeArchived ? null : <> · <Link href={{ pathname: "/app/stok", query: { ...(search ? { q: search } : {}), ...(categoryId ? { kategori: categoryId } : {}), ...(brandId ? { marka: brandId } : {}), ...(branchId ? { sube: branchId } : {}), ...(state ? { durum: state } : {}), arsiv: "1" } }} className="underline underline-offset-4 hover:text-text-primary">arşivdekilerin tümünü göster</Link></>}.
+            {rows.length} ürün seçeneği · {activeBranch}. Satılabilir = rafta − ayrılmış (hasarlı ve karantina sayılmaz). Arşivdeki ürünler yalnız stoğu kaldığı sürece listelenir
+            {includeArchived ? null : <> · <Link href={{ pathname: "/app/stok", query: { ...carry, arsiv: "1" } }} className="underline underline-offset-4 hover:text-text-primary">arşivdekilerin tümünü göster</Link></>}.
           </p>
         </>
       )}

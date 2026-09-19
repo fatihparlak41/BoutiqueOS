@@ -265,7 +265,7 @@ export function ReturnsTerminal({ registers, members, caps, initialSaleId }: { r
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{l.product_name}</p>
-                  <p className="truncate text-2xs text-muted">{l.options || "Tek varyant"} · <span data-numeric>{l.sku}</span> · <span data-numeric>{l.quantity} × {money(l.unit_price_at_sale)}</span>{l.returned_quantity > 0 ? ` · ${l.returned_quantity} iade edildi` : ""}</p>
+                  <p className="truncate text-2xs text-muted">{l.options || "Tek seçenek"} · <span data-numeric>{l.sku}</span> · <span data-numeric>{l.quantity} × {money(l.unit_price_at_sale)}</span>{l.returned_quantity > 0 ? ` · ${l.returned_quantity} iade edildi` : ""}</p>
                   <p className={cn("text-2xs", eligible ? "text-success" : "text-danger")} data-testid="ret-line-status">{LINE_STATUS_TEXT[l.status]}{eligible ? ` · ${l.returnable_quantity} adet iade edilebilir` : ""}</p>
                 </div>
               </div>
@@ -342,7 +342,7 @@ export function ReturnsTerminal({ registers, members, caps, initialSaleId }: { r
                 <ProductThumb url={it.thumbnail_url} alt={it.product_name} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{it.product_name}</p>
-                  <p className="truncate text-2xs text-muted">{[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek varyant"} · <span data-numeric>{it.sku}</span></p>
+                  <p className="truncate text-2xs text-muted">{[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek seçenek"} · <span data-numeric>{it.sku}</span></p>
                   <p className={cn("text-2xs", it.available > 0 ? "text-muted" : "text-danger")} data-numeric>{it.available > 0 ? `${it.available} adet mevcut` : "stokta yok"}</p>
                 </div>
                 <span className="text-sm" data-numeric>{money(it.price)}</span>
@@ -362,7 +362,7 @@ export function ReturnsTerminal({ registers, members, caps, initialSaleId }: { r
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink">{l.item.product_name}</p>
-                    <p className="truncate text-2xs text-muted">{[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek varyant"} · <span data-numeric>{l.item.sku}</span></p>
+                    <p className="truncate text-2xs text-muted">{[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek seçenek"} · <span data-numeric>{l.item.sku}</span></p>
                     {l.quantity > l.item.available ? <p className="text-2xs text-danger" data-numeric>Stokta {l.item.available} adet var</p> : null}
                   </div>
                   <span className="text-sm font-medium" data-numeric>{money(lineTotal(l))}</span>

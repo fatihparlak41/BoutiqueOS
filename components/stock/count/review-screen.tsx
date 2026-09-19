@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { CellTitle, TBody, TD, TH, THead, TR, TableShell } from "@/components/ui/table";
 import { Notice } from "@/components/catalog/intake/primitives";
@@ -14,7 +15,6 @@ import { BUCKET_LABELS } from "@/lib/stock/model";
 import {
   COST_SOURCE_HINTS,
   COST_SOURCE_LABELS,
-  COUNT_TYPE_LABELS,
   REVIEW_FILTER_LABELS,
   costPendingLines,
   formatBaseMoney,
@@ -135,7 +135,7 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
   if (posted) {
     return (
       <Notice tone="success">
-        {posted.count_number} işlendi: {posted.lines} satır, {posted.adjustments} düzeltme hareketi, −{posted.shortage_units} eksik, +{posted.surplus_units} fazla. Sayfa yenileniyor…
+        {posted.count_number} tamamlandı: {posted.lines} ürün, {posted.adjustments} stok farkı, −{posted.shortage_units} eksik, +{posted.surplus_units} fazla. Sayfa yenileniyor…
       </Notice>
     );
   }
@@ -143,11 +143,11 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
   return (
     <div className="space-y-6 pb-28">
       <p className="text-sm text-text-muted">
-        {COUNT_TYPE_LABELS[count.count_type]} · {count.branch_name}. Beklenen miktarlar inceleme anındaki stok defteridir; işlerken yeniden doğrulanır.
+        &quot;Sistemde&quot; inceleme anındaki stoktur; tamamlarken yeniden doğrulanır.
       </p>
 
       <StatGrid>
-        <Stat label="Sayılan varyant" value={s.counted} hint={s.unresolved > 0 ? `${s.unresolved} sayılmamış` : undefined} />
+        <Stat label="Sayılan" value={s.counted} hint={s.unresolved > 0 ? `${s.unresolved} sayılmadı` : undefined} />
         <Stat label="Fark olan" value={s.differences} />
         <Stat label="Eksik adet" value={s.shortage} />
         <Stat label="Fazla adet" value={s.surplus} />
@@ -155,20 +155,20 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
 
       {s.unresolved > 0 ? (
         <Notice tone="warning">
-          <span className="font-medium">{s.unresolved} satır sayılmadı.</span> Deftere göre rafta olması gereken ürünler; sayılmadı diye 0 sayılmaz. Her birini sayın ya da &quot;0 adet olarak doğrula&quot; ile onaylayın.
+          <span className="font-medium">{s.unresolved} ürün sayılmadı.</span> Sisteme göre rafta olması gerekenler; sayılmadı diye 0 sayılmaz. Her birini say ya da &quot;0 adet olarak doğrula&quot; ile onayla.
         </Notice>
       ) : null}
 
       {costRequired.length > 0 ? (
         canCost ? (
           <Notice tone={costPending.length > 0 ? "warning" : "info"}>
-            <span className="font-medium">{costRequired.length} satırda mevcut maliyet kaydı yok.</span>{" "}
-            Stoğa eklenecek birimler için birim alış maliyetini girin; girilmeden sayım işlenemez.
+            <span className="font-medium">{costRequired.length} ürün için alış maliyeti gerekli.</span>{" "}
+            Bu ürünler stoğa yeni giriyor ve sistemde maliyetleri yok; alış maliyeti girilmeden sayım tamamlanamaz.
             {costPending.length === 0 ? <> Tüm maliyetler girildi — eklenen değer <span data-numeric>{money(addedValue)}</span>.</> : <> Bekleyen: <span data-numeric>{costPending.length}</span>.</>}
           </Notice>
         ) : (
           <Notice tone="info">
-            <span className="font-medium">{costRequired.length} satırda maliyet bilgisi yönetici tarafından tamamlanmalıdır.</span> Bu satırlar stoğa eklenecek yeni ürünler; maliyet girilmeden sayım işlenemez.
+            <span className="font-medium">{costRequired.length} ürün için alış maliyeti gerekli.</span> Bu ürünler stoğa yeni giriyor; maliyeti işletme sahibi ya da yönetici girer, girilmeden sayım tamamlanamaz.
           </Notice>
         )
       ) : null}
@@ -216,8 +216,8 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <ConditionBadge bucket={l.bucket} />
                   <dl className="flex items-center gap-4 text-sm">
-                    <div className="text-center"><dt className="text-2xs text-text-muted">Beklenen</dt><dd data-numeric>{l.expected_quantity ?? "—"}</dd></div>
-                    <div className="text-center"><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric className={l.counted_quantity === null ? "text-warning" : ""}>{l.counted_quantity ?? "sayılmadı"}</dd></div>
+                    <div className="text-center"><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric className={cn("text-base font-medium", l.counted_quantity === null ? "text-warning" : "text-text-primary")}>{l.counted_quantity ?? "—"}</dd></div>
+                    <div className="text-center"><dt className="text-2xs text-text-muted">Sistemde</dt><dd data-numeric>{l.expected_quantity ?? "—"}</dd></div>
                     <div className="text-center"><dt className="text-2xs text-text-muted">Fark</dt><dd><Difference value={lineDifference(l)} /></dd></div>
                   </dl>
                 </div>
@@ -234,13 +234,13 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
 
           {/* desktop: table */}
           <div className="hidden lg:block">
-            <TableShell minWidth="56rem">
+            <TableShell minWidth="40rem">
               <THead>
                 <TH>Ürün</TH>
-                <TH>Varyant</TH>
+                <TH>Renk / beden</TH>
                 <TH>Durum</TH>
-                <TH align="right">Beklenen</TH>
                 <TH align="right">Sayılan</TH>
+                <TH align="right">Sistemde</TH>
                 <TH align="right">Fark</TH>
                 {costRequired.length > 0 ? <TH>Maliyet</TH> : null}
                 <TH></TH>
@@ -249,10 +249,10 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
                 {visible.map((l) => (
                   <TR key={l.id}>
                     <TD><CellTitle sub={l.sku}>{l.product_name}</CellTitle></TD>
-                    <TD>{l.options || "Tek varyant"}</TD>
+                    <TD>{l.options || "Tek seçenek"}</TD>
                     <TD><ConditionBadge bucket={l.bucket} /></TD>
+                    <TD numeric align="right" className={l.counted_quantity === null ? "text-warning" : "font-medium text-text-primary"}>{l.counted_quantity ?? "sayılmadı"}</TD>
                     <TD numeric align="right">{l.expected_quantity ?? "—"}</TD>
-                    <TD numeric align="right" className={l.counted_quantity === null ? "text-warning" : ""}>{l.counted_quantity ?? "sayılmadı"}</TD>
                     <TD align="right"><Difference value={lineDifference(l)} /></TD>
                     {costRequired.length > 0 ? <TD>{l.cost_required ? <CostCell line={l} canCost={canCost} money={money} onEdit={() => openCost(l)} pending={pending} compact /> : null}</TD> : null}
                     <TD>
@@ -278,31 +278,31 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
             {canPost ? <Button variant="ghost" onClick={() => setCancelOpen(true)} disabled={pending}>İptal et</Button> : null}
           </div>
           {canPost ? (
-            <Button size="lg" onClick={() => setConfirmOpen(true)} disabled={pending || s.unresolved > 0 || count.lines.length === 0 || costPending.length > 0} data-testid="post-button">
-              {pending ? "…" : costPending.length > 0 ? `Maliyet bekleyen ${costPending.length} satır` : "Sayımı işle"}
+            <Button size="lg" variant="accent" onClick={() => setConfirmOpen(true)} disabled={pending || s.unresolved > 0 || count.lines.length === 0 || costPending.length > 0} data-testid="post-button">
+              {pending ? "…" : costPending.length > 0 ? `${costPending.length} ürün için maliyet bekleniyor` : "Sayımı tamamla"}
             </Button>
           ) : (
-            <span className="text-xs text-text-muted">İşleme yetkisi: işletme sahibi ya da yönetici</span>
+            <span className="text-xs text-text-muted">Sayımı işletme sahibi ya da yönetici tamamlar</span>
           )}
         </div>
       </div>
 
-      <Sheet open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Sayımı işle" side="right" className="w-[min(26rem,94vw)]">
+      <Sheet open={confirmOpen} onClose={() => setConfirmOpen(false)} title="Sayımı tamamla" side="right" className="w-[min(26rem,94vw)]">
         <div className="space-y-4 p-4 text-sm">
-          <p>Bu işlem stok defterine düzeltme hareketleri yazar ve geri alınamaz. Sonraki düzeltme yeni bir sayımla yapılır.</p>
+          <p>Stok bu sayıma göre güncellenir; bu geri alınamaz. Sonraki düzeltme yeni bir sayımla yapılır.</p>
           <dl className="divide-y divide-border border-y border-border">
-            <div className="flex justify-between py-2"><dt className="text-text-muted">Sayılan varyant</dt><dd data-numeric>{s.counted}</dd></div>
-            <div className="flex justify-between py-2"><dt className="text-text-muted">Fark olan satır</dt><dd data-numeric>{s.differences}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-text-muted">Sayılan ürün</dt><dd data-numeric>{s.counted}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-text-muted">Fark olan</dt><dd data-numeric>{s.differences}</dd></div>
             <div className="flex justify-between py-2"><dt className="text-text-muted">Eksik adet</dt><dd data-numeric>−{s.shortage}</dd></div>
             <div className="flex justify-between py-2"><dt className="text-text-muted">Fazla adet</dt><dd data-numeric>+{s.surplus}</dd></div>
             {canCost && costRequired.length > 0 ? (
               <div className="flex justify-between py-2"><dt className="text-text-muted">Girilen maliyetle eklenen değer</dt><dd data-numeric>{money(addedValue)}</dd></div>
             ) : null}
           </dl>
-          <p className="text-2xs text-text-muted">Eksikler şubenin hareketli ortalama maliyetiyle düşer; fazlalar aynı ortalamayı devralır. Şubede maliyet kaydı olmayan bir varyantın fazlası yalnız girdiğiniz birim maliyetle işlenir; girilmemişse işlem durur.</p>
+          <p className="text-2xs text-text-muted">Eksikler şubenin ortalama maliyetiyle düşer; fazlalar aynı ortalamayı devralır. Sistemde maliyeti olmayan bir ürünün fazlası yalnız girdiğin alış maliyetiyle işlenir; girilmemişse sayım tamamlanmaz.</p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setConfirmOpen(false)}>Vazgeç</Button>
-            <Button onClick={post} disabled={pending}>Evet, işle</Button>
+            <Button variant="accent" onClick={post} disabled={pending}>Evet, tamamla</Button>
           </div>
         </div>
       </Sheet>
@@ -318,7 +318,7 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
             className="space-y-4 p-4"
           >
             <VariantIdentity v={editing} />
-            <p className="text-xs text-text-muted">{BUCKET_LABELS[editing.bucket]} · beklenen {editing.expected_quantity ?? "—"}</p>
+            <p className="text-xs text-text-muted">{BUCKET_LABELS[editing.bucket]} · sistemde {editing.expected_quantity ?? "—"}</p>
             <Input value={editQty} onChange={(e) => setEditQty(e.target.value)} inputMode="numeric" pattern="[0-9]*" placeholder="Sayılan adet" autoFocus aria-label="Sayılan adet" />
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Vazgeç</Button>
@@ -332,10 +332,10 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
         {costing ? (
           <form onSubmit={(e) => { e.preventDefault(); saveCost(); }} className="space-y-4 p-4" data-testid="cost-form">
             <VariantIdentity v={costing} />
-            <p className="text-xs text-text-secondary">Bu varyantın mevcut maliyet kaydı yok. Stoğa eklenecek birimler için birim alış maliyetini girin.</p>
+            <p className="text-xs text-text-secondary">Bu ürün için sistemde alış maliyeti yok. Stoğa eklenecek adetler için birim alış maliyetini gir.</p>
             <dl className="grid grid-cols-3 gap-2 border-y border-border py-2 text-center text-sm">
               <div><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric>{costing.counted_quantity ?? "—"}</dd></div>
-              <div><dt className="text-2xs text-text-muted">Sistem</dt><dd data-numeric>{costing.expected_quantity ?? "—"}</dd></div>
+              <div><dt className="text-2xs text-text-muted">Sistemde</dt><dd data-numeric>{costing.expected_quantity ?? "—"}</dd></div>
               <div><dt className="text-2xs text-text-muted">Fark</dt><dd><Difference value={lineDifference(costing)} /></dd></div>
             </dl>
             <div className="space-y-1.5">
@@ -373,16 +373,18 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
         ) : null}
       </Sheet>
 
-      <Sheet open={cancelOpen} onClose={() => setCancelOpen(false)} title="Sayımı iptal et" side="right" className="w-[min(24rem,94vw)]">
-        <div className="space-y-3 p-4">
-          <p className="text-sm text-text-secondary">Sayım iptal edilir; satırlar ve taramalar kayıt için saklanır. Stok değişmez.</p>
-          <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Neden (isteğe bağlı)" aria-label="İptal nedeni" maxLength={500} />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setCancelOpen(false)}>Vazgeç</Button>
-            <Button variant="danger" onClick={() => run(() => cancelAction(count.id, cancelReason), () => setCancelOpen(false))} disabled={pending}>İptal et</Button>
-          </div>
-        </div>
-      </Sheet>
+      <ConfirmDialog
+        open={cancelOpen}
+        onClose={() => (pending ? undefined : setCancelOpen(false))}
+        title="Bu sayım iptal edilsin mi?"
+        description="Sayılanlar kayıt için saklanır; stok değişmez. Yeniden saymak için yeni bir sayım açılır."
+        confirmLabel="Sayımı iptal et"
+        destructive
+        busy={pending}
+        onConfirm={() => run(() => cancelAction(count.id, cancelReason), () => setCancelOpen(false))}
+      >
+        <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Neden (isteğe bağlı)" aria-label="İptal nedeni" maxLength={500} />
+      </ConfirmDialog>
     </div>
   );
 }
@@ -395,7 +397,7 @@ export function ReviewScreen({ count, canPost, canCost = false }: { count: Stock
 function CostCell({ line, canCost, money, onEdit, pending, compact = false }: { line: CountLine; canCost: boolean; money: (v: number) => string; onEdit: () => void; pending: boolean; compact?: boolean }) {
   const diff = lineDifference(line) ?? 0;
   if (!canCost) {
-    return <p className={cn("text-2xs text-text-muted", compact ? "" : "mt-3 border-t border-border pt-2")} data-testid="cost-staff-note">Maliyet bilgisi yönetici tarafından tamamlanmalıdır.</p>;
+    return <p className={cn("text-2xs text-text-muted", compact ? "" : "mt-3 border-t border-border pt-2")} data-testid="cost-staff-note">Bu ürün için alış maliyeti gerekli — yönetici girer.</p>;
   }
   return (
     <div className={cn("text-xs", compact ? "" : "mt-3 border-t border-border pt-2")} data-testid="cost-cell" data-has-cost={line.cost ? "1" : "0"}>
@@ -405,9 +407,9 @@ function CostCell({ line, canCost, money, onEdit, pending, compact = false }: { 
           <span className="block text-2xs text-text-muted">{COST_SOURCE_LABELS[line.cost.cost_source]}{line.cost.note ? ` · ${line.cost.note}` : ""}</span>
         </p>
       ) : (
-        <p className="text-warning">Mevcut maliyet kaydı yok — birim alış maliyeti gerekli.</p>
+        <p className="text-warning">Bu ürün için alış maliyeti gerekli.</p>
       )}
-      <Button size="sm" variant={line.cost ? "ghost" : "outline"} className="mt-1" onClick={onEdit} disabled={pending}>{line.cost ? "Maliyeti düzenle" : "Maliyet gir"}</Button>
+      <Button size="sm" variant={line.cost ? "ghost" : "outline"} className="mt-1" onClick={onEdit} disabled={pending}>{line.cost ? "Maliyeti düzenle" : "Alış maliyeti gir"}</Button>
     </div>
   );
 }

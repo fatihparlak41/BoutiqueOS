@@ -85,7 +85,7 @@ export default async function StockDetailPage({ params }: { params: Promise<{ va
 
         {movements.length === 0 ? (
           <p className="border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">
-            Bu varyant için henüz hareket yok.
+            Bu ürün seçeneği için henüz hareket yok.
           </p>
         ) : (
           <div className="relative overflow-x-auto">

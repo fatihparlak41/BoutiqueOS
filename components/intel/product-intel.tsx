@@ -16,7 +16,7 @@ import type { IntelProduct } from "@/lib/intel/model";
  * velocity and valuation on purpose (it is not for sale); its remaining ledger value is
  * shown in the product's summary from the cost pool instead, so nothing owned disappears.
  */
-export function ProductIntel({ intel, productId, archived = false }: { intel: IntelProduct; productId: string; archived?: boolean }) {
+export function ProductIntel({ intel, productId, archived = false, hideValue = false }: { intel: IntelProduct; productId: string; archived?: boolean; /** the page already shows the quiet stock value in its summary */ hideValue?: boolean }) {
   const fmtVel = (v: number | null) => (v === null ? "—" : `${v.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} adet/gün`);
   const days = intel.window.days;
   return (
@@ -40,7 +40,7 @@ export function ProductIntel({ intel, productId, archived = false }: { intel: In
         <Stat label="İade oranı" value={intel.return_rate_pct === null ? (intel.returned_win > 0 ? `${fmtInt(intel.returned_win)} adet` : "—") : fmtPct(intel.return_rate_pct)} hint={intel.return_rate_pct === null && intel.sold_win > 0 ? "küçük örneklem" : `${fmtInt(intel.returned_win)} / ${fmtInt(intel.sold_win)} adet`} />
         {intel.holds_active !== null ? <Stat label="Rezervasyon" value={fmtInt(intel.holds_active)} hint="aktif, süresi dolmamış" /> : null}
         {intel.variants_out > 0 ? <Stat label="Tükenen varyant" value={`${fmtInt(intel.variants_out)} / ${fmtInt(intel.variants)}`} /> : null}
-        {intel.stock_value !== null && !archived ? <Stat label="Stok değeri" value={fmtMoney(intel.stock_value)} hint="mevcut maliyet havuzu" /> : null}
+        {intel.stock_value !== null && !archived && !hideValue ? <Stat label="Stok değeri" value={fmtMoney(intel.stock_value)} hint="mevcut maliyet havuzu" /> : null}
       </StatGrid>
       {intel.sizes.length > 0 || intel.colors.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

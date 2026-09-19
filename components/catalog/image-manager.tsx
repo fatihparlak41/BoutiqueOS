@@ -120,7 +120,7 @@ export function ImageManager({
             </div>
             {role === "variant" ? (
               <div className="space-y-1.5">
-                <Label htmlFor="image-variant">Varyant</Label>
+                <Label htmlFor="image-variant">Renk / beden</Label>
                 <Select id="image-variant" name="variant_id" defaultValue="">
                   <option value="">Seçin</option>
                   {variants.map((v) => (

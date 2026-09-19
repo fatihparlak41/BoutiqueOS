@@ -40,7 +40,17 @@ export type OrderDetail = PublicOrder & {
 
 export const ORDER_FILTERS = ["new", "confirmed", "ready", "completed", "closed"] as const;
 export type OrderFilter = (typeof ORDER_FILTERS)[number];
-export const ORDER_FILTER_LABELS: Record<OrderFilter, string> = { new: "Yeni", confirmed: "Onaylı", ready: "Hazır", completed: "Teslim edildi", closed: "İptal / süresi doldu" };
+export const ORDER_FILTER_LABELS: Record<OrderFilter, string> = { new: "Yeni", confirmed: "Onaylandı", ready: "Hazır", completed: "Tamamlandı", closed: "İptal / süresi doldu" };
+
+/** Queue words for the shop floor (the customer-facing labels live in lib/shop/model). */
+export const MERCHANT_STATUS_LABELS: Record<OnlineOrderStatus, string> = {
+  pending_confirmation: "Yeni",
+  confirmed: "Onaylandı",
+  ready: "Hazır",
+  completed: "Tamamlandı",
+  cancelled: "İptal edildi",
+  expired: "Süresi doldu",
+};
 
 export const EVENT_LABELS: Record<string, string> = {
   created: "Sipariş talebi alındı",
@@ -50,7 +60,7 @@ export const EVENT_LABELS: Record<string, string> = {
   expired: "Ayırma süresi doldu",
   rereserved: "Yeniden ayrıldı",
   converted: "POS satışına dönüştü",
-  completed: "Teslim edildi",
+  completed: "Tamamlandı",
 };
 
 export function orderCaps(role: UserRole) {

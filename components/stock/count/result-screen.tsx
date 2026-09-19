@@ -21,7 +21,7 @@ export function ResultScreen({ count }: { count: StockCount }) {
   return (
     <div className="space-y-6">
       {posted ? (
-        <Notice tone="success">Bu sayım işlendi ve değiştirilemez. Düzeltme gerekiyorsa yeni bir sayım açın.</Notice>
+        <Notice tone="success">Bu sayım tamamlandı; stok buna göre güncellendi ve sayım artık değiştirilemez. Düzeltme gerekiyorsa yeni bir sayım aç.</Notice>
       ) : (
         <Notice tone="info">Bu sayım iptal edildi{count.cancel_reason ? `: ${count.cancel_reason}` : ""}. Stok değişmedi; satırlar kayıt için saklanıyor.</Notice>
       )}
@@ -32,7 +32,7 @@ export function ResultScreen({ count }: { count: StockCount }) {
         <div className="flex justify-between gap-4 border-b border-border py-2"><dt className="text-text-muted">Açan</dt><dd>{count.created_by_name ?? "—"} · <span data-numeric>{formatWhen(count.created_at)}</span></dd></div>
         <div className="flex justify-between gap-4 border-b border-border py-2"><dt className="text-text-muted">İnceleme</dt><dd data-numeric>{formatWhen(count.reviewed_at)}</dd></div>
         {posted ? (
-          <div className="flex justify-between gap-4 border-b border-border py-2"><dt className="text-text-muted">İşleyen</dt><dd>{count.posted_by_name ?? "—"} · <span data-numeric>{formatWhen(count.posted_at)}</span></dd></div>
+          <div className="flex justify-between gap-4 border-b border-border py-2"><dt className="text-text-muted">Tamamlayan</dt><dd>{count.posted_by_name ?? "—"} · <span data-numeric>{formatWhen(count.posted_at)}</span></dd></div>
         ) : (
           <div className="flex justify-between gap-4 border-b border-border py-2"><dt className="text-text-muted">İptal</dt><dd data-numeric>{formatWhen(count.cancelled_at)}</dd></div>
         )}
@@ -40,8 +40,8 @@ export function ResultScreen({ count }: { count: StockCount }) {
       </dl>
 
       <StatGrid>
-        <Stat label="Satır" value={count.lines.length} />
-        <Stat label="Düzeltme hareketi" value={posted ? adjustments : 0} />
+        <Stat label="Ürün" value={count.lines.length} />
+        <Stat label="Stok farkı" value={posted ? adjustments : 0} />
         <Stat label="Eksik adet" value={s.shortage} />
         <Stat label="Fazla adet" value={s.surplus} />
       </StatGrid>
@@ -53,9 +53,9 @@ export function ResultScreen({ count }: { count: StockCount }) {
             <div className="mt-3 flex items-center justify-between gap-3">
               <ConditionBadge bucket={l.bucket} />
               <dl className="flex items-center gap-4 text-sm">
-                <div className="text-center"><dt className="text-2xs text-text-muted">Beklenen</dt><dd data-numeric>{l.expected_quantity ?? "—"}</dd></div>
-                <div className="text-center"><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric>{l.counted_quantity ?? "—"}</dd></div>
-                <div className="text-center"><dt className="text-2xs text-text-muted">{posted ? "İşlenen" : "Fark"}</dt><dd><Difference value={shownDelta(l, posted)} /></dd></div>
+                <div className="text-center"><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric className="font-medium text-text-primary">{l.counted_quantity ?? "—"}</dd></div>
+                <div className="text-center"><dt className="text-2xs text-text-muted">Sistemde</dt><dd data-numeric>{l.expected_quantity ?? "—"}</dd></div>
+                <div className="text-center"><dt className="text-2xs text-text-muted">{posted ? "Stok farkı" : "Fark"}</dt><dd><Difference value={shownDelta(l, posted)} /></dd></div>
               </dl>
             </div>
           </li>
@@ -65,20 +65,20 @@ export function ResultScreen({ count }: { count: StockCount }) {
         <TableShell minWidth="52rem">
           <THead>
             <TH>Ürün</TH>
-            <TH>Varyant</TH>
+            <TH>Renk / beden</TH>
             <TH>Durum</TH>
-            <TH align="right">Beklenen</TH>
             <TH align="right">Sayılan</TH>
-            <TH align="right">{posted ? "İşlenen fark" : "Fark"}</TH>
+            <TH align="right">Sistemde</TH>
+            <TH align="right">{posted ? "Stok farkı" : "Fark"}</TH>
           </THead>
           <TBody>
             {count.lines.map((l) => (
               <TR key={l.id}>
                 <TD><CellTitle sub={l.sku}>{l.product_name}</CellTitle></TD>
-                <TD>{l.options || "Tek varyant"}</TD>
+                <TD>{l.options || "Tek seçenek"}</TD>
                 <TD><ConditionBadge bucket={l.bucket} /></TD>
+                <TD numeric align="right" className="font-medium text-text-primary">{l.counted_quantity ?? "—"}</TD>
                 <TD numeric align="right">{l.expected_quantity ?? "—"}</TD>
-                <TD numeric align="right">{l.counted_quantity ?? "—"}</TD>
                 <TD align="right"><Difference value={shownDelta(l, posted)} /></TD>
               </TR>
             ))}

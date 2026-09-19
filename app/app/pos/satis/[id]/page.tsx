@@ -60,7 +60,7 @@ export default async function SaleReceiptPage({ params }: { params: Promise<{ id
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-ink">{it.variant.product_name}</p>
               <p className="truncate text-2xs text-muted">
-                {[it.variant.color, it.variant.size].filter(Boolean).join(" / ") || it.variant.options || "Tek varyant"} · <span data-numeric>{it.variant.sku}</span>
+                {[it.variant.color, it.variant.size].filter(Boolean).join(" / ") || it.variant.options || "Tek seçenek"} · <span data-numeric>{it.variant.sku}</span>
               </p>
               <p className="text-2xs text-muted" data-numeric>
                 {formatQuantity(it.quantity)} × {money(it.unit_price)}

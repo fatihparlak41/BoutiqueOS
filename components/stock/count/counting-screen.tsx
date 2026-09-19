@@ -6,6 +6,7 @@ import { ScanLine, Search, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet } from "@/components/ui/sheet";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Notice } from "@/components/catalog/intake/primitives";
 import { BUCKET_LABELS, type Bucket } from "@/lib/stock/model";
 import { COUNT_TYPE_LABELS, type CountLine, type CountVariant, type StockCount } from "@/lib/stock/count-model";
@@ -255,7 +256,7 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
       {/* running list */}
       <section className="space-y-2">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium">Sayılanlar <span className="ml-1 text-xs font-normal text-text-muted" data-numeric>{lines.length} satır · {countedUnits} adet</span></h2>
+          <h2 className="text-sm font-medium">Sayılanlar <span className="ml-1 text-xs font-normal text-text-muted" data-numeric>{lines.length} ürün · {countedUnits} adet</span></h2>
           <button type="button" onClick={undoLast} disabled={pending || history.length === 0} className="inline-flex min-h-11 items-center gap-1 text-xs text-text-secondary underline underline-offset-4 disabled:opacity-40 sm:min-h-8">
             <Undo2 aria-hidden className="h-3.5 w-3.5" /> Son taramayı geri al
           </button>
@@ -282,7 +283,7 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
           {canPost ? (
             <Button variant="ghost" onClick={() => setCancelOpen(true)} disabled={pending}>İptal et</Button>
           ) : <span />}
-          <Button onClick={goReview} disabled={pending || lines.length === 0} size="lg">
+          <Button variant="accent" onClick={goReview} disabled={pending || lines.length === 0} size="lg">
             {pending ? "…" : "İncelemeye geç"}
           </Button>
         </div>
@@ -300,10 +301,10 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
             <Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Ad, model kodu, SKU, barkod, renk, beden" autoFocus autoComplete="off" aria-label="Ürün ara" />
             <Button type="submit" variant="outline" disabled={searching || term.trim().length < 2}>{searching ? "…" : "Ara"}</Button>
           </form>
-          <p className="text-2xs text-text-muted">Seçilen varyant <span className="font-medium">{BUCKET_LABELS[bucket]}</span> durumuna +1 sayılır.</p>
+          <p className="text-2xs text-text-muted">Seçilen ürün <span className="font-medium">{BUCKET_LABELS[bucket]}</span> durumuna +1 sayılır.</p>
           {results ? (
             results.length === 0 ? (
-              <p className="text-sm text-text-muted">Eşleşen varyant yok.</p>
+              <p className="text-sm text-text-muted">Eşleşen ürün yok.</p>
             ) : (
               <ul className="divide-y divide-border border-y border-border">
                 {results.map((v) => (
@@ -318,16 +319,18 @@ export function CountingScreen({ count, canPost }: { count: StockCount; canPost:
         </div>
       </Sheet>
 
-      <Sheet open={cancelOpen} onClose={() => setCancelOpen(false)} title="Sayımı iptal et" side="right" className="w-[min(24rem,94vw)]">
-        <div className="space-y-3 p-4">
-          <p className="text-sm text-text-secondary">Sayım iptal edilir; satırlar ve taramalar kayıt için saklanır. Stok değişmez.</p>
-          <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Neden (isteğe bağlı)" aria-label="İptal nedeni" maxLength={500} />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setCancelOpen(false)}>Vazgeç</Button>
-            <Button variant="danger" onClick={doCancel} disabled={pending}>İptal et</Button>
-          </div>
-        </div>
-      </Sheet>
+      <ConfirmDialog
+        open={cancelOpen}
+        onClose={() => (pending ? undefined : setCancelOpen(false))}
+        title="Bu sayım iptal edilsin mi?"
+        description="Sayılanlar kayıt için saklanır; stok değişmez. Yeniden saymak için yeni bir sayım açılır."
+        confirmLabel="Sayımı iptal et"
+        destructive
+        busy={pending}
+        onConfirm={doCancel}
+      >
+        <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Neden (isteğe bağlı)" aria-label="İptal nedeni" maxLength={500} />
+      </ConfirmDialog>
     </div>
   );
 }

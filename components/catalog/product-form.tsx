@@ -89,7 +89,7 @@ export function ProductForm({
             placeholder="Örn. TLC-KETEN-CROP"
           />
           <p className="text-2xs text-muted">
-            Varyant SKU&apos;ları bu ön ekten türetilir. İşletme içinde benzersiz olmalı.
+            Seçenek kodları (SKU) bu ön ekten türetilir. İşletme içinde benzersiz olmalı.
           </p>
         </div>
 
@@ -160,7 +160,7 @@ export function ProductForm({
               placeholder="0,00"
             />
             <p className="text-2xs text-muted">
-              Varyant bazında farklı fiyat gerekirse varyant satırından geçersiz kılabilirsiniz.
+              Renk ya da bedene göre farklı fiyat gerekirse seçenek satırından değiştirebilirsin.
             </p>
           </div>
 

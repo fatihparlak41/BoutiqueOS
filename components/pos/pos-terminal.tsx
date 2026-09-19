@@ -245,7 +245,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
               autoFocus
               autoComplete="off"
               inputMode="numeric"
-              placeholder="Barkodu okutun ve Enter"
+              placeholder="Barkodu okut"
               className="h-12 pl-8 text-base sm:h-10"
             />
           </div>
@@ -258,7 +258,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
           <ProductThumb url={last.thumbnail_url} alt={last.product_name} size="sm" />
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium text-ink">{last.product_name}</p>
-            <p className="truncate text-muted">{last.options || "Tek varyant"} · <span data-numeric>{last.sku}</span></p>
+            <p className="truncate text-muted">{last.options || "Tek seçenek"} · <span data-numeric>{last.sku}</span></p>
           </div>
           <span className="text-sm font-medium" data-numeric>{money(last.price)}</span>
           <button type="button" onClick={undoLast} className="text-xs text-ink-70 underline-offset-2 hover:underline" aria-label="Son eklemeyi geri al">
@@ -274,10 +274,10 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
         className="flex items-end gap-2"
       >
         <div className="flex-1">
-          <Label htmlFor="pos-search" className="text-2xs">Ürün ara</Label>
+          <Label htmlFor="pos-search" className="text-2xs">Ürün ara (barkod okunmuyorsa)</Label>
           <div className="relative">
             <Search aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-            <Input id="pos-search" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Ürün adı, SKU veya barkod" className="h-11 pl-8 sm:h-9" autoComplete="off" />
+            <Input id="pos-search" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Ürün adı, renk, beden ya da barkod" className="h-11 pl-8 sm:h-9" autoComplete="off" />
           </div>
         </div>
         <Button type="submit" variant="outline" size="sm" disabled={searching || term.trim().length < 2}>{searching ? "…" : "Ara"}</Button>
@@ -293,7 +293,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{it.product_name}</p>
                   <p className="truncate text-2xs text-muted">
-                    {[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek varyant"} · <span data-numeric>{it.sku}</span>
+                    {[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek seçenek"} · <span data-numeric>{it.sku}</span>
                     {it.primary_barcode ? <> · <span data-numeric>{it.primary_barcode}</span></> : null}
                   </p>
                   <p className={cn("text-2xs", it.available > 0 ? "text-muted" : "text-danger")} data-numeric>
@@ -316,10 +316,10 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
     <section className="space-y-2" data-testid="pos-cart">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-medium tracking-tightish">Sepet</h3>
-        <span className="text-xs text-muted" data-numeric>{count} adet · {lines.length} satır</span>
+        <span className="text-xs text-muted" data-numeric>{count} adet · {lines.length} ürün</span>
       </div>
       {lines.length === 0 ? (
-        <p className="border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">Sepet boş. Barkod okutun ya da ürün arayın.</p>
+        <p className="rounded border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">Sepet boş. Barkod okut ya da ürün ara.</p>
       ) : (
         <ul className="divide-y divide-line border-y border-line">
           {lines.map((l) => {
@@ -332,7 +332,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink">{l.item.product_name}</p>
                     <p className="truncate text-2xs text-muted">
-                      {[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek varyant"} · <span data-numeric>{l.item.sku}</span>
+                      {[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek seçenek"} · <span data-numeric>{l.item.sku}</span>
                     </p>
                     {short ? <p className="text-2xs text-danger" data-numeric>Stokta {l.item.available} adet var</p> : null}
                   </div>
@@ -471,7 +471,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
       </div>
 
       {error ? <Notice tone="danger">{error}</Notice> : null}
-      <Button type="button" size="lg" className="w-full" onClick={complete} disabled={!payable || submitting || pending} data-testid="pos-complete">
+      <Button type="button" size="lg" variant="accent" className="w-full" onClick={complete} disabled={!payable || submitting || pending} data-testid="pos-complete">
         {submitting ? "Satış işleniyor…" : `Satışı tamamla · ${money(total)}`}
       </Button>
     </section>
@@ -481,21 +481,25 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
     <div className="space-y-4">
       <SessionBar register={register} registers={registers} selectedId={register.id} onSelect={setRegisterId} caps={caps} />
       {order ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border border-accent/30 bg-accent-muted/60 px-3 py-2 text-xs" data-testid="pos-order-banner">
-          <span>Online Sipariş <strong data-numeric>{order.order_number}</strong> · {order.customer_name} · <span data-numeric>{order.phone}</span>. Ürünler ve fiyatlar siparişten gelir ve değiştirilemez; satış tamamlanınca sipariş teslim edildi olur.</span>
-          <a href={`/app/online-siparisler/${order.id}`} className="underline-offset-2 hover:underline">Siparişe dön</a>
-        </div>
+        <Notice tone="info">
+          <div className="flex flex-wrap items-center justify-between gap-2" data-testid="pos-order-banner">
+            <span>Online sipariş <strong data-numeric>{order.order_number}</strong> · {order.customer_name} · <span data-numeric>{order.phone}</span>. Ürünler ve fiyatlar siparişten gelir, değiştirilemez; satış tamamlanınca sipariş teslim edilmiş olur.</span>
+            <a href={`/app/online-siparisler/${order.id}`} className="underline underline-offset-4">Siparişe dön</a>
+          </div>
+        </Notice>
       ) : null}
       {reservation ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border border-success/30 bg-success-muted/40 px-3 py-2 text-xs" data-testid="pos-reservation-banner">
-          <span>Rezervasyon <strong data-numeric>{reservation.reservation_number}</strong> teslim ediliyor{reservation.customer ? ` · ${reservation.customer.full_name}` : ""}. Ayrılan ürünler sepette; satış tamamlanınca rezervasyon kapanır.</span>
-          <a href="/app/pos" className="underline-offset-2 hover:underline">Vazgeç</a>
-        </div>
+        <Notice tone="info">
+          <div className="flex flex-wrap items-center justify-between gap-2" data-testid="pos-reservation-banner">
+            <span>Rezervasyon <strong data-numeric>{reservation.reservation_number}</strong> teslim ediliyor{reservation.customer ? ` · ${reservation.customer.full_name}` : ""}. Ayrılan ürünler sepette; satış tamamlanınca rezervasyon tamamlanır.</span>
+            <a href="/app/pos" className="underline underline-offset-4">Vazgeç</a>
+          </div>
+        </Notice>
       ) : null}
 
       {/* desktop / tablet */}
       <div className="hidden gap-6 lg:grid lg:grid-cols-[1fr_1.15fr_1fr]">
-        <div>{locked ? <p className="border-l-2 border-line-strong bg-panel px-3 py-2 text-xs text-ink-70">Online sipariş teslimi: sepete ürün eklenemez.</p> : findPanel}</div>
+        <div>{locked ? <Notice tone="info">Online sipariş teslimi: sepete ürün eklenemez.</Notice> : findPanel}</div>
         <div>{cartPanel}</div>
         <div>{payPanel}</div>
       </div>
@@ -509,7 +513,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
               role="tab"
               aria-selected={stage === s}
               onClick={() => setStage(s)}
-              className={cn("h-11 border-r border-line last:border-r-0", stage === s ? "bg-primary text-primary-foreground" : "text-ink-70")}
+              className={cn("h-11 border-r border-line last:border-r-0", stage === s ? "bg-accent text-accent-foreground" : "text-ink-70")}
             >
               {s === "items" ? "Ürün" : s === "cart" ? `Sepet (${count})` : "Ödeme"}
             </button>
@@ -520,7 +524,7 @@ export function PosTerminal({ registers, members, caps, reservation = null, orde
         </div>
         {stage !== "pay" ? (
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface px-4 py-3">
-            <Button type="button" size="lg" className="w-full" onClick={() => setStage(stage === "items" ? "cart" : "pay")} disabled={lines.length === 0} data-testid="pos-next">
+            <Button type="button" size="lg" variant="accent" className="w-full" onClick={() => setStage(stage === "items" ? "cart" : "pay")} disabled={lines.length === 0} data-testid="pos-next">
               {stage === "items" ? `Sepete git · ${count} adet · ${money(total)}` : `Ödemeye geç · ${money(total)}`}
             </Button>
           </div>

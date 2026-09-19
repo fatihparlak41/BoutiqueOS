@@ -32,7 +32,7 @@ export const MOVEMENT_REASON_LABELS: Record<MovementReason, string> = {
   sale_void: "Satış iptali",
   customer_return: "Müşteri iadesi",
   supplier_return: "Tedarikçi iadesi",
-  adjustment: "Stok düzeltme",
+  adjustment: "Stok farkı",
   state_change: "Durum değişimi",
   transfer_ship: "Transfer çıkışı",
   transfer_receive: "Transfer girişi",

@@ -31,7 +31,7 @@ export function VariantIdentity({ v, size = "md", className }: { v: CountVariant
       <ProductThumb url={v.thumbnail_url} alt={v.product_name} size={size} />
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-text-primary">{v.product_name}</p>
-        <p className="truncate text-xs text-text-secondary">{v.options || "Tek varyant"}</p>
+        <p className="truncate text-xs text-text-secondary">{v.options || "Tek seçenek"}</p>
         <p className="truncate text-2xs text-text-muted" data-numeric>
           {v.sku}
           {v.primary_barcode ? ` · ${v.primary_barcode}` : ""}

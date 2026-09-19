@@ -33,7 +33,7 @@ function SubmitButton({ count }: { count: number }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending || count === 0}>
-      {pending ? "Oluşturuluyor…" : count === 0 ? "Kombinasyon seçin" : `${count} varyant oluştur`}
+      {pending ? "Oluşturuluyor…" : count === 0 ? "Kombinasyon seçin" : `${count} seçenek oluştur`}
     </Button>
   );
 }
@@ -88,7 +88,7 @@ export function MatrixBuilder({
       const ids = values.map((v) => v.id);
       const fp = values.map((v) => `${ownerOf.get(v.id)}:${v.id}`).sort().join("|");
       const key = ids.join("+") || "single";
-      const label = values.map((v) => v.value).join(" / ") || "Tek varyant";
+      const label = values.map((v) => v.value).join(" / ") || "Tek seçenek";
       const sku = skuEdits[key] ?? suggestSku(skuPrefix, values.map((v) => v.code ?? v.value));
       return { key, label, values, ids, sku, exists: activeFingerprints.has(fp) };
     });
@@ -115,7 +115,7 @@ export function MatrixBuilder({
 
       {usable.length === 0 ? (
         <p className="text-sm text-text-muted">
-          Bu işletmede henüz seçenek değeri yok. Ürün tek varyantla oluşturulur; renk ve beden
+          Bu işletmede henüz seçenek değeri yok. Ürün tek seçenekle oluşturulur; renk ve beden
           eklemek için önce aşağıdaki seçenekleri tanımlayın.
         </p>
       ) : (
@@ -209,7 +209,7 @@ export function MatrixBuilder({
             })}
           </ul>
           <p className="text-2xs leading-relaxed text-text-muted">
-            SKU&apos;lar ön ek + değer kodlarından türetilir ve düzenlenebilir. Barkodlar varyant oluştuktan
+            SKU&apos;lar ön ek + değer kodlarından türetilir ve düzenlenebilir. Barkodlar seçenek oluştuktan
             sonra satırdan eklenir. Var olan kombinasyonlar yeniden oluşturulmaz.
           </p>
         </div>

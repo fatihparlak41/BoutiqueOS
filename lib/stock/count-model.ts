@@ -16,18 +16,18 @@ export const COUNT_STATUS_LABELS: Record<StockCountStatus, string> = {
   draft: "Taslak",
   counting: "Sayılıyor",
   review: "İncelemede",
-  posted: "İşlendi",
+  posted: "Tamamlandı",
   cancelled: "İptal",
 };
 
 export const COUNT_TYPE_LABELS: Record<StockCountType, string> = {
-  full: "Tam sayım",
-  cycle: "Kısmi sayım",
+  full: "Tüm mağaza",
+  cycle: "Bir kısmı",
 };
 
 export const COUNT_TYPE_HINTS: Record<StockCountType, string> = {
-  full: "Şubedeki her şey sayılır. Defterde olup sayılmayan ürünler incelemede açık kalır; 0 ancak siz onaylarsanız yazılır.",
-  cycle: "Yalnız saydığınız varyantlar karşılaştırılır; diğer stok dokunulmadan kalır.",
+  full: "Şubedeki her şey sayılır. Sistemde olup okutulmayan ürünler incelemede açık kalır; 0 ancak sen onaylarsan yazılır.",
+  cycle: "Yalnız okuttuğun ürün seçenekleri karşılaştırılır; diğer stok dokunulmadan kalır.",
 };
 
 /** What the count knows about a variant; enough to recognise the garment in hand. */

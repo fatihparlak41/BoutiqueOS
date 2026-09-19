@@ -30,11 +30,10 @@ export default async function StockCountListPage() {
       <PageHeader
         eyebrow={{ href: "/app/stok", label: "Stok" }}
         title="Stok sayımı"
-        description="Rafı sayın, farkları inceleyin, işleyin. Sayım işlenene kadar stok değişmez; işlenen sayım değiştirilemez."
+        description="Rafı okut, farkları incele, işle. Sayım işlenene kadar stok değişmez."
       />
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Yeni sayım</h2>
         <CreateCountForm branches={branches} defaultBranchId={branchId} />
       </section>
 
@@ -42,7 +41,7 @@ export default async function StockCountListPage() {
         <h2 className="text-sm font-medium">
           Açık sayımlar <span className="ml-1 text-xs font-normal text-text-muted" data-numeric>{open.length}</span>
         </h2>
-        {open.length === 0 ? <p className="text-sm text-text-muted">Açık sayım yok.</p> : <CountList rows={open} />}
+        {open.length === 0 ? <p className="text-sm text-text-muted">Devam eden sayım yok.</p> : <CountList rows={open} />}
       </section>
 
       <section className="space-y-3">
@@ -50,7 +49,7 @@ export default async function StockCountListPage() {
           Geçmiş <span className="ml-1 text-xs font-normal text-text-muted" data-numeric>{closed.length}</span>
         </h2>
         {closed.length === 0 ? (
-          <EmptyState compact icon={<ClipboardCheck />} title="Henüz işlenmiş sayım yok" description="Yukarıdan bir sayım başlat, rafı okut, farkları incele ve işle; stok o anda güncellenir." />
+          <EmptyState compact icon={<ClipboardCheck />} title="Henüz tamamlanmış sayım yok" description="Yukarıdan bir sayım başlat, rafı okut, farkları incele ve işle; stok o anda güncellenir." />
         ) : (
           <CountList rows={closed} />
         )}
@@ -76,7 +75,7 @@ function CountList({ rows }: { rows: StockCountListRow[] }) {
               </p>
             </div>
             <span className="shrink-0 text-xs text-text-secondary" data-numeric>
-              {c.counted_lines}/{c.line_count} satır
+              {c.counted_lines}/{c.line_count} ürün
             </span>
           </Link>
         </li>

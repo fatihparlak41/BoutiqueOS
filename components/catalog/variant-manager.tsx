@@ -73,7 +73,7 @@ function AddVariantForm({
 
   return (
     <form action={formAction} className="space-y-4 border border-line bg-panel/40 p-4">
-      <h4 className="text-xs font-medium text-ink-70">Varyant ekle</h4>
+      <h4 className="text-xs font-medium text-ink-70">Seçenek ekle</h4>
 
       <input type="hidden" name="product_id" value={productId} />
       {chosenValueIds.map((valueId) => (
@@ -121,7 +121,7 @@ function AddVariantForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="new-variant-price">Varyant fiyatı</Label>
+          <Label htmlFor="new-variant-price">Seçenek fiyatı</Label>
           <Input
             id="new-variant-price"
             name="sale_price_override"
@@ -132,9 +132,9 @@ function AddVariantForm({
         </div>
       </div>
 
-      <FormMessage state={state} successText="Varyant eklendi." />
+      <FormMessage state={state} successText="Seçenek eklendi." />
 
-      <SubmitButton label="Varyant ekle" pendingLabel="Ekleniyor…" />
+      <SubmitButton label="Seçenek ekle" pendingLabel="Ekleniyor…" />
     </form>
   );
 }
@@ -210,7 +210,7 @@ function VariantRowItem({
           <td colSpan={6} className="border-t border-line bg-panel/30 px-3 py-4">
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="space-y-3">
-                <h5 className="text-xs font-medium text-ink-70">Varyant bilgileri</h5>
+                <h5 className="text-xs font-medium text-ink-70">Seçenek bilgileri</h5>
                 {canEdit ? (
                   <form action={formAction} className="space-y-3">
                     <input type="hidden" name="variant_id" value={variant.id} />
@@ -230,7 +230,7 @@ function VariantRowItem({
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <Label htmlFor={`price-${variant.id}`}>Varyant fiyatı</Label>
+                        <Label htmlFor={`price-${variant.id}`}>Seçenek fiyatı</Label>
                         <Input
                           id={`price-${variant.id}`}
                           name="sale_price_override"
@@ -261,16 +261,16 @@ function VariantRowItem({
                       </div>
                     </div>
 
-                    <FormMessage state={state} successText="Varyant güncellendi." />
+                    <FormMessage state={state} successText="Seçenek güncellendi." />
                     <SubmitButton label="Kaydet" pendingLabel="Kaydediliyor…" variant="outline" />
                   </form>
                 ) : (
-                  <p className="text-xs text-muted">Varyant düzenlemek için yönetici yetkisi gerekir.</p>
+                  <p className="text-xs text-muted">Seçenek düzenlemek için yönetici yetkisi gerekir.</p>
                 )}
 
                 <p className="text-2xs text-muted">
                   Seçenek kombinasyonu oluşturulduktan sonra değiştirilmez. Farklı bir kombinasyon
-                  gerekiyorsa bu varyantı arşivleyip yenisini ekleyin.
+                  gerekiyorsa bu seçeneği arşivleyip yenisini ekleyin.
                 </p>
               </div>
 
@@ -314,7 +314,7 @@ export function VariantManager({
 
       {variants.length === 0 ? (
         <p className="border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">
-          Henüz varyant yok. Aşağıdan ilk varyantı ekleyin.
+          Henüz renk ya da beden yok. Aşağıdan ilk seçeneği ekleyin.
         </p>
       ) : (
         <div className="relative overflow-x-auto">
@@ -350,7 +350,7 @@ export function VariantManager({
       {canEdit && showAddForm ? (
         options.length === 0 ? (
           <p className="text-xs text-muted">
-            Varyant eklemek için önce en az bir seçenek tanımlayın.
+            Renk ya da beden eklemek için önce en az bir seçenek değeri tanımlayın.
           </p>
         ) : (
           <AddVariantForm productId={productId} skuPrefix={skuPrefix} options={options} />

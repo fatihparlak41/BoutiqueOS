@@ -73,7 +73,7 @@ export type CustomerFinancials = { revenue: number; cogs: number; gross_margin: 
 
 export type ReservationStatus = "active" | "converted" | "cancelled" | "expired";
 export const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
-  active: "Aktif", converted: "Teslim edildi", cancelled: "İptal", expired: "Süresi doldu",
+  active: "Aktif", converted: "Tamamlandı", cancelled: "İptal edildi", expired: "Süresi doldu",
 };
 
 export type ReservationLine = { variant: CountVariant; quantity: number; price: number; available: number };

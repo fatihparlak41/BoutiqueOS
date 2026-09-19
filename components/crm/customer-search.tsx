@@ -37,28 +37,29 @@ export function CustomerSearch({ recent, sources }: { recent: CustomerHit[]; sou
             <Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Ad, telefon, e-posta ya da Instagram" className="h-12 pl-8 text-base sm:h-10" autoComplete="off" aria-label="Müşteri ara" />
           </div>
         </div>
-        <Button type="submit" variant="outline" size="md" disabled={busy || term.trim().length < 2}>{busy ? "…" : "Ara"}</Button>
+        <Button type="submit" variant="outline" size="md" disabled={busy || term.trim().length < 2} className="h-12 sm:h-10">{busy ? "…" : "Ara"}</Button>
       </form>
       {error ? <Notice tone="danger">{error}</Notice> : null}
-      <p className="text-2xs text-muted">{results ? `${results.length} sonuç` : "Son eklenen müşteriler"}</p>
+      {rows.length > 0 ? <p className="text-2xs text-muted">{results ? `${results.length} sonuç` : "Son eklenen müşteriler"}</p> : null}
       {rows.length === 0 ? (
         results ? (
-          <EmptyState compact title="Eşleşen müşteri yok" description="Ad, telefon, e-posta ya da Instagram kullanıcı adıyla ara." />
+          <EmptyState compact title="Eşleşen müşteri yok" description="Ad, telefon, e-posta ya da Instagram kullanıcı adıyla ara; yoksa yeni müşteri oluştur." action={<Link href="/app/musteriler/yeni"><Button variant="outline" size="sm">Yeni müşteri</Button></Link>} />
         ) : (
-          <EmptyState icon={<Users />} title="İlk müşterini ekle" description="Telefon ya da Instagram yeter; satışlar ve rezervasyonlar müşteriye kendiliğinden bağlanır." action={<Link href="/app/musteriler/yeni"><Button variant="outline">Müşteri ekle</Button></Link>} />
+          <EmptyState editorial icon={<Users />} title="Müşteri listen henüz boş." description="Satış sırasında müşteri ekleyebilir veya buradan yeni müşteri oluşturabilirsin." action={<Link href="/app/musteriler/yeni"><Button variant="outline">Yeni müşteri</Button></Link>} />
         )
       ) : (
         <ul className="divide-y divide-line border-y border-line" data-testid="customer-results">
           {rows.map((c) => (
             <li key={c.id}>
-              <Link href={`/app/musteriler/${c.id}`} className="flex items-center gap-3 px-1 py-3 hover:bg-panel">
+              <Link href={`/app/musteriler/${c.id}`} className="flex min-h-14 items-center gap-3 px-1 py-3 hover:bg-panel">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink">{c.full_name}{!c.is_active ? <span className="ml-2 text-2xs text-muted">arşiv</span> : null}</p>
-                  <p className="truncate text-2xs text-muted" data-numeric>{[c.phone, c.email, c.instagram ? `@${c.instagram}` : null].filter(Boolean).join(" · ") || "iletişim bilgisi yok"}</p>
+                  <p className="truncate text-sm font-medium text-ink">{c.full_name}{!c.is_active ? <span className="ml-2 text-2xs text-muted">arşivde</span> : null}</p>
+                  <p className="truncate text-xs text-muted" data-numeric>{[c.phone, c.email, c.instagram ? `@${c.instagram}` : null].filter(Boolean).join(" · ") || "iletişim bilgisi yok"}</p>
                 </div>
-                <div className="text-right text-2xs text-muted" data-numeric>
-                  {c.source ? <p>{label(c.source)}</p> : null}
-                  <p>{c.order_count > 0 ? `${c.order_count} satış` : "satış yok"}{c.last_purchase_at ? ` · ${formatDateTime(c.last_purchase_at)}` : ""}</p>
+                <div className="shrink-0 text-right text-2xs text-muted" data-numeric>
+                  {c.source ? <p className="hidden sm:block">{label(c.source)}</p> : null}
+                  <p>{c.order_count > 0 ? `${c.order_count} satış` : "satış yok"}</p>
+                  {c.last_purchase_at ? <p className="hidden sm:block">{formatDateTime(c.last_purchase_at)}</p> : null}
                 </div>
               </Link>
             </li>

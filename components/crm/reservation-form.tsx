@@ -191,7 +191,7 @@ export function ReservationForm({ branchId, branchName, sources, defaultHours, i
                 <ProductThumb url={it.thumbnail_url} alt={it.product_name} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{it.product_name}</p>
-                  <p className="truncate text-2xs text-muted">{[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek varyant"} · <span data-numeric>{it.sku}</span></p>
+                  <p className="truncate text-2xs text-muted">{[it.color, it.size].filter(Boolean).join(" / ") || it.options || "Tek seçenek"} · <span data-numeric>{it.sku}</span></p>
                   <p className={cn("text-2xs", it.available > 0 ? "text-muted" : "text-danger")} data-numeric>{it.available > 0 ? `${it.available} adet müsait` : "müsait değil"}</p>
                 </div>
                 <span className="text-sm" data-numeric>{money(it.price)}</span>
@@ -211,7 +211,7 @@ export function ReservationForm({ branchId, branchName, sources, defaultHours, i
                   <ProductThumb url={l.item.thumbnail_url} alt={l.item.product_name} size="sm" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink">{l.item.product_name}</p>
-                    <p className="truncate text-2xs text-muted">{[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek varyant"} · <span data-numeric>{l.item.sku}</span></p>
+                    <p className="truncate text-2xs text-muted">{[l.item.color, l.item.size].filter(Boolean).join(" / ") || l.item.options || "Tek seçenek"} · <span data-numeric>{l.item.sku}</span></p>
                     <p className={cn("text-2xs", l.quantity > l.item.available ? "text-danger" : "text-muted")} data-numeric>{l.item.available} adet müsait</p>
                   </div>
                   <span className="text-sm" data-numeric>{money(l.item.price)}</span>
