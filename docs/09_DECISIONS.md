@@ -360,3 +360,52 @@ and an audited, idempotent approval is the only door into the multi-tenant space
 processor exists, without ever mixing SaaS money with boutique money, without a document
 that can change after it was issued, and without a job or a status coupling that could
 lock a shop out of its own data by accident.
+
+## ADR-21 · One Catalogue, an Explicit Publish Switch, a Read-Only Public Boundary
+
+**Decision (Phase 14A):**
+1. BoutiqueOS stays the only catalogue. The public storefront (`/shop/[slug]`) reads
+   products, variants, options, images, price and availability from the operational tables
+   through explicitly shaped, read-only, anon-callable RPCs (`rpc_shop_resolve`, `_home`,
+   `_products`, `_product`, `_availability`, `_resolve_host`). `anon` gets no table row:
+   the operational tables stay behind membership RLS whose helpers anon may not even
+   execute, and the RPCs return only public fields — never SKU, barcode, cost, supplier,
+   notes, internal ids beyond the variant id a cart line needs, or a private storage path.
+2. Publishing is a decision, not a side effect of being active: `products.web_published`
+   (+ `web_title`, `web_description`, `web_slug`, `web_featured`, `web_sort_order`) and
+   `product_variants.web_enabled`. Publishing needs an active product, at least one active
+   web-enabled variant and a selling price above zero; stock is not required (a published
+   product may read "Tükendi"). A product that stops being active is unpublished by trigger
+   and is not republished by itself.
+3. Web price is the current selling price (`COALESCE(variant override, product default)`).
+   There is no second price list; a web-only price is a later decision.
+4. Public availability is `sellable ledger − active, unexpired holds` at the storefront's
+   fulfillment branch (its configured branch, else the default one), shown as a state
+   (in_stock / low / sold_out with a merchant-set threshold) or, when the merchant chooses,
+   the exact number. Damaged and quarantine buckets never count; on-hand totals, cost and
+   MWA are never exposed. Availability is re-read on every request and by the cart.
+5. Images: the private `product-images` bucket stays private and signed. A published image
+   is a copy in the public `storefront-images` bucket at
+   `store/<business>/products/<product>/<image>.<ext>`, recorded in
+   `product_images.public_path`; the copy is made by the merchant's own session under the
+   bucket's storage policies (manager+, own tenant). Only `product_main`, `product_gallery`
+   and `variant` roles may carry a public path (CHECK + trigger); `label_tag` and
+   `receiving_proof` can never be published. Public URLs need no signing and are cacheable.
+6. Storefront settings are one row per business (`storefronts`): enabled, platform-unique
+   slug (the public URL), store name, tagline, announcement, about, Instagram, WhatsApp,
+   contact, fulfillment branch, stock display, threshold. `storefront_domains` and
+   `rpc_shop_resolve_host` are the custom-domain foundation only — no DNS automation, and
+   no host is routed in 14A. `/shop/*` is excluded from the auth middleware: no session, no
+   redirect, no Auth round trip per public request.
+7. The cart is browser state for ONE store (`localStorage`, `bos_cart:<slug>`), capped at
+   20 lines × 10 units, re-checked against live availability on every visit. It reserves
+   nothing and creates no movement — CART ≠ RESERVATION; a hold is a checkout/order concern
+   of a later phase. There is no checkout, no payment, no customer account; the cart page
+   hands the basket to the boutique (WhatsApp / Instagram / e-mail).
+8. Public catalogue copy is cached briefly (store 120 s, home/listing 60 s, product 300 s)
+   under the tag `shop:<slug>` and dropped by tag on every publish / settings change;
+   availability is never cached.
+
+**Why:** the merchant must never maintain a second catalogue, a customer must never see an
+operational fact, and a public page must never depend on a session — while the private
+image store, the ledger and the reservation rules stay exactly as they are.
