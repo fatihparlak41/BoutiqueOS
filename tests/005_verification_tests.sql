@@ -5560,6 +5560,19 @@ SELECT t_check('T76h5 re-reserve reopens the expired order with a fresh hold (st
                 AND (SELECT count(*) FROM storefront_order_events WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004') AND event = 'rereserved') = 1 $q$)
   AND (SELECT r ->> 'status' = 'confirmed' FROM rpc_online_order_confirm(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) r));
 SELECT t_err('T76h6 re-reserving a live hold is refused', $q$ SELECT rpc_online_order_rereserve(t_get('bizS'), t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004')) $q$, 'HOLD_ACTIVE');
+-- regression (20260919190000): the stale expired hold must not re-expire a re-reserved order, and the replay must read the current hold
+SELECT t_check('T76h6b a sweep after re-reserve expires nothing; order 4 stays confirmed on its new active hold',
+  (SELECT (r ->> 'expired')::int = 0 FROM rpc_online_orders_sweep(t_get('bizS')) r)
+  AND t76_q($q$ (SELECT status = 'confirmed' FROM storefront_orders WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004'))
+                AND (SELECT count(*) FROM storefront_order_events WHERE order_id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004') AND event = 'expired') = 1 $q$),
+  t76_txt($q$ SELECT o.status::text || ' holds=' || (SELECT string_agg(r.status::text, ',' ORDER BY r.created_at) FROM reservations r WHERE r.storefront_order_id = o.id) FROM storefront_orders o WHERE o.id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000004') $q$));
+SELECT t_logout();
+SET ROLE anon;
+SELECT t_check('T76h6c replaying the original key on the re-reserved order returns the current hold (no multi-row subquery)',
+  (SELECT (r ->> 'replayed')::boolean AND r ->> 'status' = 'confirmed' AND (r ->> 'reservation_expires_at')::timestamptz > now()
+   FROM rpc_shop_create_order('zz-store', t76_key(5), jsonb_build_array(t76_line('TRK-B-STD', 1)), t76_cust('Dördüncü', '0555 000 00 04', NULL)) r));
+RESET ROLE;
+SELECT t_login('a12');
 SELECT t_logout();
 -- guards even for the superuser
 SELECT t_err('T76h7 a cancelled order never moves', $q$ UPDATE storefront_orders SET status = 'confirmed' WHERE id = t76_order('WEB-' || (SELECT yr FROM _t76)::text || '-000003') $q$, 'ORDER_FINAL');
