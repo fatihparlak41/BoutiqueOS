@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 72 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 72,
+SELECT t_check('T01 all 73 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 73,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -2350,8 +2350,8 @@ SELECT t_check('T63 privilege: count tables have no client writes and RPCs are a
   NOT has_table_privilege('authenticated', 'stock_counts', 'INSERT') AND NOT has_table_privilege('authenticated', 'stock_counts', 'UPDATE')
   AND NOT has_table_privilege('authenticated', 'stock_count_lines', 'UPDATE') AND NOT has_table_privilege('authenticated', 'stock_count_lines', 'DELETE')
   AND NOT has_table_privilege('authenticated', 'stock_count_scans', 'INSERT')
-  AND has_function_privilege('authenticated', 'rpc_stock_count_post(uuid)', 'EXECUTE')
-  AND NOT has_function_privilege('anon', 'rpc_stock_count_post(uuid)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'rpc_stock_count_post(uuid, text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_stock_count_post(uuid, text)', 'EXECUTE')
   AND NOT has_function_privilege('authenticated', 'fn_stock_count_apply(uuid, uuid, inventory_bucket, integer, integer, uuid, text, timestamptz)', 'EXECUTE'));
 
 -- A) create (stock_staff may), scan, duplicate scan, idempotent replay, undo, conditions
@@ -2557,6 +2557,168 @@ SELECT t_err('T63j business_id of a line cannot point at another tenant (parent 
 SELECT t_err('T63j a count movement cannot be forged for another tenant''s line',
   $q$ INSERT INTO inventory_movements (business_id, branch_id, variant_id, bucket, quantity, reason, reference_type, reference_id)
       SELECT t_get('bizB'), t_get('brB'), t_get('vB'), 'sellable', 1, 'adjustment', 'stock_count_line', id FROM stock_count_lines WHERE stock_count_id = t_get('sc63') AND variant_id = t_get('v63a') $q$, '23505');
+
+
+-- K) Phase 15B-0 — opening-stock cost bridge: a surplus on a pool without basis is priced by an
+--    explicit owner/manager cost (documented_purchase | owner_declared_opening_cost); stock_staff
+--    counts quantities and never sees a cost; the review fingerprint covers cost rows; posted
+--    costs are immutable; negative differences never need a cost.
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Açılış Ürünü', 'ACL-63', 900, 'active') RETURNING id)
+  SELECT t_set('p63k', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63k'), 'ACL-63-F') RETURNING id) SELECT t_set('v63f', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63f'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000001');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63k'), 'ACL-63-G') RETURNING id) SELECT t_set('v63g', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63g'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000002');
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63k'), 'ACL-63-H') RETURNING id) SELECT t_set('v63h', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t_get('v63h'), t_get('opt_size'), 'c1000000-0000-4000-8000-000000000003');
+SELECT t_login('u1');
+SELECT t_ok('T63k opening stock H=2 @100 (a variant with a cost basis)', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63h'), 'sellable', 2, 'sayım fixture', 'manual_cost', 100) $q$);
+SELECT t_logout();
+CREATE TEMP TABLE _t63k_base AS SELECT (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) AS movements;
+GRANT SELECT ON _t63k_base TO authenticated;
+
+SELECT t_check('T63k privilege: cost table has no client writes, anon nothing, RPC authenticated-only, hash private',
+  NOT has_table_privilege('authenticated', 'stock_count_line_costs', 'INSERT') AND NOT has_table_privilege('authenticated', 'stock_count_line_costs', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'stock_count_line_costs', 'DELETE') AND NOT has_table_privilege('anon', 'stock_count_line_costs', 'SELECT')
+  AND has_function_privilege('authenticated', 'rpc_stock_count_set_line_cost(uuid, numeric, stock_count_cost_source, text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_stock_count_set_line_cost(uuid, numeric, stock_count_cost_source, text)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_stock_count_hash(uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_stock_count_post(uuid, text)', 'EXECUTE'));
+
+-- stock_staff counts: F 3 (no basis), G 2 (no basis), H 1 (basis 2 → shortage), A 6 (basis 4 @100 → surplus with basis)
+SELECT t_login('u4');
+SELECT t_set('sc63k', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'cycle', 'T63k açılış sayımı'));
+SELECT t_ok('T63k F = 3', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63k'), t_get('v63f'), 'sellable', 3, '66666666-0000-4000-8000-000000000001') $q$);
+SELECT t_ok('T63k G = 2', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63k'), t_get('v63g'), 'sellable', 2, '66666666-0000-4000-8000-000000000002') $q$);
+SELECT t_ok('T63k H = 1', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63k'), t_get('v63h'), 'sellable', 1, '66666666-0000-4000-8000-000000000003') $q$);
+SELECT t_ok('T63k A = 6', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63k'), t_get('v63a'), 'sellable', 6, '66666666-0000-4000-8000-000000000004') $q$);
+SELECT t_ok('T63k stock_staff reviews', $q$ SELECT rpc_stock_count_review(t_get('sc63k')) $q$);
+SELECT t_check('T63k review flags exactly the two surpluses without basis (F, G) as cost_required; A (basis) and H (shortage) not',
+  (SELECT string_agg(pv.sku || '=' || l.cost_required::text, ',' ORDER BY pv.sku) FROM stock_count_lines l JOIN product_variants pv ON pv.id = l.variant_id WHERE l.stock_count_id = t_get('sc63k'))
+  = 'ACL-63-F=true,ACL-63-G=true,ACL-63-H=false,SAY-63-A=false'
+  AND (SELECT review_hash FROM stock_counts WHERE id = t_get('sc63k')) IS NOT NULL,
+  (SELECT string_agg(pv.sku || '=' || l.cost_required::text, ',' ORDER BY pv.sku) FROM stock_count_lines l JOIN product_variants pv ON pv.id = l.variant_id WHERE l.stock_count_id = t_get('sc63k')));
+SELECT t_err('T63k stock_staff cannot enter a cost', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f')), 120, 'documented_purchase', 'x') $q$, '42501');
+SELECT t_err('T63k stock_staff cannot post', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k')) $q$, '42501');
+SELECT t_logout();
+CREATE TEMP TABLE _t63k_line AS SELECT variant_id, id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k');
+GRANT SELECT ON _t63k_line TO authenticated;
+
+-- manager: COST_REQUIRED before any cost; validation; clear; STALE_REVIEW on change after review
+SELECT t_login('u2');
+SELECT t_err('T63k (1) positive difference on an empty pool blocks the posting: COST_REQUIRED', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k')) $q$, 'COST_REQUIRED');
+SELECT t_check('T63k blocked posting wrote nothing', (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63k_base));
+SELECT t_err('T63k zero cost refused', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 0, 'owner_declared_opening_cost', NULL) $q$, 'INVALID_COST');
+SELECT t_err('T63k negative cost refused', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), -5, 'owner_declared_opening_cost', NULL) $q$, 'INVALID_COST');
+SELECT t_err('T63k cost without a source refused', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 80.5, NULL, NULL) $q$, 'COST_SOURCE_REQUIRED');
+SELECT t_err('T63k unknown source refused by the enum', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 80.5, 'sale_price_div_3', NULL) $q$, '22P02');
+SELECT t_ok('T63k (5) manager enters F = 120 documented_purchase with a reference', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f')), 120, 'documented_purchase', 'Fatura EAR2026000000110 satır 4') $q$);
+SELECT t_ok('T63k manager enters G = 80.5 owner_declared', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 80.5, 'owner_declared_opening_cost', 'sahip beyanı') $q$);
+SELECT t_ok('T63k manager also enters A = 999 (a basis exists: must be ignored at POST)', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63a')), 999, 'owner_declared_opening_cost', NULL) $q$);
+SELECT t_check('T63k (5) manager reads the three cost rows with source, note and actor',
+  t_count($q$ SELECT count(*) FROM stock_count_line_costs WHERE stock_count_id = t_get('sc63k') $q$) = 3
+  AND (SELECT unit_cost_base::text || '/' || cost_source::text || '/' || note FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f'))) = '120.000000/documented_purchase/Fatura EAR2026000000110 satır 4'
+  AND (SELECT entered_by FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f'))) = t_get('u2'));
+SELECT t_ok('T63k manager corrects G to 80 (upsert)', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 80, 'owner_declared_opening_cost', 'sahip beyanı') $q$);
+SELECT t_check('T63k correction replaced the row, still three rows', t_count($q$ SELECT count(*) FROM stock_count_line_costs WHERE stock_count_id = t_get('sc63k') $q$) = 3
+  AND (SELECT unit_cost_base FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g'))) = 80);
+SELECT t_err('T63k (9) a cost entered after the review makes the review stale: STALE_REVIEW', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k')) $q$, 'STALE_REVIEW');
+SELECT t_check('T63k stale refusal wrote nothing', (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63k_base));
+SELECT t_ok('T63k NULL clears G''s cost', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), NULL, NULL, NULL) $q$);
+SELECT t_ok('T63k review again', $q$ SELECT rpc_stock_count_review(t_get('sc63k')) $q$);
+SELECT t_err('T63k G without cost again blocks: COST_REQUIRED names G', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k')) $q$, 'ACL-63-G');
+SELECT t_ok('T63k G = 80.5 again', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 80.5, 'owner_declared_opening_cost', NULL) $q$);
+SELECT t_ok('T63k review again (fingerprint now covers the three cost rows)', $q$ SELECT rpc_stock_count_review(t_get('sc63k')) $q$);
+CREATE TEMP TABLE _t63k_hash AS SELECT review_hash AS h FROM stock_counts WHERE id = t_get('sc63k');
+GRANT SELECT ON _t63k_hash TO authenticated;
+SELECT t_err('T63k (9) a client posting the hash of an older review is refused: STALE_REVIEW', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k'), 'deadbeef') $q$, 'STALE_REVIEW');
+SELECT t_logout();
+
+-- stock_staff and sales_staff never see a cost value; the other tenant cannot touch the line
+SELECT t_login('u4');
+SELECT t_check('T63k (3) stock_staff reads zero cost rows although three exist (RLS), while it still sees the lines and the flags',
+  t_count($q$ SELECT count(*) FROM stock_count_line_costs $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND cost_required $q$) = 2);
+SELECT t_err('T63k (4) stock_staff cannot write a cost even now', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), 1, 'owner_declared_opening_cost', NULL) $q$, '42501');
+SELECT t_err('T63k stock_staff cannot clear a cost', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g')), NULL, NULL, NULL) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u3');
+SELECT t_check('T63k sales_staff sees no cost row', t_count($q$ SELECT count(*) FROM stock_count_line_costs $q$) = 0);
+SELECT t_err('T63k sales_staff cannot write a cost', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM _t63k_line WHERE variant_id = t_get('v63g')), 1, 'owner_declared_opening_cost', NULL) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_check('T63k other tenant sees no cost row', t_count($q$ SELECT count(*) FROM stock_count_line_costs $q$) = 0);
+SELECT t_err('T63k other tenant cannot write a cost on A''s line', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM _t63k_line WHERE variant_id = t_get('v63g')), 1, 'owner_declared_opening_cost', NULL) $q$, '42501');
+SELECT t_logout();
+
+-- (2) POST with the current hash: F +3 @120, G +2 @80.5, A +2 at MWA 100 (999 ignored), H −1 at MWA 100
+SELECT t_login('u2');
+CREATE TEMP TABLE _t63k_post AS SELECT * FROM rpc_stock_count_post(t_get('sc63k'), (SELECT h FROM _t63k_hash));
+GRANT SELECT ON _t63k_post TO authenticated;
+SELECT t_logout();
+SELECT t_check('T63k (2) posted: 4 adjustments, +7 surplus, −1 shortage', (SELECT adjustments FROM _t63k_post) = 4 AND (SELECT surplus_units FROM _t63k_post) = 7 AND (SELECT shortage_units FROM _t63k_post) = 1
+  AND (SELECT status::text FROM stock_counts WHERE id = t_get('sc63k')) = 'posted');
+SELECT t_check('T63k F priced by the entered cost: pool 3 / 360, movement cost 120, one movement',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63f') AND branch_id = t_get('br63')) = '3/360.00'
+  AND (SELECT mc.unit_cost_base FROM inventory_movement_costs mc JOIN inventory_movements m ON m.id = mc.movement_id JOIN stock_count_lines l ON l.id = m.reference_id WHERE l.stock_count_id = t_get('sc63k') AND l.variant_id = t_get('v63f')) = 120
+  AND t_count($q$ SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63f') $q$) = 1,
+  (SELECT on_hand_qty || '/' || total_value_base::text FROM variant_cost_pools WHERE variant_id = t_get('v63f') AND branch_id = t_get('br63')));
+SELECT t_check('T63k G priced 80.5 → pool 2 / 161 (six-decimal money, no float)',
+  (SELECT on_hand_qty || '/' || total_value_base::text FROM variant_cost_pools WHERE variant_id = t_get('v63g') AND branch_id = t_get('br63')) = '2/161.000000');
+SELECT t_check('T63k (7) A surplus with a basis used the moving average 100, not the entered 999 → pool 6 / 600',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63a') AND branch_id = t_get('br63')) = '6/600.00');
+SELECT t_check('T63k (6) H shortage left at its moving average without any cost entry → pool 1 / 100',
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63h') AND branch_id = t_get('br63')) = '1/100.00'
+  AND NOT EXISTS (SELECT 1 FROM stock_count_line_costs c JOIN stock_count_lines l ON l.id = c.line_id WHERE l.stock_count_id = t_get('sc63k') AND l.variant_id = t_get('v63h')));
+SELECT t_check('T63k cost rows record what POST did: F applied 3 / 360, G applied 2 / 161, A not applied (basis existed)',
+  (SELECT applied::text || '/' || applied_quantity || '/' || applied_value_base::numeric(12,2) FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f'))) = 'true/3/360.00'
+  AND (SELECT applied::text || '/' || applied_quantity || '/' || applied_value_base::numeric(12,2) FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63g'))) = 'true/2/161.00'
+  AND (SELECT applied::text || '/' || applied_quantity FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63a'))) = 'false/0');
+SELECT t_check('T63k exactly four movements from the count; no supplier entry, no receipt',
+  t_count($q$ SELECT count(*) FROM inventory_movements WHERE reference_type = 'stock_count_line' AND reference_id IN (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k')) $q$) = 4
+  AND (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('biz')) = (SELECT movements FROM _t63k_base) + 4
+  AND (SELECT count(*) FROM supplier_account_entries) = (SELECT liab_rows FROM _t63_base));
+SELECT t_check('T63k the sale price (900) played no part: entered costs stand as entered',
+  (SELECT unit_cost_base FROM stock_count_line_costs WHERE line_id = (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f'))) = 120
+  AND (SELECT default_sale_price FROM products WHERE id = t_get('p63k')) = 900);
+
+-- (8) immutability after POST; (10) exact-once
+SELECT t_login('u2');
+SELECT t_err('T63k (10) second post refused: ALREADY_POSTED', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63k'), (SELECT h FROM _t63k_hash)) $q$, 'ALREADY_POSTED');
+SELECT t_err('T63k (8) cost of a posted line cannot be changed through the RPC', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f')), 1, 'owner_declared_opening_cost', NULL) $q$, 'INVALID_STATE');
+SELECT t_err('T63k (8) nor cleared', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63f')), NULL, NULL, NULL) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_err('T63k (8) posted cost row immutable even for maintenance', $q$ UPDATE stock_count_line_costs SET unit_cost_base = 1 WHERE stock_count_id = t_get('sc63k') $q$, 'IMMUTABLE');
+SELECT t_err('T63k (8) posted cost row undeletable', $q$ DELETE FROM stock_count_line_costs WHERE stock_count_id = t_get('sc63k') $q$, 'IMMUTABLE');
+SELECT t_err('T63k (8) posted cost row cannot gain a sibling', $q$ INSERT INTO stock_count_line_costs (line_id, stock_count_id, unit_cost_base, cost_source) SELECT id, stock_count_id, 1, 'owner_declared_opening_cost' FROM stock_count_lines WHERE stock_count_id = t_get('sc63k') AND variant_id = t_get('v63h') $q$, 'IMMUTABLE');
+SELECT t_check('T63k (10) still exactly four count movements', t_count($q$ SELECT count(*) FROM inventory_movements WHERE reference_type = 'stock_count_line' AND reference_id IN (SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63k')) $q$) = 4);
+
+-- the new units carry their cost forward: a later shortage on F leaves at 120, and a later surplus inherits it
+SELECT t_login('u2');
+SELECT t_set('sc63m', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'cycle', 'T63k sonrası'));
+SELECT t_ok('T63k F = 2 later (−1)', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63m'), t_get('v63f'), 'sellable', 2, '66666666-0000-4000-8000-000000000011') $q$);
+SELECT t_ok('T63k G = 4 later (+2, basis now exists)', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63m'), t_get('v63g'), 'sellable', 4, '66666666-0000-4000-8000-000000000012') $q$);
+SELECT t_ok('T63k review the later count', $q$ SELECT rpc_stock_count_review(t_get('sc63m')) $q$);
+SELECT t_check('T63k later count needs no cost: nothing flagged', t_count($q$ SELECT count(*) FROM stock_count_lines WHERE stock_count_id = t_get('sc63m') AND cost_required $q$) = 0);
+SELECT t_ok('T63k later count posts without any cost entry', $q$ SELECT * FROM rpc_stock_count_post(t_get('sc63m')) $q$);
+SELECT t_logout();
+SELECT t_check('T63k F 2 / 240 (left at 120) and G 4 / 322 (inherited 80.5): the bridge cost is the moving average from now on',
+  (SELECT on_hand_qty || '/' || total_value_base::text FROM variant_cost_pools WHERE variant_id = t_get('v63f') AND branch_id = t_get('br63')) = '2/240.000000'
+  AND (SELECT on_hand_qty || '/' || total_value_base::text FROM variant_cost_pools WHERE variant_id = t_get('v63g') AND branch_id = t_get('br63')) = '4/322.000000');
+
+-- a cancelled count freezes its cost rows too
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63k'), 'ACL-63-I') RETURNING id) SELECT t_set('v63i', id) FROM x;
+SELECT t_login('u2');
+SELECT t_set('sc63n', rpc_stock_count_create(t_get('biz'), t_get('br63'), 'cycle', 'T63k iptal'));
+SELECT t_ok('T63k I = 1 (no basis)', $q$ SELECT rpc_stock_count_set_quantity(t_get('sc63n'), t_get('v63i'), 'sellable', 1, '66666666-0000-4000-8000-000000000021') $q$);
+SELECT t_ok('T63k cost may be entered while still counting', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63n') AND variant_id = t_get('v63i')), 55, 'owner_declared_opening_cost', NULL) $q$);
+SELECT t_ok('T63k cancel it', $q$ SELECT rpc_stock_count_cancel(t_get('sc63n'), 'test') $q$);
+SELECT t_err('T63k cancelled count: cost frozen', $q$ SELECT rpc_stock_count_set_line_cost((SELECT id FROM stock_count_lines WHERE stock_count_id = t_get('sc63n') AND variant_id = t_get('v63i')), 56, 'owner_declared_opening_cost', NULL) $q$, 'INVALID_STATE');
+SELECT t_logout();
+SELECT t_check('T63k cancelled count wrote no movement for I and kept the cost row for audit',
+  t_count($q$ SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63i') $q$) = 0
+  AND t_count($q$ SELECT count(*) FROM stock_count_line_costs WHERE stock_count_id = t_get('sc63n') $q$) = 1);
 
 -- ============================================================
 -- T64 — Phase 8A goods receiving + landed cost: charges, allocation, review/stale,

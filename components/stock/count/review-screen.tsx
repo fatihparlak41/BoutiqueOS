@@ -4,23 +4,30 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { CellTitle, TBody, TD, TH, THead, TR, TableShell } from "@/components/ui/table";
 import { Notice } from "@/components/catalog/intake/primitives";
 import { BUCKET_LABELS } from "@/lib/stock/model";
 import {
+  COST_SOURCE_HINTS,
+  COST_SOURCE_LABELS,
   COUNT_TYPE_LABELS,
   REVIEW_FILTER_LABELS,
+  costPendingLines,
+  formatBaseMoney,
   lineDifference,
   matchesReviewFilter,
   summarize,
+  type CountCostSource,
   type CountLine,
   type PostSummary,
   type ReviewFilter,
   type StockCount,
 } from "@/lib/stock/count-model";
-import { cancelAction, postAction, reopenAction, resolveFromReviewAction, reviewAction } from "@/app/app/stok/sayim/actions";
+import { cancelAction, clearLineCostAction, postAction, reopenAction, resolveFromReviewAction, reviewAction, setLineCostAction } from "@/app/app/stok/sayim/actions";
 import { ConditionBadge, Difference, VariantIdentity, useCountEvents } from "./shared";
 import { cn } from "@/lib/utils";
 
@@ -28,10 +35,21 @@ import { cn } from "@/lib/utils";
  * Review: expected (ledger at review time) against counted, per variant and condition.
  * Unresolved lines — on the shelf per the ledger, never scanned — stay open until the
  * person counts them or confirms zero; they are never treated as zero by themselves.
- * POST is one server call; a ledger that moved since review is refused and the person
- * refreshes the differences. No valuation is shown here in any role.
+ * POST is one server call; a ledger that moved since review — or a document changed since
+ * the review this screen rendered (review_hash) — is refused and the person refreshes the
+ * differences.
+ *
+ * Cost (Phase 15B-0): a surplus on a variant the ledger cannot price is flagged
+ * `cost_required`. Owner/manager enter its unit cost here (source + optional reference)
+ * and see the value it adds; every other role sees only that a manager must complete it.
+ * The cost rows are never loaded for those roles, so nothing here can leak them.
  */
-export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: boolean }) {
+const STALE_MARKERS = ["sayım sırasında değişti", "incelemeden sonra değişti"];
+function isStale(message: string): boolean {
+  return STALE_MARKERS.some((m) => message.includes(m));
+}
+
+export function ReviewScreen({ count, canPost, canCost = false }: { count: StockCount; canPost: boolean; canCost?: boolean }) {
   const router = useRouter();
   const event = useCountEvents();
   const [pending, start] = useTransition();
@@ -44,8 +62,16 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
   const [cancelReason, setCancelReason] = useState("");
   const [editing, setEditing] = useState<CountLine | null>(null);
   const [editQty, setEditQty] = useState("");
+  const [costing, setCosting] = useState<CountLine | null>(null);
+  const [costUnit, setCostUnit] = useState("");
+  const [costSource, setCostSource] = useState<CountCostSource>("documented_purchase");
+  const [costNote, setCostNote] = useState("");
 
   const s = summarize(count.lines);
+  const costPending = costPendingLines(count.lines);
+  const costRequired = count.lines.filter((l) => l.cost_required);
+  const addedValue = count.lines.reduce((sum, l) => (l.cost_required && l.cost ? sum + (lineDifference(l) ?? 0) * l.cost.unit_cost_base : sum), 0);
+  const money = (v: number) => formatBaseMoney(v, count.base_currency);
   const visible = count.lines.filter((l) => matchesReviewFilter(l, filter));
   const filterCounts: Record<ReviewFilter, number> = {
     all: count.lines.length,
@@ -62,12 +88,28 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
       const res = await fn();
       if (!res.ok) {
         setError(res.error ?? "İşlem tamamlanamadı.");
-        setStale(!!res.error && res.error.includes("sayım sırasında değişti"));
+        setStale(!!res.error && isStale(res.error));
         return;
       }
       after?.();
       router.refresh();
     });
+  }
+
+  function openCost(line: CountLine) {
+    setCosting(line);
+    setCostUnit(line.cost ? String(line.cost.unit_cost_base) : "");
+    setCostSource(line.cost?.cost_source ?? "documented_purchase");
+    setCostNote(line.cost?.note ?? "");
+  }
+
+  function saveCost() {
+    if (!costing) return;
+    const unit = Number(costUnit.replace(",", "."));
+    if (!Number.isFinite(unit) || unit <= 0) { setError("Birim maliyet sıfırdan büyük olmalı."); return; }
+    const line = costing;
+    setCosting(null);
+    run(() => setLineCostAction({ count_id: count.id, line_id: line.id, unit_cost: unit, source: costSource, note: costNote }));
   }
 
   function resolve(line: CountLine, quantity: number) {
@@ -79,10 +121,10 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
     setConfirmOpen(false);
     setError(null);
     start(async () => {
-      const res = await postAction(count.id);
+      const res = await postAction(count.id, count.review_hash);
       if (!res.ok) {
         setError(res.error);
-        setStale(res.error.includes("sayım sırasında değişti"));
+        setStale(isStale(res.error));
         return;
       }
       setPosted(res.data);
@@ -115,6 +157,20 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
         <Notice tone="warning">
           <span className="font-medium">{s.unresolved} satır sayılmadı.</span> Deftere göre rafta olması gereken ürünler; sayılmadı diye 0 sayılmaz. Her birini sayın ya da &quot;0 adet olarak doğrula&quot; ile onaylayın.
         </Notice>
+      ) : null}
+
+      {costRequired.length > 0 ? (
+        canCost ? (
+          <Notice tone={costPending.length > 0 ? "warning" : "info"}>
+            <span className="font-medium">{costRequired.length} satırda mevcut maliyet kaydı yok.</span>{" "}
+            Stoğa eklenecek birimler için birim alış maliyetini girin; girilmeden sayım işlenemez.
+            {costPending.length === 0 ? <> Tüm maliyetler girildi — eklenen değer <span data-numeric>{money(addedValue)}</span>.</> : <> Bekleyen: <span data-numeric>{costPending.length}</span>.</>}
+          </Notice>
+        ) : (
+          <Notice tone="info">
+            <span className="font-medium">{costRequired.length} satırda maliyet bilgisi yönetici tarafından tamamlanmalıdır.</span> Bu satırlar stoğa eklenecek yeni ürünler; maliyet girilmeden sayım işlenemez.
+          </Notice>
+        )
       ) : null}
 
       {error ? (
@@ -171,6 +227,7 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
                     <Button size="sm" variant="outline" onClick={() => { setEditing(l); setEditQty(""); }} disabled={pending}>Miktar gir</Button>
                   </div>
                 ) : null}
+                {l.cost_required ? <CostCell line={l} canCost={canCost} money={money} onEdit={() => openCost(l)} pending={pending} /> : null}
               </li>
             ))}
           </ul>
@@ -185,6 +242,7 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
                 <TH align="right">Beklenen</TH>
                 <TH align="right">Sayılan</TH>
                 <TH align="right">Fark</TH>
+                {costRequired.length > 0 ? <TH>Maliyet</TH> : null}
                 <TH></TH>
               </THead>
               <TBody>
@@ -196,6 +254,7 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
                     <TD numeric align="right">{l.expected_quantity ?? "—"}</TD>
                     <TD numeric align="right" className={l.counted_quantity === null ? "text-warning" : ""}>{l.counted_quantity ?? "sayılmadı"}</TD>
                     <TD align="right"><Difference value={lineDifference(l)} /></TD>
+                    {costRequired.length > 0 ? <TD>{l.cost_required ? <CostCell line={l} canCost={canCost} money={money} onEdit={() => openCost(l)} pending={pending} compact /> : null}</TD> : null}
                     <TD>
                       {l.counted_quantity === null ? (
                         <span className="flex gap-1">
@@ -219,8 +278,8 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
             {canPost ? <Button variant="ghost" onClick={() => setCancelOpen(true)} disabled={pending}>İptal et</Button> : null}
           </div>
           {canPost ? (
-            <Button size="lg" onClick={() => setConfirmOpen(true)} disabled={pending || s.unresolved > 0 || count.lines.length === 0}>
-              {pending ? "…" : "Sayımı işle"}
+            <Button size="lg" onClick={() => setConfirmOpen(true)} disabled={pending || s.unresolved > 0 || count.lines.length === 0 || costPending.length > 0} data-testid="post-button">
+              {pending ? "…" : costPending.length > 0 ? `Maliyet bekleyen ${costPending.length} satır` : "Sayımı işle"}
             </Button>
           ) : (
             <span className="text-xs text-text-muted">İşleme yetkisi: işletme sahibi ya da yönetici</span>
@@ -236,8 +295,11 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
             <div className="flex justify-between py-2"><dt className="text-text-muted">Fark olan satır</dt><dd data-numeric>{s.differences}</dd></div>
             <div className="flex justify-between py-2"><dt className="text-text-muted">Eksik adet</dt><dd data-numeric>−{s.shortage}</dd></div>
             <div className="flex justify-between py-2"><dt className="text-text-muted">Fazla adet</dt><dd data-numeric>+{s.surplus}</dd></div>
+            {canCost && costRequired.length > 0 ? (
+              <div className="flex justify-between py-2"><dt className="text-text-muted">Girilen maliyetle eklenen değer</dt><dd data-numeric>{money(addedValue)}</dd></div>
+            ) : null}
           </dl>
-          <p className="text-2xs text-text-muted">Eksikler şubenin hareketli ortalama maliyetiyle düşer; fazlalar aynı ortalamayı devralır. Şubede stoğu olmayan bir varyantta fazla çıkarsa işlem durur ve maliyet çözümü istenir.</p>
+          <p className="text-2xs text-text-muted">Eksikler şubenin hareketli ortalama maliyetiyle düşer; fazlalar aynı ortalamayı devralır. Şubede maliyet kaydı olmayan bir varyantın fazlası yalnız girdiğiniz birim maliyetle işlenir; girilmemişse işlem durur.</p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setConfirmOpen(false)}>Vazgeç</Button>
             <Button onClick={post} disabled={pending}>Evet, işle</Button>
@@ -266,6 +328,51 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
         ) : null}
       </Sheet>
 
+      <Sheet open={!!costing} onClose={() => setCosting(null)} title="Birim alış maliyeti" side="right" className="w-[min(26rem,94vw)]">
+        {costing ? (
+          <form onSubmit={(e) => { e.preventDefault(); saveCost(); }} className="space-y-4 p-4" data-testid="cost-form">
+            <VariantIdentity v={costing} />
+            <p className="text-xs text-text-secondary">Bu varyantın mevcut maliyet kaydı yok. Stoğa eklenecek birimler için birim alış maliyetini girin.</p>
+            <dl className="grid grid-cols-3 gap-2 border-y border-border py-2 text-center text-sm">
+              <div><dt className="text-2xs text-text-muted">Sayılan</dt><dd data-numeric>{costing.counted_quantity ?? "—"}</dd></div>
+              <div><dt className="text-2xs text-text-muted">Sistem</dt><dd data-numeric>{costing.expected_quantity ?? "—"}</dd></div>
+              <div><dt className="text-2xs text-text-muted">Fark</dt><dd><Difference value={lineDifference(costing)} /></dd></div>
+            </dl>
+            <div className="space-y-1.5">
+              <Label htmlFor="cost-unit">Birim maliyet ({count.base_currency})</Label>
+              <Input id="cost-unit" value={costUnit} onChange={(e) => setCostUnit(e.target.value)} inputMode="decimal" placeholder="0,00" autoFocus aria-label="Birim maliyet" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cost-source">Maliyet kaynağı</Label>
+              <Select id="cost-source" value={costSource} onChange={(e) => setCostSource(e.target.value as CountCostSource)}>
+                {(Object.keys(COST_SOURCE_LABELS) as CountCostSource[]).map((k) => <option key={k} value={k}>{COST_SOURCE_LABELS[k]}</option>)}
+              </Select>
+              <p className="text-2xs text-text-muted">{COST_SOURCE_HINTS[costSource]}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cost-note">Açıklama / referans (isteğe bağlı)</Label>
+              <Input id="cost-note" value={costNote} onChange={(e) => setCostNote(e.target.value)} maxLength={500} placeholder="Fatura no, satır, kaynak…" />
+            </div>
+            {(() => {
+              const unit = Number(costUnit.replace(",", "."));
+              const diff = lineDifference(costing) ?? 0;
+              return Number.isFinite(unit) && unit > 0 ? (
+                <p className="text-sm">Toplam eklenen değer: <span data-numeric className="font-medium">{money(diff * unit)}</span> <span className="text-text-muted">({diff} × {money(unit)})</span></p>
+              ) : null;
+            })()}
+            <div className="flex justify-between gap-2">
+              {costing.cost ? (
+                <Button type="button" variant="ghost" onClick={() => { const line = costing; setCosting(null); run(() => clearLineCostAction({ count_id: count.id, line_id: line.id })); }} disabled={pending}>Maliyeti kaldır</Button>
+              ) : <span />}
+              <span className="flex gap-2">
+                <Button type="button" variant="ghost" onClick={() => setCosting(null)}>Vazgeç</Button>
+                <Button type="submit" disabled={pending || costUnit.trim() === ""}>Kaydet</Button>
+              </span>
+            </div>
+          </form>
+        ) : null}
+      </Sheet>
+
       <Sheet open={cancelOpen} onClose={() => setCancelOpen(false)} title="Sayımı iptal et" side="right" className="w-[min(24rem,94vw)]">
         <div className="space-y-3 p-4">
           <p className="text-sm text-text-secondary">Sayım iptal edilir; satırlar ve taramalar kayıt için saklanır. Stok değişmez.</p>
@@ -276,6 +383,31 @@ export function ReviewScreen({ count, canPost }: { count: StockCount; canPost: b
           </div>
         </div>
       </Sheet>
+    </div>
+  );
+}
+
+/**
+ * What a flagged line shows about its cost. Owner/manager: the entered unit cost, the value
+ * it adds and an edit button; everyone else: only that a manager must complete it. The
+ * `cost` field is null for those roles because the query never loads it for them.
+ */
+function CostCell({ line, canCost, money, onEdit, pending, compact = false }: { line: CountLine; canCost: boolean; money: (v: number) => string; onEdit: () => void; pending: boolean; compact?: boolean }) {
+  const diff = lineDifference(line) ?? 0;
+  if (!canCost) {
+    return <p className={cn("text-2xs text-text-muted", compact ? "" : "mt-3 border-t border-border pt-2")} data-testid="cost-staff-note">Maliyet bilgisi yönetici tarafından tamamlanmalıdır.</p>;
+  }
+  return (
+    <div className={cn("text-xs", compact ? "" : "mt-3 border-t border-border pt-2")} data-testid="cost-cell" data-has-cost={line.cost ? "1" : "0"}>
+      {line.cost ? (
+        <p>
+          <span data-numeric>{money(line.cost.unit_cost_base)}</span> × {diff} = <span data-numeric className="font-medium">{money(diff * line.cost.unit_cost_base)}</span>
+          <span className="block text-2xs text-text-muted">{COST_SOURCE_LABELS[line.cost.cost_source]}{line.cost.note ? ` · ${line.cost.note}` : ""}</span>
+        </p>
+      ) : (
+        <p className="text-warning">Mevcut maliyet kaydı yok — birim alış maliyeti gerekli.</p>
+      )}
+      <Button size="sm" variant={line.cost ? "ghost" : "outline"} className="mt-1" onClick={onEdit} disabled={pending}>{line.cost ? "Maliyeti düzenle" : "Maliyet gir"}</Button>
     </div>
   );
 }

@@ -4,12 +4,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadAppContext } from "@/lib/app-context";
 import { signImagePaths } from "@/lib/catalog/images";
 import type { Bucket } from "@/lib/stock/model";
-import type { CountLine, CountVariant, StockCount, StockCountListRow, StockCountStatus, StockCountType } from "@/lib/stock/count-model";
+import { countCaps, type CountCostSource, type CountLine, type CountLineCost, type CountVariant, type StockCount, type StockCountListRow, type StockCountStatus, type StockCountType } from "@/lib/stock/count-model";
 
 /**
  * Read side of stock counts. RLS scopes every table to procurement roles of the tenant;
- * the business_id filter is defence in depth. No cost column is read anywhere here —
- * inventory_movement_costs is manager+ and belongs to the ledger, not to the count.
+ * the business_id filter is defence in depth. The only cost read here is the Phase 15B-0
+ * bridge table (stock_count_line_costs), and only for owner/manager: other roles never
+ * receive the query, and RLS would return nothing to them anyway.
  */
 
 function num(value: unknown): number | null {
@@ -93,10 +94,12 @@ function rank(kind: string): number {
 type HeaderRow = {
   id: string; count_number: string; count_type: StockCountType; status: StockCountStatus; branch_id: string; note: string | null;
   created_by: string | null; created_at: string; counting_started_at: string | null; reviewed_at: string | null;
-  posted_at: string | null; posted_by: string | null; cancelled_at: string | null; cancel_reason: string | null;
+  posted_at: string | null; posted_by: string | null; cancelled_at: string | null; cancel_reason: string | null; review_hash: string | null;
 };
 
-const HEADER_COLUMNS = "id, count_number, count_type, status, branch_id, note, created_by, created_at, counting_started_at, reviewed_at, posted_at, posted_by, cancelled_at, cancel_reason";
+const HEADER_COLUMNS = "id, count_number, count_type, status, branch_id, note, created_by, created_at, counting_started_at, reviewed_at, posted_at, posted_by, cancelled_at, cancel_reason, review_hash";
+
+type CostRow = { line_id: string; unit_cost_base: number | string; cost_source: CountCostSource; note: string | null; entered_at: string; applied: boolean | null; applied_quantity: number | null; applied_value_base: number | string | null };
 
 export async function listStockCounts(): Promise<StockCountListRow[]> {
   const { supabase, businessId } = await loadAppContext();
@@ -131,7 +134,8 @@ export async function listStockCounts(): Promise<StockCountListRow[]> {
 }
 
 export async function getStockCount(countId: string): Promise<StockCount | null> {
-  const { supabase, businessId } = await loadAppContext();
+  const { supabase, businessId, role } = await loadAppContext();
+  const managerPlus = countCaps(role).canCost;
   const { data, error } = await supabase
     .from("stock_counts")
     .select(HEADER_COLUMNS)
@@ -142,17 +146,43 @@ export async function getStockCount(countId: string): Promise<StockCount | null>
   if (!data) return null;
   const h = data as unknown as HeaderRow;
 
-  const [{ data: branch }, { data: lineRows, error: lineError }, names] = await Promise.all([
+  const [{ data: branch }, { data: business }, { data: lineRows, error: lineError }, names, costRows] = await Promise.all([
     supabase.from("branches").select("name").eq("business_id", businessId).eq("id", h.branch_id).maybeSingle(),
+    supabase.from("businesses").select("base_currency").eq("id", businessId).maybeSingle(),
     supabase
       .from("stock_count_lines")
-      .select("id, variant_id, bucket, expected_quantity, counted_quantity, zero_confirmed, counted_at, posted_delta")
+      .select("id, variant_id, bucket, expected_quantity, counted_quantity, zero_confirmed, counted_at, posted_delta, cost_required")
       .eq("business_id", businessId)
       .eq("stock_count_id", countId)
       .order("counted_at", { ascending: false, nullsFirst: false }),
     profileNames(supabase, [h.created_by, h.posted_by]),
+    // the cost side exists for owner/manager only; nobody else is sent the query
+    managerPlus
+      ? supabase
+          .from("stock_count_line_costs")
+          .select("line_id, unit_cost_base, cost_source, note, entered_at, applied, applied_quantity, applied_value_base")
+          .eq("business_id", businessId)
+          .eq("stock_count_id", countId)
+          .then(({ data, error }) => {
+            if (error) throw new Error(`Sayım maliyetleri okunamadı: ${error.message}`);
+            return (data ?? []) as unknown as CostRow[];
+          })
+      : Promise.resolve([] as CostRow[]),
   ]);
   if (lineError) throw new Error(`Sayım satırları okunamadı: ${lineError.message}`);
+
+  const costs = new Map<string, CountLineCost>();
+  for (const c of costRows) {
+    costs.set(c.line_id, {
+      unit_cost_base: Number(c.unit_cost_base),
+      cost_source: c.cost_source,
+      note: c.note ?? null,
+      entered_at: c.entered_at,
+      applied: c.applied ?? null,
+      applied_quantity: num(c.applied_quantity),
+      applied_value_base: c.applied_value_base === null ? null : Number(c.applied_value_base),
+    });
+  }
 
   const rows = lineRows ?? [];
   const described = await describeVariants(rows.map((r) => r.variant_id as string));
@@ -167,11 +197,14 @@ export async function getStockCount(countId: string): Promise<StockCount | null>
     zero_confirmed: Boolean(r.zero_confirmed),
     counted_at: (r.counted_at as string | null) ?? null,
     posted_delta: num(r.posted_delta),
+    cost_required: Boolean(r.cost_required),
+    cost: managerPlus ? (costs.get(r.id as string) ?? null) : null,
   }));
 
   return {
     ...h,
     branch_name: (branch?.name as string | undefined) ?? "—",
+    base_currency: (business?.base_currency as string | undefined) ?? "TRY",
     created_by_name: h.created_by ? (names.get(h.created_by) ?? null) : null,
     posted_by_name: h.posted_by ? (names.get(h.posted_by) ?? null) : null,
     lines,

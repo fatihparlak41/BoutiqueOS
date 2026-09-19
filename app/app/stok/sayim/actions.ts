@@ -6,7 +6,7 @@ import { reportDbError } from "@/lib/db-errors";
 import { resolveBarcode } from "@/lib/catalog/queries";
 import { listStock } from "@/lib/stock/queries";
 import { describeVariants } from "@/lib/stock/count-queries";
-import { countCaps, type CountLine, type CountVariant, type PostSummary, type StockCountType } from "@/lib/stock/count-model";
+import { countCaps, type CountCostSource, type CountLine, type CountVariant, type PostSummary, type StockCountType } from "@/lib/stock/count-model";
 import type { Bucket } from "@/lib/stock/model";
 import type { Result } from "@/lib/catalog/intake";
 
@@ -37,7 +37,7 @@ function eventArgs(ev: CountEvent) {
   };
 }
 
-type LineRow = { id: string; variant_id: string; bucket: Bucket; expected_quantity: number | null; counted_quantity: number | null; zero_confirmed: boolean; counted_at: string | null; posted_delta: number | null };
+type LineRow = { id: string; variant_id: string; bucket: Bucket; expected_quantity: number | null; counted_quantity: number | null; zero_confirmed: boolean; counted_at: string | null; posted_delta: number | null; cost_required?: boolean | null };
 
 async function toLine(row: LineRow): Promise<CountLine> {
   const d = (await describeVariants([row.variant_id])).get(row.variant_id);
@@ -50,6 +50,8 @@ async function toLine(row: LineRow): Promise<CountLine> {
     zero_confirmed: row.zero_confirmed,
     counted_at: row.counted_at,
     posted_delta: row.posted_delta,
+    cost_required: Boolean(row.cost_required),
+    cost: null,
   };
 }
 
@@ -104,12 +106,16 @@ export async function cancelAction(countId: string, reason: string): Promise<Res
   return { ok: true, data: null };
 }
 
-/** The only ledger write. One RPC, one transaction; a stale snapshot or a double submit is refused by the database. */
-export async function postAction(countId: string): Promise<Result<PostSummary>> {
+/**
+ * The only ledger write. One RPC, one transaction; a stale snapshot, a document changed
+ * since the review the client rendered (review_hash), or a double submit is refused by
+ * the database.
+ */
+export async function postAction(countId: string, reviewHash: string | null = null): Promise<Result<PostSummary>> {
   const { supabase, role } = await loadAppContext();
   if (!countCaps(role).canPost) return fail(NO_PERMISSION);
   if (!UUID.test(countId)) return fail("Sayım bulunamadı.");
-  const { data, error } = await supabase.rpc("rpc_stock_count_post", { p_count_id: countId });
+  const { data, error } = await supabase.rpc("rpc_stock_count_post", { p_count_id: countId, p_review_hash: reviewHash && /^[0-9a-f]{32}$/.test(reviewHash) ? reviewHash : null });
   if (error) return fail(reportDbError("stockCountPost", error));
   const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
   if (!row) return fail("İşleme sonucu okunamadı.");
@@ -245,3 +251,46 @@ export async function searchVariantsAction(term: string): Promise<Result<CountVa
     return fail("Arama yapılamadı. Tekrar deneyin.");
   }
 }
+
+// ------------------------------------------------------------------ opening cost (Phase 15B-0)
+
+const COST_SOURCES: CountCostSource[] = ["documented_purchase", "owner_declared_opening_cost"];
+
+/**
+ * Owner/manager records the explicit unit cost of a surplus the ledger cannot price
+ * (rpc_stock_count_set_line_cost, base currency, > 0, source required), then the review is
+ * repeated so the fingerprint covers the new cost: a POST against the older review would be
+ * refused (STALE_REVIEW). stock_staff never reaches this action; the RPC refuses it anyway.
+ */
+export async function setLineCostAction(input: { count_id: string; line_id: string; unit_cost: number; source: CountCostSource; note: string }): Promise<Result<null>> {
+  const { supabase, role } = await loadAppContext();
+  if (!countCaps(role).canCost) return fail(NO_PERMISSION);
+  if (!UUID.test(input.count_id) || !UUID.test(input.line_id)) return fail("Sayım satırı bulunamadı.");
+  if (!Number.isFinite(input.unit_cost) || input.unit_cost <= 0) return fail("Birim maliyet sıfırdan büyük olmalı.");
+  if (!COST_SOURCES.includes(input.source)) return fail("Maliyet kaynağını seçin.");
+  const { error } = await supabase.rpc("rpc_stock_count_set_line_cost", {
+    p_line_id: input.line_id,
+    p_unit_cost: Math.round(input.unit_cost * 1_000_000) / 1_000_000,
+    p_source: input.source,
+    p_note: input.note.trim().slice(0, 500) || null,
+  });
+  if (error) return fail(reportDbError("stockCountSetLineCost", error));
+  const reviewed = await supabase.rpc("rpc_stock_count_review", { p_count_id: input.count_id });
+  if (reviewed.error) return fail(reportDbError("stockCountReview", reviewed.error));
+  revalidatePath(`/app/stok/sayim/${input.count_id}`);
+  return { ok: true, data: null };
+}
+
+/** Removes an entered cost (NULL clears); the review is repeated for the same reason. */
+export async function clearLineCostAction(input: { count_id: string; line_id: string }): Promise<Result<null>> {
+  const { supabase, role } = await loadAppContext();
+  if (!countCaps(role).canCost) return fail(NO_PERMISSION);
+  if (!UUID.test(input.count_id) || !UUID.test(input.line_id)) return fail("Sayım satırı bulunamadı.");
+  const { error } = await supabase.rpc("rpc_stock_count_set_line_cost", { p_line_id: input.line_id, p_unit_cost: null, p_source: null, p_note: null });
+  if (error) return fail(reportDbError("stockCountClearLineCost", error));
+  const reviewed = await supabase.rpc("rpc_stock_count_review", { p_count_id: input.count_id });
+  if (reviewed.error) return fail(reportDbError("stockCountReview", reviewed.error));
+  revalidatePath(`/app/stok/sayim/${input.count_id}`);
+  return { ok: true, data: null };
+}
+

@@ -6,8 +6,8 @@ import { ReviewScreen } from "./review-screen";
 import { ResultScreen } from "./result-screen";
 
 /** One route, one document; the screen follows the document's state. */
-export function CountWorkspace({ count, canPost }: { count: StockCount; canPost: boolean }) {
+export function CountWorkspace({ count, canPost, canCost }: { count: StockCount; canPost: boolean; canCost: boolean }) {
   if (count.status === "draft" || count.status === "counting") return <CountingScreen count={count} canPost={canPost} />;
-  if (count.status === "review") return <ReviewScreen count={count} canPost={canPost} />;
+  if (count.status === "review") return <ReviewScreen count={count} canPost={canPost} canCost={canCost} />;
   return <ResultScreen count={count} />;
 }

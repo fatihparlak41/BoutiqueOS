@@ -32,7 +32,7 @@ export default async function StockCountPage({ params }: { params: Promise<{ id:
         }
         description={`${COUNT_TYPE_LABELS[count.count_type]} · ${count.branch_name}${count.note ? ` · ${count.note}` : ""}`}
       />
-      <CountWorkspace count={count} canPost={countCaps(role).canPost} />
+      <CountWorkspace count={count} canPost={countCaps(role).canPost} canCost={countCaps(role).canCost} />
     </div>
   );
 }

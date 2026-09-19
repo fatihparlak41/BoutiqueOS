@@ -4,7 +4,9 @@ import type { Bucket } from "@/lib/stock/model";
 /**
  * Stock count vocabulary. Client-safe: no data access. Mirrors the stock_count_status /
  * stock_count_type enums of migration 20260915150000. The ledger stays authoritative:
- * a count is a working document until POST, and nothing here carries a cost.
+ * a count is a working document until POST. The only cost a count carries is the
+ * Phase 15B-0 bridge: an explicit owner/manager unit cost for a surplus that the ledger
+ * cannot price (stock_count_line_costs, manager+ only; never loaded for other roles).
  */
 
 export type StockCountStatus = "draft" | "counting" | "review" | "posted" | "cancelled";
@@ -43,9 +45,38 @@ export type CountVariant = {
   thumbnail_url: string | null;
 };
 
+/** Where an entered opening cost comes from. Mirrors the stock_count_cost_source enum. */
+export type CountCostSource = "documented_purchase" | "owner_declared_opening_cost";
+
+export const COST_SOURCE_LABELS: Record<CountCostSource, string> = {
+  documented_purchase: "Belgeli alış (fatura / fiş)",
+  owner_declared_opening_cost: "Sahip beyanı (açılış maliyeti)",
+};
+
+export const COST_SOURCE_HINTS: Record<CountCostSource, string> = {
+  documented_purchase: "Tedarikçi faturası ya da fişiyle desteklenen birim alış maliyeti; referansı açıklamaya yazın.",
+  owner_declared_opening_cost: "Belgeye bağlanmamış, sahibin beyan ettiği maliyet. Fatura doğrulaması ima etmez.",
+};
+
+/** The manager-entered cost of one count line (owner/manager only; absent for other roles). */
+export type CountLineCost = {
+  unit_cost_base: number;
+  cost_source: CountCostSource;
+  note: string | null;
+  entered_at: string;
+  /** Written by POST: true = priced the surplus; false = the pool had a basis, moving average used. */
+  applied: boolean | null;
+  applied_quantity: number | null;
+  applied_value_base: number | null;
+};
+
 export type CountLine = CountVariant & {
   id: string;
   bucket: Bucket;
+  /** Set at review: counted above expected on a pool with no usable cost basis. Operational, carries no value. */
+  cost_required: boolean;
+  /** Only loaded for owner/manager; null otherwise or when nothing was entered. */
+  cost: CountLineCost | null;
   /** Ledger quantity captured at review; null before the count entered review. */
   expected_quantity: number | null;
   /** null = not counted / unresolved. 0 only through an explicit action. */
@@ -72,10 +103,14 @@ export type StockCount = {
   posted_by_name: string | null;
   cancelled_at: string | null;
   cancel_reason: string | null;
+  /** Fingerprint of the reviewed document; POST sends it back so a re-reviewed document is refused. */
+  review_hash: string | null;
+  /** businesses.base_currency — every count cost is in it. */
+  base_currency: string;
   lines: CountLine[];
 };
 
-export type StockCountListRow = Omit<StockCount, "lines"> & { line_count: number; counted_lines: number };
+export type StockCountListRow = Omit<StockCount, "lines" | "review_hash" | "base_currency"> & { line_count: number; counted_lines: number };
 
 export type PostSummary = {
   count_id: string;
@@ -91,6 +126,8 @@ export type CountCaps = {
   canCount: boolean;
   /** owner | manager only: POST (rpc_stock_count_post) and cancel */
   canPost: boolean;
+  /** owner | manager only: read and enter the opening cost of a surplus line (rpc_stock_count_set_line_cost) */
+  canCost: boolean;
 };
 
 /** Mirrors the RPC role checks; the database is the boundary, this only hides buttons. */
@@ -98,7 +135,17 @@ export function countCaps(role: UserRole): CountCaps {
   return {
     canCount: role === "owner" || role === "manager" || role === "stock_staff",
     canPost: role === "owner" || role === "manager",
+    canCost: role === "owner" || role === "manager",
   };
+}
+
+/** Lines whose surplus cannot be posted until a cost is entered. */
+export function costPendingLines(lines: CountLine[]): CountLine[] {
+  return lines.filter((l) => l.cost_required && !l.cost);
+}
+
+export function formatBaseMoney(value: number, currency: string): string {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
 export function lineDifference(line: CountLine): number | null {
