@@ -55,6 +55,8 @@ export type Dashboard = {
   activity: Activity[];
   ordersPending: number;
   timezoneSet: boolean;
+  /** effective timezone for display */
+  timezone: string;
 };
 
 const LONG_OPEN_HOURS = 16;
@@ -73,8 +75,8 @@ function dashboardCaps(role: UserRole): DashboardCaps {
   };
 }
 
-function fmtDay(iso: string): string {
-  return new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long" }).format(new Date(iso));
+function fmtDay(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat("tr-TR", { timeZone: tz, day: "numeric", month: "long" }).format(new Date(iso));
 }
 
 export async function loadDashboard(): Promise<Dashboard> {
@@ -110,7 +112,7 @@ export async function loadDashboard(): Promise<Dashboard> {
         kind: "register_open_long",
         level: "warning",
         title: "Kasa oturumu uzun süredir açık",
-        detail: `${s.register_name} · ${fmtDay(s.opened_at)} tarihinde açıldı${s.hours_open >= 48 ? ` (${Math.floor(s.hours_open / 24)} gün)` : ""}.`,
+        detail: `${s.register_name} · ${fmtDay(s.opened_at, timezone ?? "Europe/Istanbul")} tarihinde açıldı${s.hours_open >= 48 ? ` (${Math.floor(s.hours_open / 24)} gün)` : ""}.`,
         href: "/app/pos",
         action: "Kasaya git",
       });
@@ -153,5 +155,6 @@ export async function loadDashboard(): Promise<Dashboard> {
     activity: activity.slice(0, 6),
     ordersPending,
     timezoneSet: timezone !== null,
+    timezone: timezone ?? "Europe/Istanbul",
   };
 }

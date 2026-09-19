@@ -56,7 +56,7 @@ export default async function AppHomePage() {
 
       <AttentionBlock items={d.attention} />
 
-      <ActivityBlock items={d.activity} />
+      <ActivityBlock items={d.activity} timezone={d.timezone} />
     </div>
   );
 }

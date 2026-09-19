@@ -15,10 +15,12 @@ function money(v: number): string {
   return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 }
 
-function when(iso: string): string {
+/** Times in the boutique's day (tenant timezone, Europe/Istanbul until one is set) — the server may run in UTC. */
+function when(iso: string, tz: string): string {
   const d = new Date(iso);
-  const sameDay = new Date().toDateString() === d.toDateString();
-  return new Intl.DateTimeFormat("tr-TR", sameDay ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(d);
+  const day = (x: Date) => new Intl.DateTimeFormat("tr-TR", { timeZone: tz, dateStyle: "short" }).format(x);
+  const sameDay = day(new Date()) === day(d);
+  return new Intl.DateTimeFormat("tr-TR", sameDay ? { timeZone: tz, hour: "2-digit", minute: "2-digit" } : { timeZone: tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(d);
 }
 
 export function QuickActions({ caps }: { caps: Dashboard["caps"] }) {
@@ -131,7 +133,7 @@ export function StarterBlock({ starter, caps }: { starter: NonNullable<Dashboard
   );
 }
 
-export function ActivityBlock({ items }: { items: Activity[] }) {
+export function ActivityBlock({ items, timezone }: { items: Activity[]; timezone: string }) {
   if (items.length === 0) return null;
   const Icon = { sale: ScanLine, product: Package, count: ClipboardCheck, order: ShoppingBag };
   return (
@@ -146,7 +148,7 @@ export function ActivityBlock({ items }: { items: Activity[] }) {
                 <I aria-hidden className="h-4 w-4 shrink-0 stroke-[1.5] text-text-muted" />
                 <span className="min-w-0 flex-1 truncate text-text-primary">{a.title}</span>
                 {a.detail ? <span className="shrink-0 text-xs text-text-secondary" data-numeric>{a.detail}</span> : null}
-                <span className="shrink-0 text-2xs text-text-muted" data-numeric>{when(a.when)}</span>
+                <span className="shrink-0 text-2xs text-text-muted" data-numeric>{when(a.when, timezone)}</span>
               </Link>
             </li>
           );
