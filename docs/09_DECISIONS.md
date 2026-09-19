@@ -312,3 +312,51 @@ receipt keeps the MWA honest when the invoice differs from the plan.
 **Why:** the tenant schema must never hold an orphan; putting the wait in the application
 keeps every existing "active business" invariant and every RLS policy exactly as it was,
 and an audited, idempotent approval is the only door into the multi-tenant space.
+
+## ADR-20 · SaaS Billing is a Manual Ledger of Its Own; Payment Activates, Nothing Suspends
+
+**Decision (Phase 13B):**
+1. SaaS billing lives in its own tables (`saas_invoices`, `saas_invoice_items`,
+   `saas_payments`, `saas_invoice_sequences`, `platform_settings`) and never touches
+   `sales`, `sale_payments`, register sessions, `cash_movements`, supplier liabilities or
+   any tenant inventory/accounting table. Money is `money2` (NUMERIC(12,2)), computed in
+   SQL only; every row carries an explicit currency.
+2. An invoice is a snapshot: plan code/name/interval, the catalogue price at issue time,
+   the period (calendar interval: `+1 month` / `+1 year`, never 30/365 days), tax under the
+   documented policy `none_unconfigured` (0, no VAT inferred from the country), due date
+   from `platform_settings.invoice_due_days`. A later plan-price change never rewrites an
+   issued invoice; the next invoice uses the then-current catalogue price (no grandfathering).
+   The document is an "abonelik ödeme özeti", never called a legal tax invoice.
+3. Exactly one live (non-void) invoice per `(subscription, period_start)` and one OPEN
+   invoice per subscription at a time; issuing is idempotent (replay of the open one); a
+   renewal is issued only after the previous invoice is paid; numbering `BOS-YYYY-NNNNNN`
+   comes from a per-year sequence row locked in the transaction and is a reference, not an
+   authorisation.
+4. There is no payment provider. Money arrives outside the app (bank transfer / cash /
+   other manual); a platform admin records it with a reference. `(invoice, reference)` is
+   unique, so the same bank line recorded twice — by two admins or a retry — is one payment.
+   Overpayment is refused (no credit balance is invented); a partial payment is recorded
+   and the invoice stays open. A FULL payment settles the invoice and, in the same
+   transaction, activates / re-activates the subscription for the invoiced period
+   (`starts_at` from the first period, `ends_at = period_end`). Manual activation without
+   a paid invoice no longer exists (`USE_PAYMENT`).
+5. Paid and void invoices are immutable and issued documents, items and payments are
+   never deleted (triggers). Void keeps the row with actor and reason; a partially paid
+   invoice cannot be voided. Provider columns exist, stay NULL and are constrained to NULL.
+6. Overdue is derived at read time (`open AND due_at < now()`); nothing depends on a job.
+   `rpc_platform_billing_sweep`, run by a platform admin, may materialise `past_due` for an
+   overdue open invoice and cancel a subscription whose scheduled end has passed — and does
+   nothing else. `business.status`, `subscription.status` and `invoice.status` remain three
+   separate facts; a past-due subscription does not suspend the business (grace days are
+   data in `platform_settings`, displayed, not enforced). Cancellation is `at_period_end`
+   (paid period kept, renewals refused, materialised by the sweep) or `immediate` (refused
+   while an invoice is open); no prorated refund.
+7. The owner reads own billing through one owner-only RPC (`rpc_my_billing`); managers and
+   staff have no SaaS billing surface; tenants hold no privilege on the ledger tables; the
+   owner page carries no pay button — it says the platform will share payment details and
+   activate after the money arrives.
+
+**Why:** the platform must be able to bill and account for tenants before any card
+processor exists, without ever mixing SaaS money with boutique money, without a document
+that can change after it was issued, and without a job or a status coupling that could
+lock a shop out of its own data by accident.
