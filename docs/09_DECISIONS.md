@@ -409,3 +409,64 @@ lock a shop out of its own data by accident.
 **Why:** the merchant must never maintain a second catalogue, a customer must never see an
 operational fact, and a public page must never depend on a session — while the private
 image store, the ledger and the reservation rules stay exactly as they are.
+
+## ADR-22 · An Online Order Is an Orchestration Document, Never a Second Ledger
+
+**Decision (Phase 14B):**
+1. A guest checkout produces an **order request** (`storefront_orders` + frozen
+   `storefront_order_items` + append-only `storefront_order_events`), created by the one
+   anon-callable write RPC `rpc_shop_create_order` in **one transaction with its hold**: the
+   hold is an ordinary Phase 10A reservation (`reservations.storefront_order_id`, `source
+   online`, guest `hold_name`, no CRM customer), placed by `fn_reservation_hold` under the
+   same pool locks the POS uses. The order never decrements inventory, never writes cost,
+   COGS, payment or a sale row, and is never counted by any report.
+2. Prices, totals and availability are server-authoritative: the browser sends variant ids
+   and quantities; `unit_price` in the request is ignored, the snapshot is written from
+   `fn_web_price`, and `total = subtotal − discount_total` is a CHECK. Limits: 1..10 per
+   line, ≤ 30 units, an idempotency key of 32..128 chars; the same key on the same store
+   replays the same order and token (`UNIQUE (storefront_id, idempotency_key_hash)`).
+3. Identity: `WEB-YYYY-NNNNNN` (`fn_next_sequence(biz,'WEB')`) is a label, not an
+   authorization. The customer's only credential is a 64-hex tracking token derived from
+   the idempotency key and the store (`sha256('token:'||key||':'||storefront_id)`); only
+   `sha256(token)` is stored (`tracking_token_hash`, UNIQUE). Neither key nor token is ever
+   stored or logged. Reads (`rpc_shop_order`) and customer cancellation
+   (`rpc_shop_cancel_order`, pending only) need slug + token; the order number, a token on
+   another store or a wrong token yield nothing.
+4. Status is a small state machine owned by RPCs: `pending_confirmation → confirmed →
+   ready → completed`, plus `cancelled` (customer while pending; owner/manager with a
+   reason until completed) and `expired`. `fn_online_order_guard` freezes the snapshot
+   (`ORDER_SNAPSHOT_LOCKED`), refuses deletes (`ORDER_RETAINED`), refuses any move out of a
+   final state (`ORDER_FINAL`) and lets `converted_sale_id` be written only by the POS
+   conversion (`ORDER_SALE_ONLY_BY_POS`); items and events are frozen by trigger.
+5. Expiry is **derived, not scheduled**: the hold's `expires_at` (`order_hold_minutes` per
+   storefront, 30 min..7 days, restarted on confirmation) is what frees the unit —
+   `fn_reserved_qty` already ignores lapsed holds, so availability returns without any
+   job. Reads compute `expired` on the fly (`fn_online_order_public_status`);
+   `rpc_online_orders_sweep` (run on merchant list load) only materialises that fact.
+   `rpc_online_order_rereserve` (manager+) is the one way back: a fresh hold, stock
+   re-checked under lock, the old hold kept as history. The **current hold** of an order is
+   always the active one, else the newest (`fn_online_order_reservation`); nothing may
+   look at "all holds of an order" (20260919190000 fixed the sweep and the replay branch
+   that did).
+6. POS conversion is the only place a sale is bound to an order:
+   `rpc_pos_complete_online_order(order, register_session, payments, client_transaction_id,
+   …)` builds the item list from the order (quantity from the order, price =
+   `LEAST(order price, current list price)`, so a price rise is honoured and a price drop
+   is passed on) and runs the **existing** sale core with `p_reservation_id` = the hold —
+   session, payment rule, stock, historical COGS and reservation fulfilment are unchanged
+   Phase 9A/10A code. The same transaction marks the order `completed` and writes the
+   `converted` + `completed` events. Retries with the same `client_transaction_id`, or any
+   attempt on a completed order, replay the one sale; a cancelled or lapsed order converts
+   nothing. The terminal pins the lines (no add / remove / reprice).
+7. Roles: customers touch only `rpc_shop_*` (anon has no row on any order table). Owner and
+   manager confirm, re-reserve, cancel (reason required) and convert; `sales_staff` sees
+   the queue, marks ready and converts at the POS; `stock_staff` has no access at all
+   (PII). Every transition is an event with actor type customer / tenant / system.
+8. Copy is honest and fulfilment is store pickup only: "Sipariş talebiniz alındı", the hold
+   deadline and the pickup branch; never "ödemeniz tamamlandı". No online payment
+   provider, no shipping, no customer account, no CRM row is created by a checkout. Public
+   order pages are `noindex`, uncached and outside the auth middleware.
+
+**Why:** the boutique already has the truth of stock, cost and money in the ledger, the
+reservation engine and the POS sale; an online order must orchestrate those and leave no
+second copy that could disagree with them.
