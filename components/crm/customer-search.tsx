@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Search } from "lucide-react";
+import { Search, Users } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/catalog/intake/primitives";
@@ -40,7 +41,13 @@ export function CustomerSearch({ recent, sources }: { recent: CustomerHit[]; sou
       </form>
       {error ? <Notice tone="danger">{error}</Notice> : null}
       <p className="text-2xs text-muted">{results ? `${results.length} sonuç` : "Son eklenen müşteriler"}</p>
-      {rows.length === 0 ? <p className="border border-dashed border-line-strong px-4 py-8 text-center text-xs text-muted">{results ? "Eşleşen müşteri yok." : "Henüz müşteri yok."}</p> : (
+      {rows.length === 0 ? (
+        results ? (
+          <EmptyState compact title="Eşleşen müşteri yok" description="Ad, telefon, e-posta ya da Instagram kullanıcı adıyla ara." />
+        ) : (
+          <EmptyState icon={<Users />} title="İlk müşterini ekle" description="Telefon ya da Instagram yeter; satışlar ve rezervasyonlar müşteriye kendiliğinden bağlanır." action={<Link href="/app/musteriler/yeni"><Button variant="outline">Müşteri ekle</Button></Link>} />
+        )
+      ) : (
         <ul className="divide-y divide-line border-y border-line" data-testid="customer-results">
           {rows.map((c) => (
             <li key={c.id}>

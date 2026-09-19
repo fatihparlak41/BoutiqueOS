@@ -7,7 +7,9 @@ import {
   listProductOptions,
   loadCatalogContext,
 } from "@/lib/catalog/queries";
-import { listStockForVariants } from "@/lib/stock/queries";
+import { listStockForVariants, productInventoryValue } from "@/lib/stock/queries";
+import { Notice } from "@/components/catalog/intake/primitives";
+import { fmtMoney } from "@/components/reports/format";
 import { getIntelProduct } from "@/lib/intel/queries";
 import { ProductIntel } from "@/components/intel/product-intel";
 import { formatPrice, formatPriceRange } from "@/lib/catalog/format";
@@ -41,12 +43,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const { caps } = await loadCatalogContext();
+  const { caps, branchId } = await loadCatalogContext();
   const product = await getProduct(id);
   // RLS scopes the query to the tenant, so a product from another business reads as missing.
   if (!product) notFound();
 
-  const [options, categories, brands, similar, stockRows, intel] = await Promise.all([
+  const [options, categories, brands, similar, stockRows, intel, valuation] = await Promise.all([
     listProductOptions(),
     listCategories(),
     listBrands(),
@@ -58,10 +60,13 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         options: v.options.length > 0 ? v.options.map((o) => `${o.option_name}: ${o.value}`).join(" · ") : "Seçeneksiz",
         primary_barcode: v.barcodes.find((b) => b.is_primary)?.barcode ?? v.barcodes[0]?.barcode ?? null,
       })),
-      { id: product.id, name: product.name, category_name: product.category?.name ?? null, brand_name: product.brand?.name ?? null },
+      { id: product.id, name: product.name, status: product.status, category_name: product.category?.name ?? null, brand_name: product.brand?.name ?? null },
     ),
     // Manager+ intelligence block: one aggregate RPC in the same round trip as the rest.
     caps.canEditCatalog ? getIntelProduct(product.id) : Promise.resolve(null),
+    // The cost-pool valuation is read directly: archiving never erases owned inventory,
+    // and the intelligence facts count only active products by design (they are sell signals).
+    caps.canEditCatalog ? productInventoryValue(product.id, branchId) : Promise.resolve(null),
   ]);
 
   const main = product.images.find((i) => i.role === "product_main") ?? null;
@@ -96,17 +101,28 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       {similar.length > 0 ? <SimilarProducts items={similar} /> : null}
 
+      {product.status === "archived" ? (
+        <Notice tone="info" data-testid="archived-notice">
+          <span className="font-medium text-text-primary">Bu ürün arşivde.</span> Satış ekranlarında ve ürün seçimlerinde görünmez; geçmiş kayıtları ve
+          {available > 0 || (valuation && valuation.on_hand > 0) ? " kalan stoğu defterde durur." : " stok geçmişi defterde durur."}
+        </Notice>
+      ) : null}
+
       <section className="space-y-3">
         <SectionHeader title="Özet" />
         <StatGrid>
           <Stat label="Aktif varyant" value={activeVariants.length} hint={`${product.variants.length} toplam`} />
           <Stat label="Renk × beden" value={`${colours.size} × ${sizes.size}`} hint={colours.size === 0 && sizes.size === 0 ? "seçeneksiz" : undefined} />
           <Stat label="Uygun stok" value={available} hint={stockRows[0]?.branch_name ?? "şube"} href="/app/stok" />
-          <Stat label="Satış fiyatı" value={prices.length > 0 ? formatPriceRange(Math.min(...prices), Math.max(...prices)) : formatPrice(product.default_sale_price)} hint={`${totalBarcodes} barkod`} />
+          {valuation ? (
+            <Stat label="Stok değeri" value={fmtMoney(valuation.value)} hint={`${valuation.on_hand} adet · maliyet havuzu${product.status === "archived" ? " · arşivde olsa da" : ""}`} />
+          ) : (
+            <Stat label="Satış fiyatı" value={prices.length > 0 ? formatPriceRange(Math.min(...prices), Math.max(...prices)) : formatPrice(product.default_sale_price)} hint={`${totalBarcodes} barkod`} />
+          )}
         </StatGrid>
       </section>
 
-      {intel ? <ProductIntel intel={intel} productId={product.id} /> : null}
+      {intel ? <ProductIntel intel={intel} productId={product.id} archived={product.status === "archived"} /> : null}
 
       <section className="space-y-3">
         <SectionHeader title="Varyantlar" meta={product.variants.length} />

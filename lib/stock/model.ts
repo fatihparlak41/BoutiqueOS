@@ -53,6 +53,8 @@ export type StockRow = {
   variant_id: string;
   product_id: string;
   product_name: string;
+  /** Archived products keep their ledger: their rows stay readable and are marked, never erased. */
+  product_status: "draft" | "active" | "archived";
   sku: string;
   options: string;
   primary_barcode: string | null;

@@ -2720,6 +2720,44 @@ SELECT t_check('T63k cancelled count wrote no movement for I and kept the cost r
   t_count($q$ SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63i') $q$) = 0
   AND t_count($q$ SELECT count(*) FROM stock_count_line_costs WHERE stock_count_id = t_get('sc63n') $q$) = 1);
 
+
+-- L) Archiving a product never erases owned inventory (UX sprint pass 2): the ledger, the cost
+--    pool and the availability view keep the archived product's stock; POS refuses to sell it;
+--    restoring it sells again. Read/display fixes in the app rely on exactly these facts.
+SELECT t_logout();
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status) VALUES (t_get('biz'), 'Arşiv Ürünü', 'ARS-63', 400, 'active') RETURNING id)
+  SELECT t_set('p63l', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p63l'), 'ARS-63-STD') RETURNING id) SELECT t_set('v63l', id) FROM x;
+WITH x AS (INSERT INTO cash_registers (business_id, branch_id, name) VALUES (t_get('biz'), t_get('br63'), 'Kasa 63L') RETURNING id) SELECT t_set('reg63l', id) FROM x;
+SELECT t_login('u1');
+SELECT t_ok('T63l opening stock 3 @100', $q$ SELECT rpc_post_inventory_adjustment(t_get('biz'), t_get('br63'), t_get('v63l'), 'sellable', 3, 'arşiv fixture', 'manual_cost', 100) $q$);
+SELECT t_set('sess63l', rpc_open_register_session(t_get('reg63l'), '[{"currency":"TRY","amount":0}]'::jsonb));
+CREATE TEMP TABLE _t63l_base AS SELECT
+  (SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63l')) AS movements,
+  (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) AS pool,
+  (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) AS available;
+GRANT SELECT ON _t63l_base TO authenticated;
+SELECT t_ok('T63l the owner archives the product (the app''s archive action: a status update)', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p63l') $q$);
+SELECT t_check('T63l archived: status archived, variant still active, ledger untouched (3 units, pool 3 / 300, available 3)',
+  (SELECT status::text FROM products WHERE id = t_get('p63l')) = 'archived'
+  AND (SELECT status::text FROM product_variants WHERE id = t_get('v63l')) = 'active'
+  AND (SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63l')) = (SELECT movements FROM _t63l_base)
+  AND (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) = '3/300.00'
+  AND (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) = 3
+  AND (SELECT sellable_quantity FROM v_stock_available WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) = 3,
+  (SELECT pool FROM _t63l_base) || ' → ' || COALESCE((SELECT on_hand_qty || '/' || total_value_base::text FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')), 'null'));
+SELECT t_err('T63l archived product cannot be sold at the POS', $q$ SELECT rpc_pos_complete_sale(t_get('sess63l'), t_json_items('v63l','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) $q$, 'VARIANT_NOT_SELLABLE');
+SELECT t_check('T63l the refused sale wrote nothing', (SELECT count(*) FROM inventory_movements WHERE variant_id = t_get('v63l')) = (SELECT movements FROM _t63l_base)
+  AND (SELECT count(*) FROM sale_items WHERE variant_id = t_get('v63l')) = 0);
+SELECT t_check('T63l the stock report''s valuation still carries the archived units (owned inventory), while its catalogue totals count only active products',
+  (SELECT (r -> 'valuation' ->> 'on_hand_qty')::int FROM rpc_report_stock(t_get('biz'), t_get('br63'), 2) r) >= 3
+  AND (SELECT (r -> 'valuation' ->> 'total_value_base')::numeric FROM rpc_report_stock(t_get('biz'), t_get('br63'), 2) r) >= 300);
+SELECT t_ok('T63l the owner restores the product', $q$ UPDATE products SET status = 'active' WHERE id = t_get('p63l') $q$);
+SELECT t_ok('T63l restored product sells again', $q$ SELECT rpc_pos_complete_sale(t_get('sess63l'), t_json_items('v63l','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) $q$);
+SELECT t_check('T63l after the sale: 2 left, pool 2 / 200', (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) = '2/200.00');
+SELECT t_ok('T63l close the fixture session', $q$ SELECT rpc_close_register_session(t_get('sess63l'), '[{"currency":"TRY","counted_amount":400}]'::jsonb) $q$);
+SELECT t_logout();
+
 -- ============================================================
 -- T64 — Phase 8A goods receiving + landed cost: charges, allocation, review/stale,
 --        atomic idempotent POST, liabilities per charge mode, reversal, RLS

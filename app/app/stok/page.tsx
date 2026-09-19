@@ -27,7 +27,7 @@ function isState(value: string | undefined): value is StockState {
 export default async function StockPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; kategori?: string; marka?: string; sube?: string; durum?: string }>;
+  searchParams: Promise<{ q?: string; kategori?: string; marka?: string; sube?: string; durum?: string; arsiv?: string }>;
 }) {
   const params = await searchParams;
   const search = params.q?.trim() ?? "";
@@ -35,6 +35,7 @@ export default async function StockPage({
   const brandId = params.marka ?? "";
   const branchId = params.sube ?? "";
   const state = isState(params.durum) ? params.durum : undefined;
+  const includeArchived = params.arsiv === "1";
 
   const { role } = await loadAppContext();
   const [rows, branches, categories, brands] = await Promise.all([
@@ -44,13 +45,14 @@ export default async function StockPage({
       brandId: brandId || undefined,
       branchId: branchId || undefined,
       state,
+      includeArchived,
     }),
     listBranchOptions(),
     listCategories(),
     listBrands(),
   ]);
 
-  const hasFilter = Boolean(search || categoryId || brandId || state);
+  const hasFilter = Boolean(search || categoryId || brandId || state || includeArchived);
   const activeBranch = rows[0]?.branch_name ?? branches.find((b) => b.id === branchId)?.name ?? branches[0]?.name ?? "—";
 
   return (
@@ -137,7 +139,8 @@ export default async function StockPage({
           <StockTable rows={rows} />
           <p className="text-2xs leading-relaxed text-text-muted" data-numeric>
             {rows.length} varyant, şube: {activeBranch}. Toplam = satılabilir + karantina + hasarlı; uygun =
-            satılabilir − rezerve.
+            satılabilir − rezerve. Arşivdeki ürünler yalnız stoğu kaldığı sürece listelenir
+            {includeArchived ? null : <> · <Link href={{ pathname: "/app/stok", query: { ...(search ? { q: search } : {}), ...(categoryId ? { kategori: categoryId } : {}), ...(brandId ? { marka: brandId } : {}), ...(branchId ? { sube: branchId } : {}), ...(state ? { durum: state } : {}), arsiv: "1" } }} className="underline underline-offset-4 hover:text-text-primary">arşivdekilerin tümünü göster</Link></>}.
           </p>
         </>
       )}

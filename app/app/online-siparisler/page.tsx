@@ -4,7 +4,9 @@ import { listOnlineOrders, sweepOnlineOrders } from "@/lib/orders/queries";
 import { ORDER_FILTERS, ORDER_FILTER_LABELS, orderCaps, type OrderFilter } from "@/lib/orders/model";
 import { ORDER_STATUS_LABELS, formatShopPrice } from "@/lib/shop/model";
 import { PageHeader } from "@/components/ui/page-header";
+import { ShoppingBag } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { Input } from "@/components/ui/input";
@@ -67,7 +69,11 @@ export default async function OnlineOrdersPage({ searchParams }: { searchParams:
         </div>
       </FilterBar>
       {list.rows.length === 0 ? (
-        <EmptyState title="Sipariş yok" description={status || query ? "Bu filtreye uyan sipariş bulunmuyor." : "Vitrinden gelen ilk sipariş talebi burada görünür."} />
+        status || query ? (
+          <EmptyState compact title="Bu filtreye uyan sipariş yok" description="Durumu ya da aramayı değiştir." />
+        ) : (
+          <EmptyState icon={<ShoppingBag />} title="Henüz online sipariş yok" description="Online mağazandan gelen sipariş talepleri burada toplanır; onayladığında stok ayrılır, teslim kasada yapılır." action={orderCaps(active.role).canConfirm ? <Link href="/app/online-magaza"><Button variant="outline">Online mağazayı aç</Button></Link> : undefined} />
+        )
       ) : (
         <TableShell minWidth="56rem" footer={`${list.total} sipariş`}>
           <THead>

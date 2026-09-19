@@ -32,6 +32,7 @@ function Identity({ row }: { row: StockRow }) {
       <Link href={`/app/stok/${row.variant_id}`} className={rowLinkClass}>
         {row.product_name}
       </Link>
+      {row.product_status === "archived" ? <Badge tone="quiet" className="ml-2 align-middle">Arşivde</Badge> : null}
     </CellTitle>
   );
 }

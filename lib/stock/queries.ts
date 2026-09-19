@@ -38,6 +38,12 @@ export type StockFilters = {
   brandId?: string;
   branchId?: string;
   state?: StockState;
+  /**
+   * Archived products keep their ledger. By default their rows appear only while something
+   * is still on hand (so remaining stock and value are never hidden); with `includeArchived`
+   * every archived row is listed. Active products always appear.
+   */
+  includeArchived?: boolean;
 };
 
 type Quantities = { sellable: number; quarantine: number; damaged: number; reserved: number; available: number };
@@ -116,6 +122,7 @@ type VariantBase = {
   variant_id: string;
   product_id: string;
   product_name: string;
+  product_status: "draft" | "active" | "archived";
   sku: string;
   options: string;
   primary_barcode: string | null;
@@ -220,7 +227,7 @@ async function describeVariantRows(variants: VariantIdRow[]): Promise<VariantBas
 
   const [productMetaResult, vovResult, valueResult, optionResult, barcodeResult, categoryResult, brandResult] =
     await Promise.all([
-      supabase.from("products").select("id, name, category_id, brand_id").eq("business_id", businessId).in("id", neededProductIds),
+      supabase.from("products").select("id, name, status, category_id, brand_id").eq("business_id", businessId).in("id", neededProductIds),
       supabase
         .from("variant_option_values")
         .select("variant_id, product_option_id, option_value_id")
@@ -269,6 +276,7 @@ async function describeVariantRows(variants: VariantIdRow[]): Promise<VariantBas
       variant_id: variantId,
       product_id: variant.product_id as string,
       product_name: (product?.name as string) ?? "—",
+      product_status: ((product?.status as string | undefined) ?? "active") as "draft" | "active" | "archived",
       sku: variant.sku as string,
       options: pairs.length > 0 ? pairs.map((p) => p.text).join(" · ") : "Seçeneksiz",
       primary_barcode: (barcodes.find((b) => b.variant_id === variantId)?.barcode as string) ?? null,
@@ -328,7 +336,30 @@ export async function listStock(filters: StockFilters = {}): Promise<StockRow[]>
         filters.state,
       ),
     )
+    // an archived product with nothing left is noise; one with stock is still owned inventory
+    .filter((row) => filters.includeArchived || row.product_status !== "archived" || row.on_hand > 0)
     .sort((a, b) => a.product_name.localeCompare(b.product_name, "tr") || a.sku.localeCompare(b.sku, "tr"));
+}
+
+/**
+ * Cost-pool valuation of one product at a branch — the accounting truth of what the
+ * shop still owns, independent of the product's catalogue status. Manager+ only (the
+ * pool table is not readable by other roles): everyone else gets null, never a leak.
+ */
+export async function productInventoryValue(productId: string, branchId: string | null): Promise<{ on_hand: number; value: number } | null> {
+  const { supabase, businessId, role } = await loadAppContext();
+  if (!(role === "owner" || role === "manager") || !branchId) return null;
+  const { data: variants } = await supabase.from("product_variants").select("id").eq("business_id", businessId).eq("product_id", productId);
+  const ids = (variants ?? []).map((v) => v.id as string);
+  if (ids.length === 0) return { on_hand: 0, value: 0 };
+  const { data, error } = await supabase
+    .from("variant_cost_pools")
+    .select("on_hand_qty, total_value_base")
+    .eq("business_id", businessId)
+    .eq("branch_id", branchId)
+    .in("variant_id", ids);
+  if (error) throw new Error(`Stok değeri okunamadı: ${error.message}`);
+  return (data ?? []).reduce((acc, r) => ({ on_hand: acc.on_hand + num(r.on_hand_qty), value: acc.value + num(r.total_value_base) }), { on_hand: 0, value: 0 });
 }
 
 /**
@@ -337,7 +368,7 @@ export async function listStock(filters: StockFilters = {}): Promise<StockRow[]>
  */
 export async function listStockForVariants(
   variants: Array<{ id: string; sku: string; options: string; primary_barcode: string | null }>,
-  product: { id: string; name: string; category_name: string | null; brand_name: string | null },
+  product: { id: string; name: string; status?: "draft" | "active" | "archived"; category_name: string | null; brand_name: string | null },
 ): Promise<StockRow[]> {
   if (variants.length === 0) return [];
   const { branchId: contextBranch, tenant } = await loadAppContext();
@@ -349,7 +380,7 @@ export async function listStockForVariants(
     .map((v) => {
       const q = quantities.get(v.id) ?? { ...EMPTY };
       return {
-        variant_id: v.id, product_id: product.id, product_name: product.name, sku: v.sku, options: v.options, primary_barcode: v.primary_barcode,
+        variant_id: v.id, product_id: product.id, product_name: product.name, product_status: product.status ?? "active", sku: v.sku, options: v.options, primary_barcode: v.primary_barcode,
         category_name: product.category_name, brand_name: product.brand_name, branch_id: branchId, branch_name: branchName,
         sellable: q.sellable, quarantine: q.quarantine, damaged: q.damaged, on_hand: onHand(q), reserved: q.reserved, available: q.available,
       };
@@ -367,7 +398,8 @@ export async function stockAvailabilitySummary(): Promise<{ available: number; o
   const branchId = contextBranch ?? tenant.active.branches[0]?.id ?? null;
   if (!branchId) return { available: 0, outOfStock: 0, total: 0 };
   const [{ data: variants, error }, { data: stock, error: stockError }] = await Promise.all([
-    supabase.from("product_variants").select("id").eq("business_id", businessId).eq("status", "active").limit(STOCK_LIST_LIMIT),
+    // active variants of ACTIVE products: an archived product is not "tükenmiş", it is out of the catalogue
+    supabase.from("product_variants").select("id, products!inner(status)").eq("business_id", businessId).eq("status", "active").eq("products.status", "active").limit(STOCK_LIST_LIMIT),
     supabase.from("v_stock_available").select("variant_id, available_quantity").eq("business_id", businessId).eq("branch_id", branchId),
   ]);
   if (error) throw new Error(`Varyantlar okunamadı: ${error.message}`);

@@ -5,6 +5,7 @@ import { listBranchOptions } from "@/lib/stock/queries";
 import { listStockCounts } from "@/lib/stock/count-queries";
 import { COUNT_TYPE_LABELS, countCaps, formatWhen, type StockCountListRow } from "@/lib/stock/count-model";
 import { PageHeader } from "@/components/ui/page-header";
+import { ClipboardCheck } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CreateCountForm } from "@/components/stock/count/create-count-form";
 import { StatusBadge } from "@/components/stock/count/shared";
@@ -49,7 +50,7 @@ export default async function StockCountListPage() {
           Geçmiş <span className="ml-1 text-xs font-normal text-text-muted" data-numeric>{closed.length}</span>
         </h2>
         {closed.length === 0 ? (
-          <EmptyState compact title="Henüz işlenmiş sayım yok" description="İlk sayımı başlatın; işlendiğinde burada kalıcı olarak görünür." />
+          <EmptyState compact icon={<ClipboardCheck />} title="Henüz işlenmiş sayım yok" description="Yukarıdan bir sayım başlat, rafı okut, farkları incele ve işle; stok o anda güncellenir." />
         ) : (
           <CountList rows={closed} />
         )}
