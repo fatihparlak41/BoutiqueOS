@@ -47,9 +47,18 @@ https://butikos.parlakmediatech.com.tr
 ```
 https://butikos.parlakmediatech.com.tr/davet/*
 https://butikos.parlakmediatech.com.tr/sifre-belirle
+https://butikos.parlakmediatech.com.tr/basvuru
 http://localhost:3000/davet/*
 http://localhost:3000/sifre-belirle
+http://localhost:3000/basvuru
 ```
+
+`/basvuru` (Phase 13A) is where the signup confirmation lands: `registerAction` passes
+`emailRedirectTo = <origin>/basvuru`. Without this entry Supabase falls back to the Site
+URL and the confirmed registrant reaches `/` instead of the application form (the app
+still routes them there on the next `/app` visit — `requireTenant` sends a confirmed
+account with an unsent draft to `/basvuru` — so a missing entry degrades, it does not
+break).
 
 `*` matches any run of non-separator characters, and the separators are `.` and `/`. A
 UUID contains neither, so a single star covers `/davet/<uuid>` exactly; `**` is not
@@ -62,8 +71,9 @@ the email points at it directly. The allow list only constrains `redirectTo` val
 
 ## Authentication → Email Templates
 
-Three templates, because the code uses three flows. Configuring only Invite and Reset
-Password would leave the existing-user path sending an unmodified default link.
+Four templates, because the code uses four flows (Phase 13A added public signup).
+Configuring only Invite and Reset Password would leave the other paths sending an
+unmodified default link.
 
 ### Invite User
 
@@ -100,6 +110,32 @@ BoutiqueOS tenant: `signInWithOtp({ shouldCreateUser: false })`.
 </p>
 <p>Bu bağlantıyı siz istemediyseniz bu e-postayı yok sayabilirsiniz.</p>
 ```
+
+### Confirm signup (Phase 13A — REQUIRED, not yet verified on the dashboard)
+
+Used by public registration: `supabase.auth.signUp` from `/kayit`. The default template
+links to `{{ .ConfirmationURL }}`, which is Supabase's own `/auth/v1/verify` endpoint;
+that endpoint completes the PKCE flow only in the browser that started the signup and
+sends the visitor to the Site URL. The contract below keeps every email on the same
+server-side `token_hash` path as the other three and lands on `/basvuru`:
+
+```html
+<h2>BoutiqueOS hesabınızı doğrulayın</h2>
+<p>Başvurunuzu tamamlamak için e-posta adresinizi doğrulayın:</p>
+<p>
+  <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup&redirect_to={{ .RedirectTo }}">
+    Adresimi doğrula
+  </a>
+</p>
+<p>Bu kaydı siz yapmadıysanız bu e-postayı yok sayabilirsiniz; hiçbir hesap açılmaz.</p>
+```
+
+`/auth/confirm` already accepts `type=signup`. The dashboard template was not readable
+from this session (the Management API needs the CLI's personal token), so the 13A live
+smoke confirmed the synthetic applicants through the admin API instead of the email link;
+the first real registrant is the end-to-end proof of this template. Auth → Sign In /
+Providers → Email: **Confirm email ON** (`mailer_autoconfirm=false`, verified live) and
+**Allow new users to sign up ON** (`disable_signup=false`, verified live).
 
 ### Reset Password
 

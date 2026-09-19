@@ -280,3 +280,35 @@ cannot audit is noise, and with the pilot's sparse history any "trend" would be 
 **Why:** one accounting path keeps stock, cost and liability provable from the ledger alone;
 deriving received quantities avoids drifting counters; keeping expected cost out of the
 receipt keeps the MWA honest when the invoice differs from the plan.
+
+---
+
+## ADR-19 · A Business Exists Only After Platform Approval, With Its Owner
+
+**Decision (Phase 13A):**
+1. Public registration creates an Auth account and nothing else. The business the
+   registrant described waits in the signup metadata until the address is confirmed; the
+   application itself (`business_applications`) is written by a confirmed user through one
+   RPC, one open application per person, replayed on a double submit. Rejected and
+   withdrawn applications stay as history.
+2. The pending state lives in the application, never in `businesses`. `business_status`
+   keeps active / suspended / cancelled; a business row is created only by
+   `rpc_platform_approve_application`, in one transaction with its first owner membership,
+   its "Merkez" branch, its default settings, a pending subscription and the audit row.
+   There is never an active business without an owner and never a half-created tenant;
+   a retry or a second administrator replays the first approval.
+3. Plans are data (`saas_plans`): code, interval, amount, currency, active flag. No price
+   is written in code; the registration page renders the catalogue. `business_subscriptions`
+   is a commercial record separate from POS money: pending at approval, activated by the
+   platform by hand in 13A (period from the plan interval), never touching tenant status.
+   Provider fields exist and stay empty until the billing phase.
+4. Platform authority stays a separate surface: every `rpc_platform_*` proves the platform
+   role inside the database; status changes keep using the audited 3.5G RPC; no tenant
+   RLS policy grants anything via the platform role; the console 404s for tenants.
+5. Tenant entry is unchanged for members. Only the zero-membership branch asks one extra
+   question (`rpc_my_onboarding`) to send the visitor to the waiting page, the safe status
+   page, the console or the application form.
+
+**Why:** the tenant schema must never hold an orphan; putting the wait in the application
+keeps every existing "active business" invariant and every RLS policy exactly as it was,
+and an audited, idempotent approval is the only door into the multi-tenant space.
