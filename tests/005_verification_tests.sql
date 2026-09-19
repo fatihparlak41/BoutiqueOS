@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 67 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 67,
+SELECT t_check('T01 all 69 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 69,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -5116,6 +5116,260 @@ SELECT t_err('T74l6 nor void an invoice', $q$ SELECT rpc_platform_void_invoice(t
 SELECT t_err('T74l7 nor cancel own subscription through the platform RPC', $q$ SELECT rpc_platform_cancel_subscription(t73_sub('a10'), 'immediate', 'x') $q$, 'FORBIDDEN');
 SELECT t_err('T74l8 nor run the sweep', $q$ SELECT rpc_platform_billing_sweep() $q$, 'FORBIDDEN');
 SELECT t_logout();
+
+-- ============================================================
+-- T75  E-commerce catalog + storefront foundation  (Phase 14A)
+-- ============================================================
+SELECT t_check('T75a storefront tables have RLS; storefront_domains has no policy; anon holds no table privilege',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('storefronts','storefront_domains') AND relrowsecurity) = 2
+  AND (SELECT count(*) FROM pg_policies WHERE tablename = 'storefront_domains') = 0
+  AND NOT has_table_privilege('anon', 'storefronts', 'SELECT') AND NOT has_table_privilege('anon', 'storefront_domains', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'storefronts', 'INSERT') AND NOT has_table_privilege('authenticated', 'storefronts', 'UPDATE'));
+SELECT t_check('T75a2 the public RPCs are the only anon surface',
+  has_function_privilege('anon', 'rpc_shop_resolve(text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_home(text, integer)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_products(text, text, text, text, integer, integer)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_product(text, text)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_availability(text, uuid[])', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_resolve_host(text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_storefront_upsert(uuid, jsonb)', 'EXECUTE') AND NOT has_function_privilege('anon', 'rpc_storefront_publish_product(uuid, uuid, boolean)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_storefront_admin(uuid, text, integer, integer)', 'EXECUTE') AND NOT has_function_privilege('anon', 'fn_shop_available(uuid, uuid, uuid)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_onboard_product(uuid, jsonb, jsonb)', 'EXECUTE') AND NOT has_function_privilege('anon', 'rpc_goods_receipt_financial(uuid)', 'EXECUTE'));
+SELECT t_check('T75a3 the public bucket exists and only public roles may carry a public path',
+  (SELECT public FROM storage.buckets WHERE id = 'storefront-images') AND NOT (SELECT public FROM storage.buckets WHERE id = 'product-images')
+  AND (SELECT count(*) FROM pg_constraint WHERE conname IN ('chk_product_images_public_role','chk_product_images_public_path')) = 2);
+
+-- fixtures: applicant D's business (ZZ Billing Test, active) becomes the storefront tenant; a12 is its owner
+SELECT t_set('bizS', t73_biz('a12'));
+SELECT t_set('brS', (SELECT id FROM branches WHERE business_id = t_get('bizS') AND is_default LIMIT 1));
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizS'), 'Renk', 'color', 1) RETURNING id) SELECT t_set('optS_color', id) FROM x;
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizS'), 'Beden', 'size', 2) RETURNING id) SELECT t_set('optS_size', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, color_hex, sort_order) VALUES (t_get('optS_color'), 'Siyah', 'SYH', '#111111', 1) RETURNING id) SELECT t_set('vS_black', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, color_hex, sort_order) VALUES (t_get('optS_color'), 'Bej', 'BEJ', '#d9c9a8', 2) RETURNING id) SELECT t_set('vS_beige', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optS_size'), 'S', 'S', 1) RETURNING id) SELECT t_set('vS_s', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, sort_order) VALUES (t_get('optS_size'), 'M', 'M', 2) RETURNING id) SELECT t_set('vS_m', id) FROM x;
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizS'), 'Elbise', 'elbise') RETURNING id) SELECT t_set('catS_elbise', id) FROM x;
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizS'), 'Triko', 'triko') RETURNING id) SELECT t_set('catS_triko', id) FROM x;
+WITH x AS (INSERT INTO categories (business_id, name, slug) VALUES (t_get('bizS'), 'Pantolon', 'pantolon') RETURNING id) SELECT t_set('catS_pant', id) FROM x;
+CREATE FUNCTION t75_q(p_sql TEXT) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE b BOOLEAN; BEGIN EXECUTE 'SELECT (' || p_sql || ')' INTO b; RETURN COALESCE(b, false); END $$;
+CREATE FUNCTION t75_pid(p_prefix TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT id FROM products WHERE business_id = t_get('bizS') AND sku_prefix = p_prefix $$;
+CREATE FUNCTION t75_vid(p_sku TEXT) RETURNS UUID LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT id FROM product_variants WHERE business_id = t_get('bizS') AND sku = p_sku $$;
+
+SELECT t_login('a12');
+-- A: dress, colour + size (4 variants)
+SELECT t_ok('T75b A: dress with colour and size', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'Keten Elbise', 'sku_prefix', 'ELB-A', 'category_id', t_get('catS_elbise')::text, 'default_sale_price', '1200', 'description', 'Yazlık keten elbise.'),
+  jsonb_build_array(
+    jsonb_build_object('sku', 'ELB-A-SYH-S', 'option_value_ids', jsonb_build_array(t_get('vS_black')::text, t_get('vS_s')::text)),
+    jsonb_build_object('sku', 'ELB-A-SYH-M', 'option_value_ids', jsonb_build_array(t_get('vS_black')::text, t_get('vS_m')::text)),
+    jsonb_build_object('sku', 'ELB-A-BEJ-S', 'option_value_ids', jsonb_build_array(t_get('vS_beige')::text, t_get('vS_s')::text)),
+    jsonb_build_object('sku', 'ELB-A-BEJ-M', 'option_value_ids', jsonb_build_array(t_get('vS_beige')::text, t_get('vS_m')::text)))) $q$);
+-- B: one-size knit (no options)
+SELECT t_ok('T75b2 B: one-size knit', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'Triko Kazak', 'sku_prefix', 'TRK-B', 'category_id', t_get('catS_triko')::text, 'default_sale_price', '800'),
+  jsonb_build_array(jsonb_build_object('sku', 'TRK-B-STD', 'option_value_ids', '[]'::jsonb))) $q$);
+-- C: size-only trousers
+SELECT t_ok('T75b3 C: size-only trousers', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'Yün Pantolon', 'sku_prefix', 'PNT-C', 'category_id', t_get('catS_pant')::text, 'default_sale_price', '950'),
+  jsonb_build_array(jsonb_build_object('sku', 'PNT-C-S', 'option_value_ids', jsonb_build_array(t_get('vS_s')::text)),
+                    jsonb_build_object('sku', 'PNT-C-M', 'option_value_ids', jsonb_build_array(t_get('vS_m')::text)))) $q$);
+-- D: sold-out product (no stock ever)
+SELECT t_ok('T75b4 D: sold-out product', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'İpek Fular', 'sku_prefix', 'FLR-D', 'category_id', t_get('catS_triko')::text, 'default_sale_price', '450'),
+  jsonb_build_array(jsonb_build_object('sku', 'FLR-D-STD', 'option_value_ids', '[]'::jsonb))) $q$);
+-- E: never published
+SELECT t_ok('T75b5 E: unpublished product', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'Gizli Ceket', 'sku_prefix', 'CKT-E', 'category_id', t_get('catS_elbise')::text, 'default_sale_price', '2500'),
+  jsonb_build_array(jsonb_build_object('sku', 'CKT-E-STD', 'option_value_ids', '[]'::jsonb))) $q$);
+-- F: product with private proof images
+SELECT t_ok('T75b6 F: product with private label/proof images', $q$ SELECT rpc_onboard_product(t_get('bizS'),
+  jsonb_build_object('name', 'Deri Çanta', 'sku_prefix', 'CNT-F', 'category_id', t_get('catS_triko')::text, 'default_sale_price', '3200'),
+  jsonb_build_array(jsonb_build_object('sku', 'CNT-F-STD', 'option_value_ids', '[]'::jsonb))) $q$);
+-- stock: A black S 5, A black M 2 (low), A beige S 5, A beige M 0; B 10; C S 1 (low), C M 0; D 0; F 3
+SELECT t_ok('T75b7 stock via adjustments', $q$ SELECT rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-SYH-S'), 'sellable', 5, 'acilis', 'manual_cost', 400),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-SYH-M'), 'sellable', 2, 'acilis', 'manual_cost', 400),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('ELB-A-BEJ-S'), 'sellable', 5, 'acilis', 'manual_cost', 400),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('TRK-B-STD'), 'sellable', 10, 'acilis', 'manual_cost', 300),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('PNT-C-S'), 'sellable', 1, 'acilis', 'manual_cost', 350),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('CNT-F-STD'), 'sellable', 3, 'acilis', 'manual_cost', 1500),
+  rpc_post_inventory_adjustment(t_get('bizS'), t_get('brS'), t75_vid('CNT-F-STD'), 'damaged', 2, 'hasarli', 'manual_cost', 1500) $q$);
+SELECT t_logout();
+-- images (rows only; the files live in storage): F has a main image, a label tag and a receiving proof; A has a main image + one variant image
+WITH x AS (INSERT INTO product_images (product_id, role, storage_path, mime_type, byte_size) VALUES (t75_pid('CNT-F'), 'product_main', 'business/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/aaaaaaaa-0000-4000-8000-000000000001.jpg', 'image/jpeg', 1000) RETURNING id) SELECT t_set('imgF_main', id) FROM x;
+WITH x AS (INSERT INTO product_images (product_id, role, storage_path, mime_type, byte_size) VALUES (t75_pid('CNT-F'), 'label_tag', 'business/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/aaaaaaaa-0000-4000-8000-000000000002.jpg', 'image/jpeg', 1000) RETURNING id) SELECT t_set('imgF_label', id) FROM x;
+WITH x AS (INSERT INTO suppliers (business_id, name, currency) VALUES (t_get('bizS'), 'ZZ Tedarikçi', 'TRY') RETURNING id) SELECT t_set('supS', id) FROM x;
+WITH x AS (INSERT INTO goods_receipts (business_id, branch_id, supplier_id, receipt_number, invoice_currency, exchange_rate)
+  VALUES (t_get('bizS'), t_get('brS'), t_get('supS'), 'GR-ZZ-0001', 'TRY', 1) RETURNING id) SELECT t_set('grS', id) FROM x;
+WITH x AS (INSERT INTO product_images (goods_receipt_id, role, storage_path, mime_type, byte_size) VALUES (t_get('grS'), 'receiving_proof', 'business/' || t_get('bizS') || '/receipts/' || t_get('grS') || '/aaaaaaaa-0000-4000-8000-000000000003.jpg', 'image/jpeg', 1000) RETURNING id) SELECT t_set('imgF_proof', id) FROM x;
+WITH x AS (INSERT INTO product_images (product_id, role, storage_path, mime_type, byte_size) VALUES (t75_pid('ELB-A'), 'product_main', 'business/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/aaaaaaaa-0000-4000-8000-000000000004.jpg', 'image/jpeg', 1000) RETURNING id) SELECT t_set('imgA_main', id) FROM x;
+WITH x AS (INSERT INTO product_images (product_id, variant_id, role, storage_path, mime_type, byte_size) VALUES (t75_pid('ELB-A'), t75_vid('ELB-A-BEJ-S'), 'variant', 'business/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/aaaaaaaa-0000-4000-8000-000000000005.jpg', 'image/jpeg', 1000) RETURNING id) SELECT t_set('imgA_beige', id) FROM x;
+
+-- ---------------- storefront settings ----------------
+SELECT t_login('a12');
+SELECT t_err('T75c the slug is validated', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), '{"slug":"ZZ Store!","store_name":"ZZ"}') $q$, 'INVALID_SLUG');
+SELECT t_err('T75c2 the store name is required', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), '{"slug":"zz-store","store_name":" "}') $q$, 'INVALID_NAME');
+SELECT t_ok('T75c3 the owner creates the storefront (disabled)', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), jsonb_build_object('slug', 'zz-store', 'store_name', 'ZZ Store', 'tagline', 'sessiz lüks', 'instagram', '@zzstore', 'whatsapp', '+90 555 000 00 00', 'enabled', false, 'fulfillment_branch_id', t_get('brS')::text)) $q$);
+SELECT t_check('T75c4 settings are normalised (instagram without @, whatsapp digits, state display, threshold 3)',
+  t75_q($q$ SELECT instagram = 'zzstore' AND whatsapp = '+905550000000' AND stock_display = 'state' AND low_stock_threshold = 3 AND NOT enabled FROM storefronts WHERE business_id = t_get('bizS') $q$));
+SELECT t_logout();
+SELECT t_check('T75c5 a disabled store resolves to nothing for anon', rpc_shop_resolve('zz-store') IS NULL AND rpc_shop_home('zz-store') IS NULL AND rpc_shop_products('zz-store') IS NULL AND rpc_shop_product('zz-store', 'keten-elbise') IS NULL);
+SELECT t_login('u1');
+SELECT t_err('T75c6 another tenant''s owner cannot touch these settings', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), '{"slug":"zz-store","store_name":"X"}') $q$, 'FORBIDDEN');
+SELECT t_err('T75c7 the TLC owner cannot take the slug of another store', $q$ SELECT rpc_storefront_upsert(t_get('biz'), '{"slug":"zz-store","store_name":"Things"}') $q$, 'SLUG_TAKEN');
+SELECT t_check('T75c8 and sees no storefront row of the other tenant', (SELECT count(*) FROM storefronts) = 0);
+SELECT t_logout();
+SELECT t_login('a11');
+SELECT t_err('T75c9 a manager of another business is refused too', $q$ SELECT rpc_storefront_admin(t_get('bizS')) $q$, 'FORBIDDEN');
+SELECT t_logout();
+
+-- ---------------- publishing ----------------
+SELECT t_login('a12');
+SELECT t_err('T75d publishing needs an active product', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), gen_random_uuid(), true) $q$, 'INVALID_PRODUCT');
+SELECT t_ok('T75d2 A is published (slug derived from the Turkish name)', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), t75_pid('ELB-A'), true) $q$);
+SELECT t_check('T75d3 slug, timestamp and state', t75_q($q$ SELECT web_published AND web_slug = 'keten-elbise' AND web_published_at IS NOT NULL FROM products WHERE id = t75_pid('ELB-A') $q$));
+SELECT t_ok('T75d4 B, C, D, F published', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), t75_pid('TRK-B'), true), rpc_storefront_publish_product(t_get('bizS'), t75_pid('PNT-C'), true),
+  rpc_storefront_publish_product(t_get('bizS'), t75_pid('FLR-D'), true), rpc_storefront_publish_product(t_get('bizS'), t75_pid('CNT-F'), true) $q$);
+SELECT t_ok('T75d5 web copy: title, description, featured, sort', $q$ SELECT rpc_storefront_set_product_web(t_get('bizS'), t75_pid('ELB-A'), '{"web_title":"Keten Elbise — Yaz","web_description":"Web açıklaması.","web_featured":true,"web_sort_order":1}') $q$);
+SELECT t_err('T75d6 a product slug cannot collide inside the store', $q$ SELECT rpc_storefront_set_product_web(t_get('bizS'), t75_pid('TRK-B'), '{"web_slug":"keten-elbise"}') $q$, 'SLUG_TAKEN');
+SELECT t_ok('T75d7 a variant can be taken off the web (A beige M)', $q$ SELECT rpc_storefront_set_variant_web(t_get('bizS'), t75_vid('ELB-A-BEJ-M'), false) $q$);
+SELECT t_ok('T75d8 the main image of F and A''s images are published (paths recorded)', $q$ SELECT
+  rpc_storefront_set_image_public(t_get('bizS'), t_get('imgF_main'), 'store/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/' || t_get('imgF_main') || '.jpg'),
+  rpc_storefront_set_image_public(t_get('bizS'), t_get('imgA_main'), 'store/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/' || t_get('imgA_main') || '.jpg'),
+  rpc_storefront_set_image_public(t_get('bizS'), t_get('imgA_beige'), 'store/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/' || t_get('imgA_beige') || '.jpg') $q$);
+SELECT t_err('T75d9 a label tag can never be published', $q$ SELECT rpc_storefront_set_image_public(t_get('bizS'), t_get('imgF_label'), 'store/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/' || t_get('imgF_label') || '.jpg') $q$, 'PRIVATE_ROLE');
+SELECT t_err('T75d10 nor a receiving proof', $q$ SELECT rpc_storefront_set_image_public(t_get('bizS'), t_get('imgF_proof'), 'store/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/' || t_get('imgF_proof') || '.jpg') $q$, 'PRIVATE_ROLE');
+SELECT t_err('T75d11 a public path under another tenant/product is refused', $q$ SELECT rpc_storefront_set_image_public(t_get('bizS'), t_get('imgA_main'), 'store/' || t_get('biz') || '/products/' || t75_pid('ELB-A') || '/' || t_get('imgA_main') || '.jpg') $q$, 'PUBLIC_PATH_MISMATCH');
+SELECT t_ok('T75d12 the store goes live', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), jsonb_build_object('slug', 'zz-store', 'store_name', 'ZZ Store', 'enabled', true, 'fulfillment_branch_id', t_get('brS')::text, 'announcement', 'Kargo bedava')) $q$);
+SELECT t_check('T75d13 the admin overview lists 6 active products, 5 published, with web variant counts and public image counts',
+  (SELECT (r ->> 'published_count')::int = 5 AND (r ->> 'total')::int = 6 AND (r -> 'storefront' ->> 'enabled')::boolean
+          AND (SELECT count(*) FROM jsonb_array_elements(r -> 'products') p WHERE (p ->> 'web_published')::boolean) = 5
+          AND (SELECT (p ->> 'web_variants')::int = 3 AND (p ->> 'public_images')::int = 2 FROM jsonb_array_elements(r -> 'products') p WHERE p ->> 'name' = 'Keten Elbise')
+   FROM rpc_storefront_admin(t_get('bizS')) r));
+SELECT t_check('T75d14 the per-product admin view carries variants with labels and images with their public state',
+  (SELECT jsonb_array_length(r -> 'variants') = 4 AND jsonb_array_length(r -> 'images') = 2
+          AND (SELECT v ->> 'labels' = 'Siyah / S' FROM jsonb_array_elements(r -> 'variants') v WHERE v ->> 'sku' = 'ELB-A-SYH-S')
+   FROM rpc_storefront_admin_product(t_get('bizS'), t75_pid('ELB-A')) r));
+SELECT t_logout();
+-- superuser: the CHECK holds even without the RPC
+SELECT t_err('T75d15 the column constraint refuses a public path on a proof image', $q$ UPDATE product_images SET public_path = 'store/' || t_get('bizS') || '/products/' || t75_pid('CNT-F') || '/' || t_get('imgF_proof') || '.jpg' WHERE id = t_get('imgF_proof') $q$, 'chk_product_images_public_role');
+UPDATE product_variants SET web_enabled = false WHERE product_id = t75_pid('FLR-D');
+SELECT t_login('a12');
+SELECT t_err('T75d16 publishing needs a web-enabled variant', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), t75_pid('FLR-D'), true) $q$, 'NO_WEB_VARIANT');
+SELECT t_logout();
+UPDATE product_variants SET web_enabled = true WHERE product_id = t75_pid('FLR-D');
+UPDATE products SET status = 'archived' WHERE id = t75_pid('CNT-F');
+SELECT t_check('T75d17 archiving a product unpublishes it (trigger)', (SELECT NOT web_published FROM products WHERE id = t75_pid('CNT-F')));
+UPDATE products SET status = 'active' WHERE id = t75_pid('CNT-F');
+SELECT t_check('T75d18 reactivating does not republish by itself', (SELECT NOT web_published FROM products WHERE id = t75_pid('CNT-F')));
+SELECT t_login('a12');
+SELECT t_ok('T75d19 F is published again by the owner', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), t75_pid('CNT-F'), true) $q$);
+SELECT t_logout();
+
+-- ---------------- anon browsing ----------------
+SET ROLE anon;
+SELECT t_check('T75e resolve: identity, currency, categories with published counts, announcement, no internals',
+  (SELECT r ->> 'store_name' = 'ZZ Store' AND r ->> 'currency' = 'TRY' AND r ->> 'announcement' = 'Kargo bedava' AND (r ->> 'published_count')::int = 5
+          AND jsonb_array_length(r -> 'categories') = 3
+          AND (SELECT (c ->> 'count')::int = 1 FROM jsonb_array_elements(r -> 'categories') c WHERE c ->> 'slug' = 'elbise')   -- E is unpublished
+          AND (SELECT (c ->> 'count')::int = 3 FROM jsonb_array_elements(r -> 'categories') c WHERE c ->> 'slug' = 'triko')
+          AND NOT (r ? 'business_id') AND NOT (r ? 'fulfillment_branch_id')
+   FROM rpc_shop_resolve('zz-store') r));
+SELECT t_check('T75e2 unknown slug resolves to nothing', rpc_shop_resolve('nope') IS NULL AND rpc_shop_products('nope') IS NULL);
+SELECT t_check('T75e3 home: featured A only; new arrivals 5 published; cards carry price, availability, image path, colours',
+  (SELECT jsonb_array_length(r -> 'featured') = 1 AND r -> 'featured' -> 0 ->> 'slug' = 'keten-elbise' AND jsonb_array_length(r -> 'new_arrivals') = 5
+          AND (r -> 'featured' -> 0 ->> 'price_from')::numeric = 1200 AND r -> 'featured' -> 0 ->> 'availability' = 'in_stock'
+          AND r -> 'featured' -> 0 -> 'image' ->> 'path' LIKE 'store/%' AND jsonb_array_length(r -> 'featured' -> 0 -> 'colors') = 2
+          AND r -> 'featured' -> 0 ->> 'name' = 'Keten Elbise — Yaz'
+   FROM rpc_shop_home('zz-store') r));
+SELECT t_check('T75e4 listing: all 5, category filter, search, sort by price, pagination',
+  (SELECT (r ->> 'total')::int = 5 FROM rpc_shop_products('zz-store') r)
+  AND (SELECT (r ->> 'total')::int = 3 AND r -> 'category' ->> 'name' = 'Triko' FROM rpc_shop_products('zz-store', 'triko') r)
+  AND (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', 'yok') r)
+  AND (SELECT (r ->> 'total')::int = 1 AND r -> 'rows' -> 0 ->> 'slug' = 'keten-elbise' FROM rpc_shop_products('zz-store', NULL, 'elbise') r)
+  AND (SELECT r -> 'rows' -> 0 ->> 'slug' = 'ipek-fular' AND r -> 'rows' -> 4 ->> 'slug' = 'deri-canta' FROM rpc_shop_products('zz-store', NULL, NULL, 'price_asc') r)
+  AND (SELECT jsonb_array_length(r -> 'rows') = 2 AND (r ->> 'offset')::int = 2 FROM rpc_shop_products('zz-store', NULL, NULL, 'newest', 2, 2) r));
+SELECT t_err('T75e5 the sort key is validated', $q$ SELECT rpc_shop_products('zz-store', NULL, NULL, 'cost') $q$, 'INVALID_SORT');
+SELECT t_check('T75e6 availability states: D sold out, C low (1 of threshold 3), B in stock; E is invisible',
+  (SELECT (SELECT c ->> 'availability' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'ipek-fular') = 'sold_out'
+          AND (SELECT c ->> 'availability' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'yun-pantolon') = 'low'
+          AND (SELECT c ->> 'availability' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'triko-kazak') = 'in_stock'
+          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'name' ILIKE '%ceket%')
+   FROM rpc_shop_products('zz-store') r));
+SELECT t_check('T75e7 product A detail: colour first then size, 3 web variants, states per variant, variant image mapped, no SKU/barcode/cost keys',
+  (SELECT r ->> 'name' = 'Keten Elbise — Yaz' AND r ->> 'description' = 'Web açıklaması.' AND r ->> 'currency' = 'TRY'
+          AND jsonb_array_length(r -> 'options') = 2 AND r -> 'options' -> 0 ->> 'kind' = 'color' AND r -> 'options' -> 1 ->> 'kind' = 'size'
+          AND jsonb_array_length(r -> 'options' -> 0 -> 'values') = 2 AND r -> 'options' -> 0 -> 'values' -> 0 ->> 'hex' = '#111111'
+          AND jsonb_array_length(r -> 'variants') = 3
+          AND (SELECT count(*) FROM jsonb_array_elements(r -> 'variants') v WHERE v ->> 'state' = 'low') = 1
+          AND (SELECT bool_and(v ->> 'available' IS NULL AND (v ->> 'price')::numeric = 1200 AND NOT (v ? 'sku') AND NOT (v ? 'cost')) FROM jsonb_array_elements(r -> 'variants') v)
+          AND jsonb_array_length(r -> 'images') = 2 AND (SELECT count(*) FROM jsonb_array_elements(r -> 'variants') v WHERE v ->> 'image_id' IS NOT NULL) = 1
+          AND NOT (r ? 'notes') AND NOT (r ? 'supplier_id') AND NOT (r ? 'sku_prefix')
+   FROM rpc_shop_product('zz-store', 'keten-elbise') r));
+SELECT t_check('T75e8 B detail: no options, one variant; C detail: size only; D detail: sold out',
+  (SELECT jsonb_array_length(r -> 'options') = 0 AND jsonb_array_length(r -> 'variants') = 1 FROM rpc_shop_product('zz-store', 'triko-kazak') r)
+  AND (SELECT jsonb_array_length(r -> 'options') = 1 AND r -> 'options' -> 0 ->> 'kind' = 'size' AND jsonb_array_length(r -> 'variants') = 2 FROM rpc_shop_product('zz-store', 'yun-pantolon') r)
+  AND (SELECT r -> 'variants' -> 0 ->> 'state' = 'sold_out' FROM rpc_shop_product('zz-store', 'ipek-fular') r));
+SELECT t_check('T75e9 F detail exposes only the published main image, never the label tag or proof',
+  (SELECT jsonb_array_length(r -> 'images') = 1 AND r -> 'images' -> 0 ->> 'role' = 'product_main' AND r -> 'images' -> 0 ->> 'path' LIKE 'store/%'
+          AND NOT (r::text LIKE '%business/%') AND NOT (r::text ILIKE '%label%') AND NOT (r::text ILIKE '%receiving%')
+   FROM rpc_shop_product('zz-store', 'deri-canta') r));
+SELECT t_check('T75e10 the unpublished product and a foreign slug return nothing',
+  rpc_shop_product('zz-store', 'gizli-ceket') IS NULL AND rpc_shop_product('zz-store', 'keten-gomlek') IS NULL);
+SELECT t_check('T75e11 availability endpoint: A black M low, D sold out, unknown/disabled variants sold out, exact numbers hidden in state mode',
+  (SELECT r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'state' = 'low' AND r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'available' IS NULL
+          AND r -> (t75_vid('FLR-D-STD')::text) ->> 'state' = 'sold_out'
+          AND r -> (t75_vid('ELB-A-BEJ-M')::text) ->> 'state' = 'sold_out' AND r -> (t75_vid('ELB-A-BEJ-M')::text) ->> 'price' IS NULL
+          AND r -> (t75_vid('CKT-E-STD')::text) ->> 'state' = 'sold_out'
+          AND r -> ('00000000-0000-4000-8000-000000000000') ->> 'state' = 'sold_out'
+   FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M'), t75_vid('FLR-D-STD'), t75_vid('ELB-A-BEJ-M'), t75_vid('CKT-E-STD'), '00000000-0000-4000-8000-000000000000'::uuid]) r));
+SELECT t_err('T75e12 the availability call is bounded', $q$ SELECT rpc_shop_availability('zz-store', (SELECT array_agg(gen_random_uuid()) FROM generate_series(1, 51))) $q$, 'INVALID_INPUT');
+-- the operational tables are RLS-guarded by membership helpers anon may not even execute: every direct read fails
+SELECT t_err('T75e13 anon cannot read product_images directly', $q$ SELECT count(*) FROM product_images $q$, '42501');
+SELECT t_err('T75e13b nor barcodes', $q$ SELECT count(*) FROM barcodes $q$, '42501');
+SELECT t_err('T75e13c nor suppliers', $q$ SELECT count(*) FROM suppliers $q$, '42501');
+SELECT t_err('T75e13d nor customers', $q$ SELECT count(*) FROM customers $q$, '42501');
+SELECT t_err('T75e13e nor inventory movements', $q$ SELECT count(*) FROM inventory_movements $q$, '42501');
+SELECT t_err('T75e13f nor cost pools', $q$ SELECT count(*) FROM variant_cost_pools $q$, '42501');
+SELECT t_err('T75e13g nor reservations', $q$ SELECT count(*) FROM reservations $q$, '42501');
+SELECT t_err('T75e13h nor goods receipts', $q$ SELECT count(*) FROM goods_receipts $q$, '42501');
+SELECT t_err('T75e13i nor storefront settings', $q$ SELECT count(*) FROM storefronts $q$, '42501');
+SELECT t_err('T75e14 anon cannot call the admin RPCs', $q$ SELECT rpc_storefront_admin(t_get('bizS')) $q$, '42501');
+SELECT t_err('T75e15 anon cannot publish', $q$ SELECT rpc_storefront_publish_product(t_get('bizS'), t75_pid('CKT-E'), true) $q$, '42501');
+SELECT t_err('T75e16 anon cannot read a product row directly', $q$ SELECT count(*) FROM products $q$, '42501');
+SELECT t_check('T75e17 the TLC catalogue is not reachable through the public surface (no storefront)', rpc_shop_resolve('things-like-crop') IS NULL AND rpc_shop_resolve('tlc') IS NULL);
+SELECT t_check('T75e18 host resolver: no verified domain → nothing', rpc_shop_resolve_host('zz.example.com') IS NULL);
+RESET ROLE;
+
+-- ---------------- availability = sellable − active holds; damaged never counts ----------------
+SELECT t_check('T75f the damaged bucket never shows: F available 3 (not 5)',
+  t75_q($q$ SELECT fn_shop_available(t_get('bizS'), t_get('brS'), t75_vid('CNT-F-STD')) = 3 $q$));
+WITH x AS (INSERT INTO customers (business_id, full_name) VALUES (t_get('bizS'), 'Web Müşteri') RETURNING id) SELECT t_set('cS', id) FROM x;
+SELECT t_login('a12');
+SELECT t_set('vAS', t75_vid('ELB-A-SYH-S'));
+SELECT t_ok('T75f2 a POS hold of 4 on A black S', $q$ SELECT rpc_pos_reservation_create(t_get('brS'), t_get('cS'), t_json_items('vAS','4',NULL)) $q$);
+SELECT t_logout();
+SET ROLE anon;
+SELECT t_check('T75f3 the public availability drops to 1 (low) while the hold is active; on_hand is untouched',
+  (SELECT r -> (t_get('vAS')::text) ->> 'state' = 'low' FROM rpc_shop_availability('zz-store', ARRAY[t_get('vAS')]) r)
+  AND t75_q($q$ SELECT fn_bucket_qty(t_get('bizS'), t_get('brS'), t_get('vAS'), 'sellable') = 5 $q$));
+RESET ROLE;
+SELECT t_check('T75f4 the storefront created no inventory movement and no reservation of its own',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) = 7 AND (SELECT count(*) FROM reservations WHERE business_id = t_get('bizS')) = 1);
+
+-- ---------------- exact display mode + cross-tenant ----------------
+SELECT t_login('a12');
+SELECT t_ok('T75g the merchant switches to exact numbers with threshold 2', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), jsonb_build_object('slug', 'zz-store', 'store_name', 'ZZ Store', 'enabled', true, 'stock_display', 'exact', 'low_stock_threshold', 2)) $q$);
+SELECT t_logout();
+SET ROLE anon;
+SELECT t_check('T75g2 exact numbers appear and the threshold moved (A black M = 2 → low, A black S = 1 → low)',
+  (SELECT (r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'available')::int = 2 AND r -> (t75_vid('ELB-A-SYH-M')::text) ->> 'state' = 'low'
+          AND (r -> (t_get('vAS')::text) ->> 'available')::int = 1 AND (r -> (t75_vid('TRK-B-STD')::text) ->> 'available')::int = 10 AND r -> (t75_vid('TRK-B-STD')::text) ->> 'state' = 'in_stock'
+   FROM rpc_shop_availability('zz-store', ARRAY[t75_vid('ELB-A-SYH-M'), t_get('vAS'), t75_vid('TRK-B-STD')]) r));
+SELECT t_check('T75g3 a variant of another tenant is sold_out/unknown even through the right store',
+  (SELECT r -> (t_get('v62a')::text) ->> 'state' = 'sold_out' AND r -> (t_get('v62a')::text) ->> 'price' IS NULL FROM rpc_shop_availability('zz-store', ARRAY[t_get('v62a')]) r));
+RESET ROLE;
+SELECT t_check('T75h TLC: no storefront, no published product, no public image, no web flag moved',
+  (SELECT count(*) FROM storefronts WHERE business_id = t_get('biz')) = 0
+  AND (SELECT count(*) FROM products WHERE business_id = t_get('biz') AND (web_published OR web_slug IS NOT NULL OR web_featured)) = 0
+  AND (SELECT count(*) FROM product_images WHERE business_id = t_get('biz') AND public_path IS NOT NULL) = 0);
 
 -- ============================================================
 -- SUMMARY

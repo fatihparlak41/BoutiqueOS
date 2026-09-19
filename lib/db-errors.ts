@@ -76,6 +76,16 @@ const RPC_MESSAGES: Array<[string, string]> = [
   ["NOT_FOUND: subscription", "Abonelik bulunamadı."],
   ["NOT_FOUND: business", "İşletme bulunamadı."],
   ["platform administrator role required", "Bu işlem platform yetkisi gerektirir."],
+  // storefront (20260919140000)
+  ["SLUG_TAKEN", "Bu adres başka bir mağaza ya da ürün tarafından kullanılıyor; farklı bir adres seçin."],
+  ["INVALID_SLUG", "Adres yalnız küçük harf, rakam ve tire içerebilir."],
+  ["NOT_ACTIVE: only an active product", "Yalnız aktif ürün yayınlanabilir."],
+  ["NO_WEB_VARIANT", "Yayın için en az bir webde gösterilen aktif varyant gerekir."],
+  ["NO_PRICE", "Yayın için webde gösterilen bir varyantın satış fiyatı sıfırdan büyük olmalı."],
+  ["PRIVATE_ROLE", "Etiket ve mal kabul kanıtı görselleri hiçbir zaman yayınlanmaz."],
+  ["PUBLIC_PATH_MISMATCH", "Görsel yolu bu ürüne ait değil."],
+  ["INVALID_STOCK_DISPLAY", "Stok gösterimi tanınmadı."],
+  ["INVALID_IMAGE", "Görsel bulunamadı."],
   // SaaS billing (20260919100000) — manual billing; matched before the generic prefixes
   ["USE_PAYMENT", "Abonelik, faturası ödendiğinde etkinleşir. Önce fatura kesin, sonra ödemeyi kaydedin."],
   ["CANCEL_SCHEDULED", "Bu abonelik dönem sonunda iptal edilecek; yenileme faturası kesilmez. Önce iptali geri alın."],

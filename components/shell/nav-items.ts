@@ -12,6 +12,7 @@ import {
   BarChart3,
   Lightbulb,
   Settings,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -54,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Raporlar", icon: BarChart3, href: "/app/raporlar" },
       { label: "Analiz", icon: Lightbulb, href: "/app/analiz" },
+      { label: "Online Mağaza", icon: Globe, href: "/app/online-magaza" },
       { label: "Ayarlar", icon: Settings, href: "/app/ayarlar" },
     ],
   },
