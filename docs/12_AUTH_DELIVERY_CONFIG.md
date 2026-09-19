@@ -36,22 +36,31 @@ Validation lives in `lib/redirect.ts` and is covered by `npm run test:redirect`.
 
 ## Authentication → URL Configuration
 
-**Site URL**
+**Site URL** — verified on the dashboard 2026-09-19
 
 ```
 https://butikos.parlakmediatech.com.tr
 ```
 
-**Redirect URLs** — minimum set, no global globstar:
+**Redirect URLs** — minimum set, no global globstar. Verified on the dashboard
+2026-09-19 for the production origin: the wildcard entry was removed and the four explicit
+production lines below are what is configured. The localhost lines are the local-development
+equivalents and were not part of that check:
 
 ```
 https://butikos.parlakmediatech.com.tr/davet/*
 https://butikos.parlakmediatech.com.tr/sifre-belirle
 https://butikos.parlakmediatech.com.tr/basvuru
+https://butikos.parlakmediatech.com.tr/app
 http://localhost:3000/davet/*
 http://localhost:3000/sifre-belirle
 http://localhost:3000/basvuru
+http://localhost:3000/app
 ```
+
+`/app` is listed because `lib/redirect.ts` allows it as an auth destination (the
+fallback when a link carries no usable `redirect_to`); every entry mirrors one prefix of
+`AUTH_DESTINATION_PREFIXES`, nothing wider.
 
 `/basvuru` (Phase 13A) is where the signup confirmation lands: `registerAction` passes
 `emailRedirectTo = <origin>/basvuru`. Without this entry Supabase falls back to the Site
@@ -111,31 +120,43 @@ BoutiqueOS tenant: `signInWithOtp({ shouldCreateUser: false })`.
 <p>Bu bağlantıyı siz istemediyseniz bu e-postayı yok sayabilirsiniz.</p>
 ```
 
-### Confirm signup (Phase 13A — REQUIRED, not yet verified on the dashboard)
+### Confirm signup (Phase 13A — verified live 2026-09-19)
 
 Used by public registration: `supabase.auth.signUp` from `/kayit`. The default template
 links to `{{ .ConfirmationURL }}`, which is Supabase's own `/auth/v1/verify` endpoint;
 that endpoint completes the PKCE flow only in the browser that started the signup and
 sends the visitor to the Site URL. The contract below keeps every email on the same
-server-side `token_hash` path as the other three and lands on `/basvuru`:
+server-side `token_hash` path as the other three and lands on `/basvuru`.
+
+Subject: `BoutiqueOS hesabınızı doğrulayın`
 
 ```html
 <h2>BoutiqueOS hesabınızı doğrulayın</h2>
 <p>Başvurunuzu tamamlamak için e-posta adresinizi doğrulayın:</p>
 <p>
-  <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=signup&redirect_to={{ .RedirectTo }}">
+  <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&redirect_to={{ .RedirectTo }}">
     Adresimi doğrula
   </a>
 </p>
 <p>Bu kaydı siz yapmadıysanız bu e-postayı yok sayabilirsiniz; hiçbir hesap açılmaz.</p>
 ```
 
-`/auth/confirm` already accepts `type=signup`. The dashboard template was not readable
-from this session (the Management API needs the CLI's personal token), so the 13A live
-smoke confirmed the synthetic applicants through the admin API instead of the email link;
-the first real registrant is the end-to-end proof of this template. Auth → Sign In /
-Providers → Email: **Confirm email ON** (`mailer_autoconfirm=false`, verified live) and
-**Allow new users to sign up ON** (`disable_signup=false`, verified live).
+The dashboard template uses `type=email`, the value Supabase documents for a signup
+confirmation verified through `token_hash`; `/auth/confirm` accepts both `email` and
+`signup` (same `verifyOtp` call), so either spelling satisfies the contract. Auth → Sign
+In / Providers → Email: **Confirm email ON** (`mailer_autoconfirm=false`) and **Allow new
+users to sign up ON** (`disable_signup=false`), both verified live.
+
+**Real signup e-mail E2E — PASS (2026-09-19, DEV project, custom SMTP).** A disposable
+synthetic address (`fatihparlak1+zz13a@gmail.com`) went through the live `/kayit` form
+(4 steps, 390 px), the confirmation mail arrived through the configured custom SMTP
+sender, the person clicked the real link (no admin-API confirmation, no token shared),
+`/auth/confirm` verified it server-side, wrote the session and redirected to `/basvuru`
+with the signup draft restored (ZZ E2E MAIL TEST · TR / TRY · Starter); the application
+was submitted and `/basvuru-bekliyor` rendered "İnceleniyor". Read-only proof afterwards:
+`email_confirmed_at` set, exactly one `pending` application with plan `starter`, no
+business / membership / branch / subscription row, TLC snapshot identical. Neither the
+invite nor the recovery template was touched.
 
 ### Reset Password
 
@@ -206,8 +227,10 @@ retried.
 
 ## Known operational limits
 
-* Supabase's built-in SMTP is rate limited (`over_email_send_rate_limit`, HTTP 429). Fine
-  for a five-person pilot; a real SaaS needs custom SMTP.
+* The project sends through a **custom SMTP** sender (Authentication → SMTP Settings);
+  verified unchanged on the dashboard 2026-09-19 (no credentials are recorded here).
+  Supabase's built-in SMTP would be rate limited (`over_email_send_rate_limit`, HTTP 429)
+  and restricted to team addresses, which is why it is not used.
 * If magic links are disabled for the project, the existing-user path fails with
   `otp_disabled` (HTTP 501). The UI surfaces that as its own message rather than a
   generic failure.
