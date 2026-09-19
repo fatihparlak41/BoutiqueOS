@@ -32,7 +32,9 @@ function Feedback({ error, ok, okText }: { error: string | null; ok: boolean; ok
 export function IssueInvoiceForm({ subscriptionId, kind, disabled, disabledReason }: { subscriptionId: string; kind: "first" | "renewal"; disabled?: boolean; disabledReason?: string }) {
   const [state, formAction, pending] = useActionState(issueInvoiceAction, PLATFORM_IDLE);
   const [arm, setArm] = useState(false);
+  // explicit lowercase: String.toLowerCase() would turn the Turkish dotted I into "i\u0307"
   const label = kind === "first" ? "İlk faturayı kes" : "Yenileme faturası kes";
+  const labelLower = kind === "first" ? "ilk faturayı kes" : "yenileme faturası kes";
   return (
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="subscription_id" value={subscriptionId} />
@@ -53,7 +55,7 @@ export function IssueInvoiceForm({ subscriptionId, kind, disabled, disabledReaso
           </div>
           <div className="flex items-center gap-2">
             <Button type="submit" size="sm" disabled={pending}>
-              {pending ? "Kesiliyor…" : `Evet, ${label.toLowerCase()}`}
+              {pending ? "Kesiliyor…" : `Evet, ${labelLower}`}
             </Button>
             <Button type="button" variant="ghost" size="sm" onClick={() => setArm(false)}>
               Vazgeç

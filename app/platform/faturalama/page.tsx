@@ -43,7 +43,7 @@ export default async function BillingHome() {
         <Stat
           label="Abonelikler"
           value={SUB_ORDER.reduce((n, s) => n + (overview.subscriptions[s] ?? 0), 0)}
-          hint={SUB_ORDER.filter((s) => overview.subscriptions[s]).map((s) => `${overview.subscriptions[s]} ${SUBSCRIPTION_STATUS_LABELS[s].toLowerCase()}`).join(" · ") || undefined}
+          hint={SUB_ORDER.filter((s) => overview.subscriptions[s]).map((s) => `${overview.subscriptions[s]} ${SUBSCRIPTION_STATUS_LABELS[s].toLocaleLowerCase("tr")}`).join(" · ") || undefined}
           href="/platform/abonelikler"
         />
       </StatGrid>
