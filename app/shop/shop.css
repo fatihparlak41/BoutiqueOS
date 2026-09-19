@@ -36,6 +36,8 @@
 @media (min-width: 768px) { .shop-nav { display: flex; } }
 .shop-icon-btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 8px; font: inherit; font-size: 13px; letter-spacing: 0.04em; cursor: pointer; text-decoration: none; }
 .shop-count { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 999px; background: var(--shop-ink); color: #fff; font-size: 11px; padding: 0 5px; font-variant-numeric: tabular-nums; }
+.shop-menu-toggle { display: inline-flex; }
+@media (min-width: 768px) { .shop-menu-toggle, .shop-menu { display: none; } }
 .shop-menu { border-top: 1px solid var(--shop-line); background: #fff; }
 .shop-menu a { display: block; padding: 14px 0; border-bottom: 1px solid var(--shop-line); text-decoration: none; font-size: 15px; }
 .shop-menu a:last-child { border-bottom: 0; }

@@ -23,7 +23,7 @@ export function ShopHeader({ store }: { store: Store }) {
       {store.announcement ? <div className="shop-announce">{store.announcement}</div> : null}
       <header className="shop-header">
         <div className="shop-container shop-header-row">
-          <button type="button" className="shop-icon-btn md:hidden" aria-expanded={open} aria-controls="shop-menu" onClick={() => setOpen((o) => !o)}>
+          <button type="button" className="shop-icon-btn shop-menu-toggle" aria-expanded={open} aria-controls="shop-menu" onClick={() => setOpen((o) => !o)}>
             {open ? "Kapat" : "Menü"}
           </button>
           <Link href={base} className="shop-brand" aria-label={store.store_name}>
@@ -37,7 +37,7 @@ export function ShopHeader({ store }: { store: Store }) {
           <CartButton slug={store.slug} />
         </div>
         {open ? (
-          <div id="shop-menu" className="shop-menu md:hidden">
+          <div id="shop-menu" className="shop-menu">
             <nav className="shop-container" aria-label="Kategoriler">
               {links.map((l) => (
                 <Link key={l.href} href={l.href} onClick={() => setOpen(false)}>{l.label}</Link>
