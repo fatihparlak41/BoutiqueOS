@@ -11,7 +11,7 @@ import { ProductThumb } from "@/components/catalog/product-thumb";
 import { StatusPill } from "@/components/catalog/status-pill";
 import { IDLE } from "@/lib/catalog/action-state";
 import type { ProductStatus } from "@/lib/catalog/model";
-import { archiveProductAction } from "@/app/app/urunler/actions";
+import { setProductStatusAction } from "@/app/app/urunler/actions";
 
 /**
  * The product as a boutique sees it: photo, name, price, where it belongs, whether it
@@ -53,7 +53,7 @@ export function ProductHero({
       const fd = new FormData();
       fd.set("product_id", productId);
       fd.set("status", archived ? "active" : "archived");
-      const res = await archiveProductAction(IDLE, fd);
+      const res = await setProductStatusAction(IDLE, fd);
       setConfirm(false);
       if (!res.ok) {
         toast({ tone: "danger", title: archived ? "Arşivden çıkarılamadı" : "Arşivlenemedi", description: res.error ?? undefined });
@@ -133,7 +133,7 @@ export function ProductHero({
                     data-testid="product-archive"
                   >
                     {archived ? <ArchiveRestore aria-hidden className="h-4 w-4" /> : <Archive aria-hidden className="h-4 w-4" />}
-                    {archived ? "Arşivden çıkar" : "Arşivle"}
+                    {archived ? "Ürünü satışa aç" : "Arşivle"}
                   </button>
                 </li>
               </ul>
@@ -147,7 +147,7 @@ export function ProductHero({
         onClose={() => (pending ? undefined : setConfirm(false))}
         title={archived ? "Bu ürün yeniden satışa açılsın mı?" : "Bu ürünü arşivlemek istiyor musun?"}
         description={archived ? "Ürün ve seçenekleri satış ekranlarında yeniden görünür." : "Ürün satış ekranlarından kaldırılır. Geçmiş kayıtlar ve kalan stok korunur."}
-        confirmLabel={archived ? "Satışa aç" : "Arşivle"}
+        confirmLabel={archived ? "Ürünü satışa aç" : "Arşivle"}
         destructive={!archived}
         busy={pending}
         onConfirm={toggleArchive}

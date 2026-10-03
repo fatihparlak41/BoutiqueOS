@@ -136,8 +136,8 @@ WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_pri
 -- ============================================================
 -- T01–T04  structural
 -- ============================================================
-SELECT t_check('T01 all 73 domain tables present',
-  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 73,
+SELECT t_check('T01 all 74 domain tables present',
+  (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%') = 74,
   (SELECT count(*)::text FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_%'));
 SELECT t_check('T02 RLS enabled on every public table',
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -2075,7 +2075,7 @@ SELECT t_login('u2');
 SELECT t_ok('T60bl variant is archived instead', $q$ UPDATE product_variants SET status = 'archived' WHERE id = t_get('v6a') $q$);
 SELECT t_check('T60bm archived variant frees its combination for a new active one',
   (SELECT created FROM rpc_generate_variants(t_get('p6'), jsonb_build_array(t_combo('SME-SYH-S-2','val_black','val_s')))) = true);
-SELECT t_ok('T60bn product archived, not deleted', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p7') $q$);
+SELECT t_ok('T60bn product archived, not deleted', $q$ SELECT rpc_product_set_status(t_get('p7'), 'archived') $q$);
 SELECT t_check('T60bo archived product keeps its variants', t_count($q$ SELECT count(*) FROM product_variants WHERE product_id = t_get('p7') $q$) = 1);
 SELECT t_logout();
 
@@ -2125,9 +2125,9 @@ SELECT t_check('T61 rows survived every attempt',
 
 -- lifecycle still works
 SELECT t_login('u1');
-SELECT t_ok('T61g archive product', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p61') $q$);
+SELECT t_ok('T61g archive product', $q$ SELECT rpc_product_set_status(t_get('p61'), 'archived') $q$);
 SELECT t_check('T61g archived', (SELECT status::text FROM products WHERE id = t_get('p61')) = 'archived');
-SELECT t_ok('T61h restore archived product', $q$ UPDATE products SET status = 'active' WHERE id = t_get('p61') $q$);
+SELECT t_ok('T61h restore archived product', $q$ SELECT rpc_product_set_status(t_get('p61'), 'active') $q$);
 SELECT t_check('T61h active again', (SELECT status::text FROM products WHERE id = t_get('p61')) = 'active');
 SELECT t_ok('T61i deactivate (archive) variant', $q$ UPDATE product_variants SET status = 'archived' WHERE id = t_get('v61') $q$);
 SELECT t_check('T61i variant archived', (SELECT status::text FROM product_variants WHERE id = t_get('v61')) = 'archived');
@@ -2737,7 +2737,7 @@ CREATE TEMP TABLE _t63l_base AS SELECT
   (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) AS pool,
   (SELECT available_quantity FROM v_stock_available WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) AS available;
 GRANT SELECT ON _t63l_base TO authenticated;
-SELECT t_ok('T63l the owner archives the product (the app''s archive action: a status update)', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p63l') $q$);
+SELECT t_ok('T63l the owner archives the product (the app''s archive action: rpc_product_set_status)', $q$ SELECT rpc_product_set_status(t_get('p63l'), 'archived') $q$);
 SELECT t_check('T63l archived: status archived, variant still active, ledger untouched (3 units, pool 3 / 300, available 3)',
   (SELECT status::text FROM products WHERE id = t_get('p63l')) = 'archived'
   AND (SELECT status::text FROM product_variants WHERE id = t_get('v63l')) = 'active'
@@ -2752,7 +2752,7 @@ SELECT t_check('T63l the refused sale wrote nothing', (SELECT count(*) FROM inve
 SELECT t_check('T63l the stock report''s valuation still carries the archived units (owned inventory), while its catalogue totals count only active products',
   (SELECT (r -> 'valuation' ->> 'on_hand_qty')::int FROM rpc_report_stock(t_get('biz'), t_get('br63'), 2) r) >= 3
   AND (SELECT (r -> 'valuation' ->> 'total_value_base')::numeric FROM rpc_report_stock(t_get('biz'), t_get('br63'), 2) r) >= 300);
-SELECT t_ok('T63l the owner restores the product', $q$ UPDATE products SET status = 'active' WHERE id = t_get('p63l') $q$);
+SELECT t_ok('T63l the owner restores the product', $q$ SELECT rpc_product_set_status(t_get('p63l'), 'active') $q$);
 SELECT t_ok('T63l restored product sells again', $q$ SELECT rpc_pos_complete_sale(t_get('sess63l'), t_json_items('v63l','1',NULL), t_pay('cash','TRY',400), gen_random_uuid()) $q$);
 SELECT t_check('T63l after the sale: 2 left, pool 2 / 200', (SELECT on_hand_qty || '/' || total_value_base::numeric(12,2) FROM variant_cost_pools WHERE variant_id = t_get('v63l') AND branch_id = t_get('br63')) = '2/200.00');
 SELECT t_ok('T63l close the fixture session', $q$ SELECT rpc_close_register_session(t_get('sess63l'), '[{"currency":"TRY","counted_amount":400}]'::jsonb) $q$);
@@ -5841,6 +5841,118 @@ SELECT t_check('T76j5 still exactly one sale for the tenant; the hold of order 4
 SELECT t_logout();
 SELECT t_check('T76k TLC: no online order, no online hold, no sale from any of this',
   (SELECT count(*) FROM storefront_orders WHERE business_id = t_get('biz')) = 0 AND (SELECT count(*) FROM reservations WHERE business_id = t_get('biz') AND source = 'online') = 0);
+
+-- ============================================================
+-- T77 — audited product status (rpc_product_set_status + product_status_events)
+-- ============================================================
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status)
+           VALUES (t_get('biz'), 'T77 Durum Ürünü', 'T77-A', 500, 'active') RETURNING id) SELECT t_set('p77a', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status)
+           VALUES (t_get('biz'), 'T77 Taslak Ürün', 'T77-D', 500, 'draft') RETURNING id) SELECT t_set('p77d', id) FROM x;
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status)
+           VALUES (t_get('biz'), 'T77 Doğrudan Ürün', 'T77-X', 500, 'active') RETURNING id) SELECT t_set('p77x', id) FROM x;
+WITH x AS (INSERT INTO product_variants (product_id, sku) VALUES (t_get('p77a'), 'T77-A-1') RETURNING id) SELECT t_set('v77a', id) FROM x;
+CREATE TEMP TABLE _t77_pre AS SELECT count(*) AS n FROM product_status_events;
+
+SELECT t_check('T77a privilege: events table select-only for authenticated, nothing for anon; RPC authenticated-only',
+  has_table_privilege('authenticated', 'product_status_events', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'product_status_events', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'product_status_events', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'product_status_events', 'DELETE')
+  AND NOT has_table_privilege('authenticated', 'product_status_events', 'TRUNCATE')
+  AND NOT has_table_privilege('anon', 'product_status_events', 'SELECT')
+  AND has_function_privilege('authenticated', 'rpc_product_set_status(uuid, product_status, text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_product_set_status(uuid, product_status, text)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'fn_product_status_event_in_tx(uuid, product_status, product_status)', 'EXECUTE'));
+
+-- archive (owner, with a reason)
+SELECT t_login('u1');
+SELECT t_check('T77b owner archives: changed, previous active, status archived',
+  (SELECT r->>'changed' = 'true' AND r->>'previous_status' = 'active' AND r->>'status' = 'archived' AND r->>'event_id' IS NOT NULL
+     FROM (SELECT rpc_product_set_status(t_get('p77a'), 'archived', '  Sezon bitti  ') AS r) s));
+SELECT t_check('T77c archive event: business, product, active→archived, actor owner, trimmed reason, time',
+  t_count($q$ SELECT count(*) FROM product_status_events
+              WHERE product_id = t_get('p77a') AND business_id = t_get('biz') AND from_status = 'active' AND to_status = 'archived'
+                AND actor_user_id = t_get('u1') AND reason = 'Sezon bitti' AND occurred_at IS NOT NULL $q$) = 1);
+SELECT t_check('T77d product row archived, variant untouched', (SELECT status::text FROM products WHERE id = t_get('p77a')) = 'archived'
+  AND (SELECT status::text FROM product_variants WHERE id = t_get('v77a')) = 'active');
+
+-- same-state retry: no second effect, no second event
+SELECT t_check('T77e archive retry is a no-op (changed false, no event id)',
+  (SELECT r->>'changed' = 'false' AND r->>'event_id' IS NULL FROM (SELECT rpc_product_set_status(t_get('p77a'), 'archived') AS r) s));
+SELECT t_check('T77e still exactly one event', t_count($q$ SELECT count(*) FROM product_status_events WHERE product_id = t_get('p77a') $q$) = 1);
+SELECT t_err('T77f archived → draft is not a lifecycle transition', $q$ SELECT rpc_product_set_status(t_get('p77a'), 'draft') $q$, 'INVALID_TRANSITION');
+SELECT t_err('T77f NULL target refused', $q$ SELECT rpc_product_set_status(t_get('p77a'), NULL) $q$, 'INVALID_STATUS');
+SELECT t_err('T77f unknown product', $q$ SELECT rpc_product_set_status(gen_random_uuid(), 'active') $q$, 'NOT_FOUND');
+SELECT t_logout();
+
+-- restore (manager, blank reason)
+SELECT t_login('u2');
+SELECT t_check('T77g manager restores: changed, archived → active',
+  (SELECT r->>'changed' = 'true' AND r->>'previous_status' = 'archived' AND r->>'status' = 'active'
+     FROM (SELECT rpc_product_set_status(t_get('p77a'), 'active', '   ') AS r) s));
+SELECT t_check('T77h restore event: archived→active, actor manager, blank reason stored as NULL; two events in order',
+  t_count($q$ SELECT count(*) FROM product_status_events WHERE product_id = t_get('p77a') AND from_status = 'archived' AND to_status = 'active'
+              AND actor_user_id = t_get('u2') AND reason IS NULL $q$) = 1
+  AND (SELECT string_agg(to_status::text, ',' ORDER BY seq) FROM product_status_events WHERE product_id = t_get('p77a')) = 'archived,active');
+SELECT t_err('T77i active → draft is not a lifecycle transition', $q$ SELECT rpc_product_set_status(t_get('p77a'), 'draft') $q$, 'INVALID_TRANSITION');
+SELECT t_ok('T77j draft → active (publish) is audited', $q$ SELECT rpc_product_set_status(t_get('p77d'), 'active') $q$);
+SELECT t_check('T77j publish event draft→active', t_count($q$ SELECT count(*) FROM product_status_events WHERE product_id = t_get('p77d') AND from_status = 'draft' AND to_status = 'active' $q$) = 1);
+SELECT t_logout();
+
+-- unauthorized roles
+SELECT t_login('u3');
+SELECT t_err('T77k sales_staff cannot change status', $q$ SELECT rpc_product_set_status(t_get('p77a'), 'archived') $q$, '42501');
+SELECT t_check('T77k sales_staff reads no status events', t_count($q$ SELECT count(*) FROM product_status_events $q$) = 0);
+SELECT t_logout();
+SELECT t_login('u4');
+SELECT t_err('T77l stock_staff cannot change status', $q$ SELECT rpc_product_set_status(t_get('p77a'), 'archived') $q$, '42501');
+SELECT t_check('T77l stock_staff direct UPDATE reaches no row (RLS: manager+ writes)', t_count($q$ WITH u AS (UPDATE products SET status = 'archived' WHERE id = t_get('p77a') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+
+-- cross-tenant
+SELECT t_login('u5');
+SELECT t_err('T77m owner of another business cannot change this product', $q$ SELECT rpc_product_set_status(t_get('p77a'), 'archived') $q$, '42501');
+SELECT t_check('T77m and sees none of its events', t_count($q$ SELECT count(*) FROM product_status_events WHERE business_id = t_get('biz') $q$) = 0);
+SELECT t_check('T77m a direct cross-tenant UPDATE touches no row', t_count($q$ WITH u AS (UPDATE products SET status = 'archived' WHERE id = t_get('p77a') RETURNING 1) SELECT count(*) FROM u $q$) = 0);
+SELECT t_logout();
+SELECT t_check('T77n refused callers changed nothing: still active, still two events',
+  (SELECT status::text FROM products WHERE id = t_get('p77a')) = 'active'
+  AND t_count($q$ SELECT count(*) FROM product_status_events WHERE product_id = t_get('p77a') $q$) = 2);
+
+-- direct mutation and forgery
+SELECT t_login('u1');
+SELECT t_err('T77o owner direct UPDATE of status is refused', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p77x') $q$, 'USE_RPC');
+SELECT t_ok('T77o other product fields stay editable directly', $q$ UPDATE products SET name = 'T77 Doğrudan Ürün 2' WHERE id = t_get('p77x') $q$);
+SELECT t_ok('T77o mentioning an unchanged status is not a status change', $q$ UPDATE products SET status = 'active', name = 'T77 Doğrudan Ürün 3' WHERE id = t_get('p77x') $q$);
+SELECT t_err('T77p owner cannot insert an audit row', $q$ INSERT INTO product_status_events (business_id, product_id, from_status, to_status, actor_user_id)
+                                                     VALUES (t_get('biz'), t_get('p77x'), 'active', 'archived', t_get('u1')) $q$, '42501');
+SELECT t_err('T77p owner cannot rewrite an audit row', $q$ UPDATE product_status_events SET reason = 'x' WHERE product_id = t_get('p77a') $q$, '42501');
+SELECT t_err('T77p owner cannot delete an audit row', $q$ DELETE FROM product_status_events WHERE product_id = t_get('p77a') $q$, '42501');
+-- an earlier event of this transaction never authorises a later direct change:
+-- p77a's latest event is archived→active, p77d's is draft→active
+SELECT t_err('T77q a spent event cannot be replayed by a direct UPDATE (same transaction)', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p77a') $q$, 'USE_RPC');
+SELECT t_err('T77q nor on a product whose only event is a different transition', $q$ UPDATE products SET status = 'archived' WHERE id = t_get('p77d') $q$, 'USE_RPC');
+SELECT t_logout();
+SELECT t_check('T77q p77x untouched by the refused attempts (active, no event)',
+  (SELECT status::text FROM products WHERE id = t_get('p77x')) = 'active'
+  AND t_count($q$ SELECT count(*) FROM product_status_events WHERE product_id = t_get('p77x') $q$) = 0);
+SELECT t_err('T77r audit rows are immutable even for maintenance', $q$ UPDATE product_status_events SET reason = 'x' WHERE product_id = t_get('p77a') $q$, 'IMMUTABLE');
+SELECT t_err('T77r audit rows cannot be deleted even by maintenance', $q$ DELETE FROM product_status_events WHERE product_id = t_get('p77a') $q$, 'IMMUTABLE');
+SELECT t_err('T77r the event CHECK refuses a non-change', $q$ INSERT INTO product_status_events (business_id, product_id, from_status, to_status, actor_user_id)
+                                                VALUES (t_get('biz'), t_get('p77x'), 'active', 'active', t_get('u1')) $q$, '23514');
+
+-- suspended business: no status writes
+WITH x AS (INSERT INTO products (business_id, name, sku_prefix, default_sale_price, status)
+           VALUES (t_get('bizB'), 'T77 B Ürünü', 'T77-B', 500, 'active') RETURNING id) SELECT t_set('p77b', id) FROM x;
+UPDATE businesses SET status = 'suspended' WHERE id = t_get('bizB');
+SELECT t_login('u5');
+SELECT t_err('T77s a suspended business cannot archive', $q$ SELECT rpc_product_set_status(t_get('p77b'), 'archived') $q$, 'BUSINESS_SUSPENDED');
+SELECT t_logout();
+UPDATE businesses SET status = 'active' WHERE id = t_get('bizB');
+
+SELECT t_check('T77t this section wrote exactly three audited changes (archive, restore, publish) and nothing for refused calls',
+  (SELECT count(*) FROM product_status_events) - (SELECT n FROM _t77_pre) = 3);
 
 -- ============================================================
 -- SUMMARY

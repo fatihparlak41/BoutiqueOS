@@ -72,9 +72,9 @@ check("save: the backend contract is unchanged (onboardProductAction only)", wiz
 
 // 6. archive confirmation
 check("archive: only from the ⋯ menu, through ConfirmDialog", list.includes('data-testid="row-archive"') && list.includes("Bu ürünü arşivlemek istiyor musun?") && list.includes("Ürün satış ekranlarından kaldırılır. Geçmiş kayıtlar korunur."));
-const archiveCalls = (list.match(/archiveProductAction\(/g) ?? []).length;
-check("archive: the action is called exactly once, inside confirm()", archiveCalls === 1 && /function confirm\(\)[\s\S]*?archiveProductAction\(/.test(list));
-check("archive: confirm button is destructive and says Arşivle, cancel is Vazgeç", list.includes('confirmLabel={target?.status === "archived" ? "Satışa aç" : "Arşivle"}') && read("components/ui/confirm-dialog.tsx").includes('cancelLabel = "Vazgeç"'));
+const archiveCalls = (list.match(/setProductStatusAction\(/g) ?? []).length;
+check("archive: the action is called exactly once, inside confirm()", archiveCalls === 1 && /function confirm\(\)[\s\S]*?setProductStatusAction\(/.test(list));
+check("archive: confirm button is destructive and says Arşivle, cancel is Vazgeç", list.includes('confirmLabel={target?.status === "archived" ? "Ürünü satışa aç" : "Arşivle"}') && read("components/ui/confirm-dialog.tsx").includes('cancelLabel = "Vazgeç"'));
 
 console.log(`\nPASS ${pass} FAIL ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

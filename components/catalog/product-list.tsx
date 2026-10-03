@@ -13,7 +13,7 @@ import { ProductThumb } from "@/components/catalog/product-thumb";
 import { formatPrice, formatPriceRange } from "@/lib/catalog/format";
 import type { ProductListRow } from "@/lib/catalog/model";
 import { IDLE } from "@/lib/catalog/action-state";
-import { archiveProductAction } from "@/app/app/urunler/actions";
+import { setProductStatusAction } from "@/app/app/urunler/actions";
 import { cn } from "@/lib/utils";
 
 /**
@@ -71,7 +71,7 @@ function RowMenu({ product, canEdit, onArchive }: { product: ProductListRow; can
                 data-testid="row-archive"
               >
                 {product.status === "archived" ? <ArchiveRestore aria-hidden className="h-4 w-4" /> : <Archive aria-hidden className="h-4 w-4" />}
-                {product.status === "archived" ? "Arşivden çıkar" : "Arşivle"}
+                {product.status === "archived" ? "Ürünü satışa aç" : "Arşivle"}
               </button>
             </li>
           ) : null}
@@ -95,7 +95,7 @@ export function ProductList({ products, canEdit, footer }: { products: ProductLi
       const fd = new FormData();
       fd.set("product_id", product.id);
       fd.set("status", restore ? "active" : "archived");
-      const res = await archiveProductAction(IDLE, fd);
+      const res = await setProductStatusAction(IDLE, fd);
       setTarget(null);
       if (!res.ok) {
         toast({ tone: "danger", title: restore ? "Arşivden çıkarılamadı" : "Arşivlenemedi", description: res.error ?? undefined });
@@ -181,7 +181,7 @@ export function ProductList({ products, canEdit, footer }: { products: ProductLi
         onClose={() => (pending ? undefined : setTarget(null))}
         title={target?.status === "archived" ? "Bu ürün yeniden satışa açılsın mı?" : "Bu ürünü arşivlemek istiyor musun?"}
         description={target?.status === "archived" ? "Ürün ve seçenekleri satış ekranlarında yeniden görünür." : "Ürün satış ekranlarından kaldırılır. Geçmiş kayıtlar korunur."}
-        confirmLabel={target?.status === "archived" ? "Satışa aç" : "Arşivle"}
+        confirmLabel={target?.status === "archived" ? "Ürünü satışa aç" : "Arşivle"}
         destructive={target?.status !== "archived"}
         busy={pending}
         onConfirm={confirm}

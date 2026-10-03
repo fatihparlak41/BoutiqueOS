@@ -93,7 +93,8 @@ check("no native alert()", !/[^a-zA-Z.]alert\(/.test(hero + review + session + t
 
 // ---- safety: cost privacy and no SQL change
 check("cost privacy: stock rows / terminal / orders carry no cost fields", !/unit_cost|landed|total_value_base|cost_pool/.test(rows + terminal + orders + customers + rsv));
-check("no new migration in pass 3 (UI only): latest is 15B-0", readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort().at(-1) === "20260919210000_phase15b0_count_cost_bridge.sql");
+// Pass 3 itself added no SQL: the last migration before the 2026-10-03 product status patch is 15B-0.
+check("no new migration in pass 3 (UI only): latest is 15B-0", readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql") && f < "20261003").sort().at(-1) === "20260919210000_phase15b0_count_cost_bridge.sql");
 
 console.log(`\nPASS ${pass} FAIL ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

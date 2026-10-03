@@ -96,11 +96,14 @@ export function ProductForm({
         <div className="space-y-1.5">
           <Label htmlFor="status">Durum</Label>
           <Select id="status" name="status" defaultValue={product?.status ?? "draft"}>
-            {Object.entries(PRODUCT_STATUS_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
+            {/* Lifecycle: nothing returns to draft once it left it (rpc_product_set_status). */}
+            {Object.entries(PRODUCT_STATUS_LABELS)
+              .filter(([value]) => value !== "draft" || !product || product.status === "draft")
+              .map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
           </Select>
           <p className="text-2xs text-muted">Taslak ürünler satışa çıkmaz.</p>
         </div>

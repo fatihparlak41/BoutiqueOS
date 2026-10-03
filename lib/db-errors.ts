@@ -86,6 +86,10 @@ const RPC_MESSAGES: Array<[string, string]> = [
   ["INVALID_QTY", "Her satır 1–10 adet olmalı."],
   ["INVALID_PHONE", "Telefon numarası 7–15 rakam içermeli."],
   ["INVALID_EMAIL", "E-posta biçimi geçersiz."],
+  // product status (20261003100000)
+  ["INVALID_TRANSITION: product", "Ürün bu duruma geçirilemez. Satıştan kaldırmak için arşivleyin."],
+  ["USE_RPC: products.status", "Ürün durumu yalnız arşivle / satışa aç işlemiyle değişir."],
+  ["NOT_FOUND: product", "Ürün bulunamadı."],
   ["CANCEL_NOT_ALLOWED", "Bu sipariş artık iptal edilemez; mağazayla iletişime geçin."],
   ["RESERVATION_EXPIRED", "Siparişin stok ayırma süresi dolmuş. Stok uygunsa yeniden ayırın."],
   ["HOLD_ACTIVE", "Bu siparişin stok ayırması hâlâ geçerli."],

@@ -130,6 +130,16 @@ export async function updateProductAction(
   const price = parseMoney(text(formData, "default_sale_price"));
   if (price === null) return fail("Satış fiyatı geçerli bir tutar olmalı (örn. 1250,00).");
 
+  // The status goes through the audited RPC first (a no-op when unchanged), so a refused
+  // transition stops the save before any field is written. The field UPDATE below never
+  // carries status: the database refuses a direct status change.
+  const { error: statusError } = await supabase.rpc("rpc_product_set_status", {
+    p_product_id: productId,
+    p_status: status,
+    p_reason: null,
+  });
+  if (statusError) return fail(reportDbError("updateProductStatus", statusError));
+
   // tax_rate / is_tax_inclusive are intentionally absent from the update so an existing
   // value is preserved untouched rather than overwritten by a catalogue screen.
   const { error } = await supabase
@@ -138,7 +148,6 @@ export async function updateProductAction(
       name,
       sku_prefix: skuPrefix,
       default_sale_price: price,
-      status,
       category_id: uuidOrNull(formData, "category_id"),
       brand_id: uuidOrNull(formData, "brand_id"),
       collection: optionalText(formData, "collection"),
@@ -513,24 +522,30 @@ export async function generateVariantsAction(
 
 // ------------------------------------------------------------------ product lifecycle
 
-/** Archive, never delete: sales, receipts and stock history point at the variants. */
-export async function archiveProductAction(
+/**
+ * Archive, never delete: sales, receipts and stock history point at the variants.
+ * products.status changes only through rpc_product_set_status (20261003100000): it checks
+ * tenant, role and lifecycle, writes the product_status_events audit row and the status
+ * in one transaction; a direct table UPDATE of status is refused by trg_products_status_guard.
+ * Re-sending the current status is a no-op on the server, so a retry has no second effect.
+ */
+export async function setProductStatusAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase, businessId, caps } = await loadCatalogContext();
+  const { supabase, caps } = await loadCatalogContext();
   if (!caps.canEditCatalog) return fail(NO_PERMISSION);
 
   const productId = uuidOrNull(formData, "product_id");
   if (!productId) return fail("Ürün bulunamadı.");
   const next = text(formData, "status") === "active" ? "active" : "archived";
 
-  const { error } = await supabase
-    .from("products")
-    .update({ status: next, updated_at: new Date().toISOString() })
-    .eq("business_id", businessId)
-    .eq("id", productId);
-  if (error) return fail(reportDbError("archiveProduct", error));
+  const { error } = await supabase.rpc("rpc_product_set_status", {
+    p_product_id: productId,
+    p_status: next,
+    p_reason: optionalText(formData, "reason"),
+  });
+  if (error) return fail(reportDbError("setProductStatus", error));
 
   revalidatePath(`/app/urunler/${productId}`);
   revalidatePath("/app/urunler");
