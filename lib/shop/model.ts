@@ -170,11 +170,12 @@ export function cartTotal(cart: Cart): number {
 
 export type OnlineOrderStatus = "pending_confirmation" | "confirmed" | "ready" | "completed" | "cancelled" | "expired";
 
+/** Customer-facing order status words (presentation only; the DB enum is unchanged). */
 export const ORDER_STATUS_LABELS: Record<OnlineOrderStatus, string> = {
-  pending_confirmation: "Onay bekliyor",
+  pending_confirmation: "Talep alındı",
   confirmed: "Onaylandı",
-  ready: "Teslime hazır",
-  completed: "Teslim edildi",
+  ready: "Hazır",
+  completed: "Tamamlandı",
   cancelled: "İptal edildi",
   expired: "Süresi doldu",
 };

@@ -3,11 +3,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { Minus, Plus } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { publicSupabaseEnv } from "@/lib/env";
 import {
   CART_MAX_QTY,
-  availabilityText,
   cartTotal,
   formatShopPrice,
   publicImageUrl,
@@ -17,112 +17,125 @@ import {
   type Cart,
   type Store,
 } from "@/lib/shop/model";
+import { lineLabels, lineProblem } from "@/lib/shop/cart-display";
 
 /**
- * Cart page. Browser state for ONE store, re-checked against live availability on every
- * visit through the anon RPC (the same read-only boundary the pages use). Nothing here
- * reserves stock, takes payment or creates an order: checkout is a later phase, so the
- * page says how to complete the purchase with the boutique instead of pretending.
+ * Cart. Browser state for ONE store, re-checked against live availability with ONE batched
+ * public call on every visit. The cart reserves nothing and submits nothing: its only job is
+ * to lead to the order request ("Siparişe Devam Et"). Payment happens at the store.
  */
 export function CartView({ store }: { store: Store }) {
   const [cart, setCart] = useState<Cart | null>(null);
   const [fresh, setFresh] = useState<AvailabilityMap>({});
-  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     const c = readCart(store.slug);
     setCart(c);
     if (c.lines.length === 0) return;
-    setChecking(true);
     const { url, anonKey } = publicSupabaseEnv();
     const sb = createBrowserClient(url, anonKey);
     Promise.resolve(sb.rpc("rpc_shop_availability", { p_slug: store.slug, p_variant_ids: c.lines.map((l) => l.variant_id) }))
       .then(({ data }) => setFresh((data ?? {}) as AvailabilityMap))
-      .catch(() => setFresh({}))
-      .finally(() => setChecking(false));
+      .catch(() => setFresh({}));
   }, [store.slug]);
 
-  function update(next: Cart) {
-    writeCart(next);
-    setCart({ ...next });
-  }
   function setQty(variantId: string, qty: number) {
     if (!cart) return;
     const lines = cart.lines.map((l) => (l.variant_id === variantId ? { ...l, quantity: Math.max(0, Math.min(CART_MAX_QTY, qty)) } : l)).filter((l) => l.quantity > 0);
-    update({ ...cart, lines });
+    const next = { ...cart, lines };
+    writeCart(next);
+    setCart(next);
   }
 
-  if (!cart) return <div className="shop-section"><p className="shop-muted">Sepet yükleniyor…</p></div>;
+  if (!cart) return <div className="shop-page"><p className="shop-muted">Yükleniyor…</p></div>;
+  const base = `/shop/${store.slug}`;
   if (cart.lines.length === 0) {
     return (
-      <div className="shop-section" style={{ textAlign: "center" }}>
-        <p className="shop-eyebrow">Sepet</p>
-        <h1 className="shop-h2" style={{ marginTop: 8 }}>Sepetiniz boş</h1>
-        <p className="shop-muted" style={{ marginTop: 12 }}>Beğendiğiniz ürünleri sepete ekleyin; sepet bu tarayıcıda saklanır.</p>
-        <p style={{ marginTop: 24 }}><Link href={`/shop/${store.slug}/urunler`} className="shop-btn shop-btn-ghost" style={{ width: "auto" }}>Ürünlere göz atın</Link></p>
-      </div>
+      <section className="shop-empty shop-page" data-testid="shop-cart-empty">
+        <h1 className="shop-page-title">Sepetin boş.</h1>
+        <p className="shop-empty-text">Beğendiğin ürünleri sepete ekleyerek başlayabilirsin.</p>
+        <Link href={`${base}/urunler`} className="shop-btn shop-empty-cta">Ürünleri keşfet</Link>
+      </section>
     );
   }
 
-  const problems = cart.lines.filter((l) => fresh[l.variant_id] && fresh[l.variant_id].state === "sold_out");
-  const priceChanged = cart.lines.filter((l) => fresh[l.variant_id]?.price !== undefined && fresh[l.variant_id].price !== null && fresh[l.variant_id].price !== l.unit_price);
-  const total = cartTotal({ ...cart, lines: cart.lines.map((l) => ({ ...l, unit_price: fresh[l.variant_id]?.price ?? l.unit_price })) });
-  const wa = store.whatsapp ? `https://wa.me/${store.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Merhaba, ${store.store_name} sepetimdeki ürünler: ` + cart.lines.map((l) => `${l.name}${l.labels ? ` (${l.labels})` : ""} × ${l.quantity}`).join(", "))}` : null;
+  const exact = store.stock_display === "exact";
+  const problems = cart.lines.filter((l) => lineProblem(l, fresh[l.variant_id], exact));
+  const priced = { ...cart, lines: cart.lines.map((l) => ({ ...l, unit_price: fresh[l.variant_id]?.price ?? l.unit_price })) };
+  const total = cartTotal(priced);
+  const count = cart.lines.reduce((n, l) => n + l.quantity, 0);
+  const help = store.whatsapp
+    ? { href: `https://wa.me/${store.whatsapp.replace(/[^0-9]/g, "")}`, label: "WhatsApp'tan yazın", external: true }
+    : store.instagram
+      ? { href: `https://instagram.com/${store.instagram}`, label: "Instagram'dan yazın", external: true }
+      : store.contact_email
+        ? { href: `mailto:${store.contact_email}`, label: "E-posta gönderin", external: false }
+        : null;
 
   return (
-    <div className="shop-cart">
+    <div className="shop-bag shop-page" data-testid="shop-cart">
       <div>
-        <p className="shop-eyebrow">Sepet</p>
-        <h1 className="shop-h2" style={{ marginTop: 8, marginBottom: 8 }}>{cart.lines.length} ürün</h1>
-        {checking ? <p className="shop-note">Stok durumu kontrol ediliyor…</p> : null}
-        {problems.length > 0 ? <p className="shop-state" data-state="sold_out" role="alert" style={{ fontSize: 13 }}>Bazı ürünler tükendi; sepetten çıkarın ya da başka bir seçenek seçin.</p> : null}
-        {priceChanged.length > 0 ? <p className="shop-note" role="status">Bazı fiyatlar güncellendi; güncel fiyat gösterilir.</p> : null}
-        <div>
+        <h1 className="shop-page-title">Sepet <span className="shop-page-count" data-numeric>({count})</span></h1>
+        <ul className="shop-bag-lines">
           {cart.lines.map((l) => {
             const f = fresh[l.variant_id];
             const img = publicImageUrl(l.image_path);
-            const price = f?.price ?? l.unit_price;
+            const unit = f?.price ?? l.unit_price;
+            const problem = lineProblem(l, f, exact);
             return (
-              <div key={l.variant_id} className="shop-line">
-                <Link href={`/shop/${store.slug}/urun/${l.product_slug}`} className="shop-line-media">
-                  {img ? <Image src={img} alt={l.name} width={88} height={117} unoptimized /> : null}
+              <li key={l.variant_id} className="shop-bag-line" data-problem={problem ? "true" : undefined}>
+                <Link href={`${base}/urun/${l.product_slug}`} className="shop-bag-media" aria-label={l.name}>
+                  {img ? <Image src={img} alt="" fill sizes="(min-width: 900px) 120px, 96px" unoptimized /> : null}
                 </Link>
-                <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <Link href={`/shop/${store.slug}/urun/${l.product_slug}`} style={{ textDecoration: "none", fontSize: 14 }}>{l.name}</Link>
-                    <span className="shop-price" style={{ fontSize: 14 }}>{formatShopPrice(price * l.quantity, l.currency)}</span>
+                <div className="shop-bag-info">
+                  <div className="shop-bag-row">
+                    <Link href={`${base}/urun/${l.product_slug}`} className="shop-bag-name">{l.name}</Link>
+                    <span className="shop-price shop-bag-total" data-numeric>{formatShopPrice(unit * l.quantity, l.currency)}</span>
                   </div>
-                  {l.labels ? <span className="shop-muted" style={{ fontSize: 13 }}>{l.labels}</span> : null}
-                  <span className="shop-state" data-state={f?.state}>{f ? availabilityText(f.state, f.available, store.stock_display) : ""}</span>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 4 }}>
-                    <div className="shop-qty" aria-label="Adet">
-                      <button type="button" onClick={() => setQty(l.variant_id, l.quantity - 1)} aria-label="Azalt">−</button>
-                      <span data-numeric>{l.quantity}</span>
-                      <button type="button" onClick={() => setQty(l.variant_id, l.quantity + 1)} aria-label="Artır" disabled={l.quantity >= CART_MAX_QTY || (f?.available !== null && f?.available !== undefined && l.quantity >= f.available)}>+</button>
+                  {l.labels ? <p className="shop-bag-meta">{lineLabels(l.labels)}</p> : null}
+                  {l.quantity > 1 ? <p className="shop-bag-meta" data-numeric>{formatShopPrice(unit, l.currency)} / adet</p> : null}
+                  {problem ? <p className="shop-bag-problem" role="status">{problem}</p> : null}
+                  <div className="shop-bag-row shop-bag-controls">
+                    <div className="shop-qty" role="group" aria-label={`${l.name} adet`}>
+                      <button type="button" onClick={() => setQty(l.variant_id, l.quantity - 1)} aria-label="Bir azalt"><Minus aria-hidden strokeWidth={1.4} /></button>
+                      <span data-numeric aria-live="polite">{l.quantity}</span>
+                      <button type="button" onClick={() => setQty(l.variant_id, l.quantity + 1)} aria-label="Bir artır" disabled={l.quantity >= CART_MAX_QTY || (f?.available !== null && f?.available !== undefined && l.quantity >= f.available)}><Plus aria-hidden strokeWidth={1.4} /></button>
                     </div>
-                    <button type="button" className="shop-icon-btn" style={{ padding: 0, borderBottom: "1px solid currentColor", fontSize: 12 }} onClick={() => setQty(l.variant_id, 0)}>Kaldır</button>
+                    <button type="button" className="shop-link shop-bag-remove" onClick={() => setQty(l.variant_id, 0)}>Kaldır</button>
                   </div>
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       </div>
 
-      <aside className="shop-summary">
-        <div className="shop-row"><span>Ara toplam</span><span className="shop-price">{formatShopPrice(total, store.currency)}</span></div>
+      <aside className="shop-bag-summary" aria-label="Sipariş özeti">
+        <div className="shop-sum-row"><span>Ara toplam</span><span className="shop-price" data-numeric>{formatShopPrice(total, store.currency)}</span></div>
+        <div className="shop-sum-row shop-sum-muted"><span>Teslimat</span><span>Mağazadan teslim</span></div>
+        <div className="shop-sum-row shop-sum-total"><span>Toplam</span><span className="shop-price" data-numeric>{formatShopPrice(total, store.currency)}</span></div>
         {store.orders_enabled ? (
           <>
-            <Link href={`/shop/${store.slug}/checkout`} className="shop-btn" aria-disabled={problems.length > 0} onClick={(e) => { if (problems.length > 0) e.preventDefault(); }}>Sipariş Talebi Oluştur</Link>
-            <p className="shop-note">Ad ve telefonla sipariş talebi bırakırsınız; ürünler {store.order_hold_minutes >= 60 ? `${Math.round(store.order_hold_minutes / 60)} saat` : `${store.order_hold_minutes} dakika`} sizin için ayrılır, ödeme mağazada teslim sırasında yapılır. Online ödeme yoktur. Sepet tek başına stok ayırmaz.</p>
+            {problems.length > 0 ? <p className="shop-bag-problem" role="alert">Devam etmeden önce müsait olmayan ürünleri düzenleyin.</p> : null}
+            <Link
+              href={`${base}/checkout`}
+              className="shop-btn"
+              aria-disabled={problems.length > 0}
+              data-disabled={problems.length > 0 ? "true" : undefined}
+              onClick={(e) => { if (problems.length > 0) e.preventDefault(); }}
+              data-testid="shop-cart-continue"
+            >
+              Siparişe Devam Et
+            </Link>
+            <p className="shop-note">Ödeme mağazada teslim sırasında yapılır.</p>
           </>
         ) : (
-          <p className="shop-note">Online sipariş şu an kapalı. Sepetinizi mağazaya iletin; teslimat ve ödeme mağazayla birlikte kararlaştırılır. Sepet stok ayırmaz.</p>
+          <p className="shop-note">Online sipariş şu an kapalı. Sepetinizi mağazaya iletebilirsiniz.</p>
         )}
-        {wa ? <a className={store.orders_enabled ? "shop-btn shop-btn-ghost" : "shop-btn"} href={wa} target="_blank" rel="noopener noreferrer">WhatsApp ile mağazaya ilet</a> : null}
-        {store.instagram ? <a className="shop-btn shop-btn-ghost" href={`https://instagram.com/${store.instagram}`} target="_blank" rel="noopener noreferrer">Instagram&apos;dan yazın</a> : null}
-        {store.contact_email ? <a className="shop-btn shop-btn-ghost" href={`mailto:${store.contact_email}`}>E-posta gönderin</a> : null}
-        <Link href={`/shop/${store.slug}/urunler`} className="shop-note" style={{ textAlign: "center" }}>Alışverişe devam et</Link>
+        {help ? (
+          <p className="shop-bag-help">Sorunuz mu var? <a href={help.href} {...(help.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>{help.label}</a></p>
+        ) : null}
+        <Link href={`${base}/urunler`} className="shop-link shop-bag-back">Alışverişe devam et</Link>
       </aside>
     </div>
   );

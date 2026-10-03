@@ -77,7 +77,9 @@ const omodel = read("lib/orders/model.ts");
 check("orders: merchant status words Yeni / Onaylandı / Hazır / Tamamlandı", /pending_confirmation: "Yeni"/.test(omodel) && /confirmed: "Onaylandı"/.test(omodel) && /ready: "Hazır"/.test(omodel) && /completed: "Tamamlandı"/.test(omodel));
 check("orders: mobile cards + desktop table, customer / number / time / total / hold expiry", /order-cards/.test(orders) && /order-table/.test(orders) && /o\.customer_name/.test(orders) && /o\.order_number/.test(orders) && /fmtDateTime\(o\.created_at\)/.test(orders) && /formatShopPrice\(o\.total/.test(orders) && /ayırma bitişi/.test(orders));
 check("orders: Search + Filtre pattern, FilterBar gone", /<SearchFilters/.test(orders) && !/FilterBar/.test(orders));
-check("orders: customer-facing labels untouched", /completed: "Teslim edildi"/.test(read("lib/shop/model.ts")));
+// The storefront (customer) labels were changed on purpose in 14C-4 (check_storefront_checkout.mjs);
+// this pass only guarantees they stay separate from the merchant words above.
+check("orders: customer-facing labels are the storefront set, separate from merchant words", /completed: "Tamamlandı"/.test(read("lib/shop/model.ts")) && /pending_confirmation: "Talep alındı"/.test(read("lib/shop/model.ts")));
 
 // ---- shared patterns
 const sf = read("components/ui/search-filters.tsx");
