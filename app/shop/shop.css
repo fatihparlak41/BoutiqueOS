@@ -5,47 +5,124 @@
  * Everything is scoped under .shop so it never leaks into the operational UI.
  */
 .shop {
+  /* surfaces: white and one warm white; ink: near-black and charcoal; no brand colour */
   --shop-bg: #ffffff;
-  --shop-bg-soft: #f7f5f1;
-  --shop-ink: #171614;
-  --shop-ink-2: #4a4641;
-  --shop-mute: #7a746c;
-  --shop-line: #e9e5de;
-  --shop-line-strong: #cfc8bd;
-  --shop-accent: #171614;
+  --shop-bg-soft: #f6f4f0;
+  --shop-ink: #111110;
+  --shop-ink-2: #3f3c38;
+  --shop-mute: #77716a;
+  --shop-line: #ebe7e1;
+  --shop-line-strong: #cdc6bb;
+  --shop-accent: #111110;
   --shop-sold: #a8a29a;
   --shop-warn: #8a5a1f;
+  /* type */
+  --shop-serif: var(--font-serif), "Cormorant Garamond", Georgia, serif;
+  --shop-sans: var(--font-sans), "Helvetica Neue", Arial, sans-serif;
+  /* spacing + chrome */
+  --shop-gutter: 16px;
+  --shop-header-h: 56px;
+  --shop-ease: cubic-bezier(0.2, 0, 0, 1);
   background: var(--shop-bg);
   color: var(--shop-ink);
+  font-family: var(--shop-sans);
+  font-size: 15px;
+  line-height: 1.5;
   min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+@media (min-width: 768px) { .shop { --shop-gutter: 32px; } }
+@media (min-width: 1024px) { .shop { --shop-header-h: 64px; --shop-gutter: 40px; } }
 .shop a { color: inherit; }
-.shop-container { width: 100%; max-width: 1280px; margin: 0 auto; padding-left: 16px; padding-right: 16px; }
-@media (min-width: 768px) { .shop-container { padding-left: 32px; padding-right: 32px; } }
+/* a link styled as a button keeps the button's ink (`.shop a` would otherwise win: black on black) */
+.shop a.shop-btn { color: #fff; }
+.shop a.shop-btn.shop-btn-ghost { color: var(--shop-ink); }
+.shop :focus-visible { outline: 1px solid var(--shop-ink); outline-offset: 3px; }
+.shop-container { width: 100%; max-width: 1440px; margin: 0 auto; padding-left: var(--shop-gutter); padding-right: var(--shop-gutter); }
+.shop-main { flex: 1 0 auto; }
+.shop-skip { position: absolute; left: -9999px; top: 8px; z-index: 60; background: var(--shop-ink); color: #fff; padding: 10px 14px; font-size: 13px; }
+.shop-skip:focus { left: 8px; }
+@media (prefers-reduced-motion: reduce) { .shop *, .shop *::before, .shop *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; } }
 
-/* ---- header */
-.shop-announce { background: var(--shop-ink); color: #fff; font-size: 12px; letter-spacing: 0.04em; text-align: center; padding: 8px 16px; }
-.shop-header { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,0.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--shop-line); }
-.shop-header-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
-.shop-brand { font-family: var(--font-serif), Georgia, serif; font-size: 26px; font-weight: 500; letter-spacing: 0.01em; line-height: 1; text-decoration: none; white-space: nowrap; }
-.shop-brand img { height: 32px; width: auto; display: block; }
-.shop-nav { display: none; gap: 28px; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; }
-.shop-nav a { text-decoration: none; padding: 6px 0; border-bottom: 1px solid transparent; }
-.shop-nav a:hover, .shop-nav a[aria-current="page"] { border-bottom-color: var(--shop-ink); }
-@media (min-width: 768px) { .shop-nav { display: flex; } }
+/* ---- header (14C-1): one light bar, no categories inline, no glass */
+.shop-announce { background: var(--shop-ink); color: #fff; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; text-align: center; padding: 9px var(--shop-gutter); }
+.shop-header { position: sticky; top: 0; z-index: 30; background: var(--shop-bg); border-bottom: 1px solid var(--shop-line); }
+.shop-header-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; height: var(--shop-header-h); }
+.shop-header-start, .shop-header-end { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.shop-header-start { margin-left: -10px; }
+.shop-header-end { margin-right: -10px; }
+.shop-wordmark { display: inline-flex; align-items: center; min-height: 44px; font-family: var(--shop-serif); font-size: 24px; font-weight: 500; letter-spacing: 0.01em; line-height: 1; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shop-wordmark img { height: 28px; width: auto; display: block; }
+.shop-wordmark-sm { font-size: 20px; }
+.shop-brand-mobile { position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - 200px); justify-content: center; }
+.shop-brand-desktop { display: none; margin-left: 10px; margin-right: 40px; font-size: 28px; }
+.shop-nav { display: none; align-items: center; gap: 28px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; }
+.shop-nav > a, .shop-cats-menu > button { display: inline-flex; align-items: center; gap: 4px; height: 44px; padding: 0; background: none; border: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; text-decoration: none; cursor: pointer; position: relative; }
+.shop-nav > a::after, .shop-cats-menu > button::after { content: ""; position: absolute; left: 0; right: 0; bottom: 10px; height: 1px; background: var(--shop-ink); transform: scaleX(0); transform-origin: left; transition: transform 240ms var(--shop-ease); }
+.shop-nav > a:hover::after, .shop-nav > a[aria-current="page"]::after, .shop-cats-menu > button:hover::after, .shop-cats-menu > button[data-current="true"]::after { transform: scaleX(1); }
+.shop-cats-menu { position: relative; }
+.shop-cats-menu svg { width: 14px; height: 14px; transition: transform 200ms var(--shop-ease); }
+.shop-cats-menu > button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.shop-cats-panel { position: absolute; top: 100%; left: -24px; min-width: 260px; max-width: 560px; background: var(--shop-bg); border: 1px solid var(--shop-line); padding: 16px 24px 20px; text-transform: none; letter-spacing: 0; font-size: 14px; }
+.shop-cats-panel ul { list-style: none; margin: 0; padding: 0; columns: 2 180px; column-gap: 32px; }
+.shop-cats-panel a { display: block; padding: 8px 0; text-decoration: none; color: var(--shop-ink-2); break-inside: avoid; }
+.shop-cats-panel a:hover, .shop-cats-panel a[aria-current="page"] { color: var(--shop-ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+.shop-icon { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 44px; height: 44px; padding: 0 10px; background: none; border: 0; color: var(--shop-ink); font: inherit; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; text-decoration: none; cursor: pointer; }
+.shop-icon svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.shop-icon-label { display: none; }
+.shop-cart-btn { position: relative; }
+.shop-count { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 0; font-variant-numeric: tabular-nums; position: absolute; top: 4px; right: 2px; border-radius: 999px; background: var(--shop-ink); color: #fff; padding: 0 5px; }
+.shop-count[data-empty="true"] { visibility: hidden; }
+.shop-only-mobile { display: inline-flex; }
+/* text button still used by older pages (e.g. "Kaldır" in the cart) */
 .shop-icon-btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 8px; font: inherit; font-size: 13px; letter-spacing: 0.04em; cursor: pointer; text-decoration: none; }
-.shop-count { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 999px; background: var(--shop-ink); color: #fff; font-size: 11px; padding: 0 5px; font-variant-numeric: tabular-nums; }
-.shop-menu-toggle { display: inline-flex; }
-@media (min-width: 768px) { .shop-menu-toggle, .shop-menu { display: none; } }
-.shop-menu { border-top: 1px solid var(--shop-line); background: #fff; }
-.shop-menu a { display: block; padding: 14px 0; border-bottom: 1px solid var(--shop-line); text-decoration: none; font-size: 15px; }
-.shop-menu a:last-child { border-bottom: 0; }
+@media (min-width: 1024px) {
+  .shop-only-mobile, .shop-brand-mobile { display: none; }
+  .shop-brand-desktop { display: inline-flex; }
+  .shop-nav { display: flex; }
+  .shop-icon-label { display: inline; }
+  .shop-count { position: static; }
+  .shop-header-start { margin-left: 0; }
+}
+
+/* ---- layers: menu drawer + search sheet */
+.shop-layer { position: fixed; inset: 0; z-index: 50; }
+.shop-scrim { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; padding: 0; background: rgba(17, 17, 16, 0.32); cursor: default; animation: shop-fade 200ms var(--shop-ease); }
+.shop-layer-head { display: flex; align-items: center; justify-content: space-between; height: var(--shop-header-h); padding: 0 calc(var(--shop-gutter) - 10px) 0 var(--shop-gutter); border-bottom: 1px solid var(--shop-line); }
+.shop-drawer { position: absolute; top: 0; bottom: 0; left: 0; width: min(420px, 92vw); background: var(--shop-bg); overflow-y: auto; overscroll-behavior: contain; animation: shop-slide-in 280ms var(--shop-ease); outline: none; display: flex; flex-direction: column; }
+.shop-drawer-nav { display: grid; padding: 20px var(--shop-gutter) 8px; }
+.shop-drawer-nav + .shop-drawer-nav { border-top: 1px solid var(--shop-line); }
+.shop-drawer-link { display: flex; align-items: center; min-height: 48px; text-decoration: none; font-size: 16px; color: var(--shop-ink); }
+.shop-drawer-link[aria-current="page"] { text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 1px; }
+.shop-drawer-link-lg { font-family: var(--shop-serif); font-size: 30px; line-height: 1.1; min-height: 56px; }
+.shop-drawer-link-sm { font-size: 14px; color: var(--shop-ink-2); min-height: 44px; overflow-wrap: anywhere; }
+.shop-drawer-foot { margin-top: auto; padding-bottom: 28px; }
+.shop-sheet { position: absolute; top: 0; left: 0; right: 0; background: var(--shop-bg); max-height: 100dvh; overflow-y: auto; outline: none; animation: shop-drop 260ms var(--shop-ease); padding-bottom: 28px; }
+@media (max-width: 767px) { .shop-sheet { bottom: 0; } }
+.shop-search-row { display: flex; align-items: center; gap: 10px; height: 72px; border-bottom: 1px solid var(--shop-ink); margin-right: -10px; }
+.shop-search-glyph { width: 20px; height: 20px; flex: 0 0 auto; color: var(--shop-mute); }
+.shop-search-input { flex: 1; min-width: 0; height: 56px; border: 0; background: transparent; font: inherit; font-size: 20px; color: var(--shop-ink); outline: none; -webkit-appearance: none; appearance: none; border-radius: 0; }
+.shop-search-input::placeholder { color: var(--shop-mute); }
+.shop-search-input::-webkit-search-cancel-button { display: none; }
+.shop-search-cats { padding-top: 24px; }
+.shop-search-cats ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; column-gap: 28px; }
+.shop-search-cats a { display: inline-flex; align-items: center; min-height: 44px; font-size: 15px; text-decoration: none; color: var(--shop-ink-2); }
+.shop-search-cats a:hover { color: var(--shop-ink); text-decoration: underline; text-underline-offset: 4px; }
+@media (min-width: 768px) { .shop-search-row { height: 96px; } .shop-search-input { font-size: 28px; font-family: var(--shop-serif); } }
+@keyframes shop-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shop-slide-in { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes shop-drop { from { transform: translateY(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ---- type */
 .shop-eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--shop-mute); }
-.shop-h1 { font-family: var(--font-serif), Georgia, serif; font-weight: 500; font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -0.01em; }
-.shop-h2 { font-family: var(--font-serif), Georgia, serif; font-weight: 500; font-size: clamp(26px, 3.5vw, 36px); line-height: 1.1; }
+.shop-kicker { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--shop-mute); margin: 0 0 6px; }
+.shop-display { font-family: var(--shop-serif); font-weight: 500; font-size: clamp(40px, 7vw, 76px); line-height: 1; letter-spacing: -0.015em; }
+.shop-link { display: inline-flex; align-items: center; min-height: 44px; background: none; border: 0; padding: 0; font: inherit; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--shop-ink); text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 1px; cursor: pointer; }
+.shop-h1 { font-family: var(--shop-serif); font-weight: 500; font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -0.01em; }
+.shop-h2 { font-family: var(--shop-serif); font-weight: 500; font-size: clamp(26px, 3.5vw, 36px); line-height: 1.1; }
 .shop-h3 { font-size: 15px; font-weight: 500; letter-spacing: 0.01em; }
 .shop-lead { font-size: 16px; line-height: 1.6; color: var(--shop-ink-2); max-width: 44rem; }
 .shop-muted { color: var(--shop-mute); }
@@ -69,7 +146,7 @@
 .shop-card-media { position: relative; aspect-ratio: 3 / 4; background: var(--shop-bg-soft); overflow: hidden; }
 .shop-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 600ms ease; }
 .shop-card:hover .shop-card-media img { transform: scale(1.02); }
-.shop-card-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--shop-line-strong); font-family: var(--font-serif), Georgia, serif; font-size: 22px; }
+.shop-card-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--shop-line-strong); font-family: var(--shop-serif); font-size: 22px; }
 .shop-card-body { padding-top: 10px; display: grid; gap: 4px; }
 .shop-card-name { font-size: 14px; line-height: 1.35; }
 .shop-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
@@ -134,12 +211,26 @@
 .shop-summary { border-top: 1px solid var(--shop-ink); padding-top: 20px; display: grid; gap: 12px; align-self: start; position: sticky; top: 76px; }
 .shop-row { display: flex; justify-content: space-between; font-size: 14px; }
 
-/* ---- footer */
-.shop-footer { border-top: 1px solid var(--shop-line); padding: 40px 0 48px; font-size: 13px; color: var(--shop-mute); }
-.shop-footer-row { display: grid; gap: 24px; }
-@media (min-width: 768px) { .shop-footer-row { grid-template-columns: 1fr auto; align-items: end; } }
-.shop-footer a { text-decoration: none; border-bottom: 1px solid var(--shop-line-strong); }
-.shop-footer nav { display: flex; flex-wrap: wrap; gap: 16px; }
+/* ---- footer (14C-1) */
+.shop-footer { border-top: 1px solid var(--shop-line); margin-top: 48px; padding: 48px 0 32px; font-size: 14px; color: var(--shop-ink-2); }
+.shop-footer-grid { display: grid; gap: 36px; }
+.shop-footer-brand .shop-wordmark { font-size: 28px; color: var(--shop-ink); }
+.shop-footer-brand p { margin-top: 12px; max-width: 28rem; color: var(--shop-mute); line-height: 1.6; }
+.shop-footer-col { display: grid; align-content: start; }
+.shop-footer-col a, .shop-footer-col span { display: flex; align-items: center; min-height: 40px; text-decoration: none; overflow-wrap: anywhere; }
+.shop-footer-col a:hover { color: var(--shop-ink); text-decoration: underline; text-underline-offset: 4px; }
+.shop-footer-legal { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--shop-line); font-size: 12px; color: var(--shop-mute); }
+@media (min-width: 768px) { .shop-footer { margin-top: 72px; padding-top: 64px; } .shop-footer-grid { grid-template-columns: 2fr 1fr 1fr; gap: 48px; } }
+
+/* ---- storefront 404 */
+.shop-404 { padding: 96px 0 120px; max-width: 40rem; }
+.shop-404 .shop-display { margin-top: 8px; }
+.shop-404-text { margin-top: 20px; font-size: 16px; color: var(--shop-ink-2); line-height: 1.6; }
+.shop-404-actions { margin-top: 36px; display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; }
+.shop-404-actions .shop-btn { width: auto; }
+.shop-404-page { justify-content: center; padding: 0 var(--shop-gutter); }
+.shop-404-page .shop-404 { margin: 0 auto; width: 100%; max-width: 44rem; }
+@media (min-width: 768px) { .shop-404 { padding: 140px 0 160px; } }
 
 /* ---- pager */
 .shop-pager { display: flex; justify-content: center; gap: 24px; padding-top: 40px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; }

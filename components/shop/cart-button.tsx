@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ShoppingBag } from "lucide-react";
 import { cartCount, readCart } from "@/lib/shop/model";
 
 /** Cart entry in the header. Reads browser state only; renders 0 on the server. */
@@ -16,9 +17,11 @@ export function CartButton({ slug }: { slug: string }) {
     return () => { window.removeEventListener("bos-cart", onCart); window.removeEventListener("storage", refresh); };
   }, [slug]);
   return (
-    <Link href={`/shop/${slug}/sepet`} className="shop-icon-btn" aria-label={`Sepet, ${count} ürün`}>
-      <span>Sepet</span>
-      {count > 0 ? <span className="shop-count" data-numeric>{count}</span> : null}
+    <Link href={`/shop/${slug}/sepet`} className="shop-icon shop-cart-btn" aria-label={`Sepet, ${count} ürün`} data-testid="shop-cart-button">
+      <ShoppingBag aria-hidden strokeWidth={1.4} />
+      <span className="shop-icon-label">Sepet</span>
+      {/* reserved width: the count appearing after hydration does not shift the header */}
+      <span className="shop-count" data-numeric data-empty={count === 0 ? "true" : undefined}>{count > 0 ? count : ""}</span>
     </Link>
   );
 }
