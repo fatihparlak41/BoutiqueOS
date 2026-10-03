@@ -508,3 +508,35 @@ second copy that could disagree with them.
 the truth about the shelf even when the ledger cannot price it, and the price must come
 from a person who says where it came from — never from a default, a formula or a
 spreadsheet that silently becomes accounting truth.
+
+---
+
+## ADR-24 · Product Status Changes Only Through an Audited RPC
+
+**Status:** accepted (2026-10-03) · migration `20261003100000_product_status_audit`
+
+**Context:** archiving a product hides it from every selling surface, yet the change was a
+plain table UPDATE under the 6A manager+ policy (archive button and edit form) and left no
+trace but `updated_at`. Two real TLC products were archived that way (docs/14 §A/§C).
+
+**Decision:**
+1. `products.status` changes only through `rpc_product_set_status(product, target, reason)`
+   — owner/manager, same and active business, row lock. Lifecycle unchanged, no new state:
+   draft → active | archived, active → archived, archived → active; nothing returns to draft.
+   A request for the current status is an idempotent no-op (no event), so retries and double
+   submits have no second effect.
+2. Every change writes one `product_status_events` row in the same transaction (business,
+   product, from, to, actor, time, optional reason). The table is append-only: no client
+   write grant, frozen against UPDATE/DELETE for everyone, manager+ read. It is a domain event
+   table like `storefront_order_events`, not a generic audit framework; `team_audit_log` and
+   `platform_audit_log` keep their scopes.
+3. `trg_products_status_guard` refuses a status change unless the product's latest event was
+   written in the current transaction for exactly that OLD → NEW. The proof is a row tenants
+   cannot insert, not a forgeable marker; a spent event cannot authorise a second change
+   because `from <> to`. Break-glass (superuser / BYPASSRLS session) mirrors ADR on 3.5G.
+4. Archive is a selling decision, not an accounting one: archived stock stays in inventory
+   valuation while quantity exists; selling surfaces and active-only intelligence exclude it.
+5. History is not rewritten: no event is back-filled for changes made before the patch.
+
+**Why:** the pilot needs to answer "who took this off sale, when, why" from the database,
+and an audit row that a direct UPDATE can skip is decorative.
