@@ -42,13 +42,20 @@ export type ProductCard = {
   price_to: number | null;
   availability: Availability;
   image: { path: string; alt: string | null; width: number | null; height: number | null } | null;
+  /** The second public product image, if any (desktop hover). Same public roles as `image`. */
+  image_hover?: { path: string; alt: string | null; width: number | null; height: number | null } | null;
   colors: Array<{ value: string; hex: string | null }>;
   category: { slug: string; name: string } | null;
   published_at: string | null;
 };
 
 export type ShopHome = { featured: ProductCard[]; new_arrivals: ProductCard[] };
-export type ProductList = { rows: ProductCard[]; total: number; limit: number; offset: number; category: { slug: string; name: string } | null };
+/** Filter vocabulary of the current category + search scope: public option-value names only. */
+export type ShopFacets = { colors: Array<{ value: string; hex: string | null }>; sizes: Array<{ value: string }> };
+export type ProductList = { rows: ProductCard[]; total: number; limit: number; offset: number; category: { slug: string; name: string } | null; facets: ShopFacets };
+
+/** Customer listing state, as carried in the URL (?q, ?renk, ?beden, ?stok, ?sirala, ?sayfa, ?baslangic). */
+export type ListingFilters = { q: string | null; colors: string[]; sizes: string[]; inStock: boolean; sort: SortKey };
 
 export type ShopOption = { id: string; name: string; kind: "color" | "size" | "other"; values: Array<{ id: string; value: string; code: string | null; hex: string | null }> };
 export type ShopVariant = { id: string; price: number; option_value_ids: string[]; available: number | null; state: Availability; image_id: string | null };
@@ -76,6 +83,9 @@ export const SORT_OPTIONS = [
 ] as const;
 export type SortKey = (typeof SORT_OPTIONS)[number]["value"];
 export const PAGE_SIZE = 24;
+/** "Daha fazla göster" grows the page in steps of PAGE_SIZE up to this many steps (≤ 96 cards), then moves on. */
+export const MAX_LOAD_STEPS = 4;
+export const WINDOW_SIZE = PAGE_SIZE * MAX_LOAD_STEPS;
 
 /** Public image URL: the storefront bucket is public; only published copies live there. */
 export function publicImageUrl(path: string | null | undefined): string | null {

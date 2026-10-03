@@ -5327,7 +5327,7 @@ SELECT t_check('T75a storefront tables have RLS; storefront_domains has no polic
   AND NOT has_table_privilege('authenticated', 'storefronts', 'INSERT') AND NOT has_table_privilege('authenticated', 'storefronts', 'UPDATE'));
 SELECT t_check('T75a2 the public RPCs are the only anon surface',
   has_function_privilege('anon', 'rpc_shop_resolve(text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_home(text, integer)', 'EXECUTE')
-  AND has_function_privilege('anon', 'rpc_shop_products(text, text, text, text, integer, integer)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_product(text, text)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_products(text, text, text, text, integer, integer, text[], text[], boolean)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_product(text, text)', 'EXECUTE')
   AND has_function_privilege('anon', 'rpc_shop_availability(text, uuid[])', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_resolve_host(text)', 'EXECUTE')
   AND NOT has_function_privilege('anon', 'rpc_storefront_upsert(uuid, jsonb)', 'EXECUTE') AND NOT has_function_privilege('anon', 'rpc_storefront_publish_product(uuid, uuid, boolean)', 'EXECUTE')
   AND NOT has_function_privilege('anon', 'rpc_storefront_admin(uuid, text, integer, integer)', 'EXECUTE') AND NOT has_function_privilege('anon', 'fn_shop_available(uuid, uuid, uuid)', 'EXECUTE')
@@ -5570,6 +5570,111 @@ SELECT t_check('T75h TLC: no storefront, no published product, no public image, 
   (SELECT count(*) FROM storefronts WHERE business_id = t_get('biz')) = 0
   AND (SELECT count(*) FROM products WHERE business_id = t_get('biz') AND (web_published OR web_slug IS NOT NULL OR web_featured)) = 0
   AND (SELECT count(*) FROM product_images WHERE business_id = t_get('biz') AND public_path IS NOT NULL) = 0);
+
+-- ============================================================
+-- T78  Public listing filters  (Phase 14C Pass 2)
+-- ============================================================
+-- Same zz-store fixture as T75 (state at the end of T75). Expectations are derived from
+-- independent ground-truth queries, not from the RPC under test.
+CREATE FUNCTION t78_truth(p_colors TEXT[], p_sizes TEXT[], p_stock BOOLEAN, p_cat TEXT DEFAULT NULL, p_q TEXT DEFAULT NULL)
+RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(string_agg(p.web_slug, ',' ORDER BY p.web_slug), '') FROM products p
+  WHERE p.business_id = t_get('bizS') AND p.web_published AND p.status = 'active'
+    AND (p_cat IS NULL OR p.category_id = (SELECT id FROM categories WHERE business_id = t_get('bizS') AND slug = p_cat))
+    AND (p_q IS NULL OR COALESCE(p.web_title, p.name) ILIKE '%' || p_q || '%')
+    AND EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id AND pv.status = 'active' AND pv.web_enabled
+                  AND (p_colors IS NULL OR EXISTS (SELECT 1 FROM variant_option_values x JOIN option_values ov ON ov.id = x.option_value_id JOIN product_options po ON po.id = x.product_option_id
+                                                   WHERE x.variant_id = pv.id AND po.kind = 'color' AND ov.value = ANY (p_colors)))
+                  AND (p_sizes IS NULL OR EXISTS (SELECT 1 FROM variant_option_values x JOIN option_values ov ON ov.id = x.option_value_id JOIN product_options po ON po.id = x.product_option_id
+                                                  WHERE x.variant_id = pv.id AND po.kind = 'size' AND ov.value = ANY (p_sizes)))
+                  AND (NOT p_stock OR fn_shop_available(t_get('bizS'), t_get('brS'), pv.id) > 0));
+$$;
+CREATE FUNCTION t78_slugs(r JSONB) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE(string_agg(c ->> 'slug', ',' ORDER BY c ->> 'slug'), '') FROM jsonb_array_elements(r -> 'rows') c;
+$$;
+GRANT EXECUTE ON FUNCTION t78_truth(TEXT[], TEXT[], BOOLEAN, TEXT, TEXT), t78_slugs(JSONB) TO anon;
+
+-- fixture additions (as maintenance): a colour that lives only on an UNPUBLISHED product, a colour of
+-- ANOTHER tenant, and the Bej / M variant switched off for the web so "Bej + M" has no web variant
+WITH x AS (INSERT INTO option_values (product_option_id, value, code, color_hex, sort_order) VALUES (t_get('optS_color'), 'Gizli Mavi', 'GZM', '#123456', 9) RETURNING id) SELECT t_set('vS_hidden', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id) VALUES (t75_vid('CKT-E-STD'), t_get('optS_color'), t_get('vS_hidden'));
+WITH x AS (INSERT INTO product_options (business_id, name, kind, sort_order) VALUES (t_get('bizB'), 'Renk T78', 'color', 9) RETURNING id) SELECT t_set('optB_color', id) FROM x;
+WITH x AS (INSERT INTO option_values (product_option_id, value, sort_order) VALUES (t_get('optB_color'), 'Kırmızı', 1) RETURNING id) SELECT t_set('vB_red', id) FROM x;
+INSERT INTO variant_option_values (variant_id, product_option_id, option_value_id)
+SELECT pv.id, t_get('optB_color'), t_get('vB_red') FROM product_variants pv WHERE pv.business_id = t_get('bizB') LIMIT 1;
+CREATE TEMP TABLE _t78_bejm AS SELECT web_enabled FROM product_variants WHERE id = t75_vid('ELB-A-BEJ-M');
+UPDATE product_variants SET web_enabled = false WHERE id = t75_vid('ELB-A-BEJ-M');
+
+SELECT t_check('T78a privilege: the 9-argument listing is anon-executable, the 6-argument one is gone',
+  has_function_privilege('anon', 'rpc_shop_products(text, text, text, text, integer, integer, text[], text[], boolean)', 'EXECUTE')
+  AND to_regprocedure('rpc_shop_products(text, text, text, text, integer, integer)') IS NULL
+  AND NOT has_function_privilege('anon', 'fn_shop_product_matches(uuid, uuid, uuid, text[], text[], boolean)', 'EXECUTE'));
+
+SET ROLE anon;
+SELECT t_check('T78b no filter = 14A behaviour (all 5) + facets: colours Siyah, Bej in option order; sizes S, M',
+  (SELECT (r ->> 'total')::int = 5 AND t78_slugs(r) = t78_truth(NULL, NULL, false)
+          AND r -> 'facets' -> 'colors' = '[{"value": "Siyah", "hex": "#111111"}, {"value": "Bej", "hex": "#d9c9a8"}]'::jsonb
+          AND r -> 'facets' -> 'sizes' = '[{"value": "S"}, {"value": "M"}]'::jsonb
+   FROM rpc_shop_products('zz-store') r));
+SELECT t_check('T78c colour Siyah → only the dress', (SELECT t78_slugs(r) = 'keten-elbise' AND t78_slugs(r) = t78_truth(ARRAY['Siyah'], NULL, false) FROM rpc_shop_products('zz-store', p_color => ARRAY['Siyah']) r));
+SELECT t_check('T78d size M → every product with a web M variant (ground truth)', (SELECT t78_slugs(r) = t78_truth(NULL, ARRAY['M'], false) AND (r ->> 'total')::int >= 1 FROM rpc_shop_products('zz-store', p_size => ARRAY['M']) r));
+SELECT t_check('T78e size M + in stock → only products whose M variant is available now',
+  (SELECT t78_slugs(r) = t78_truth(NULL, ARRAY['M'], true) AND t78_slugs(r) NOT LIKE '%yun-pantolon%' FROM rpc_shop_products('zz-store', p_size => ARRAY['M'], p_in_stock => true) r));
+SELECT t_check('T78f matching is per variant: Bej + M has no web variant → nothing; Bej + S → the dress',
+  (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', p_color => ARRAY['Bej'], p_size => ARRAY['M']) r)
+  AND (SELECT t78_slugs(r) = 'keten-elbise' FROM rpc_shop_products('zz-store', p_color => ARRAY['Bej'], p_size => ARRAY['S']) r));
+SELECT t_check('T78g several values of one facet are OR: Siyah or Bej → the dress; S or M sizes match ground truth',
+  (SELECT t78_slugs(r) = 'keten-elbise' FROM rpc_shop_products('zz-store', p_color => ARRAY['Siyah', 'Bej']) r)
+  AND (SELECT t78_slugs(r) = t78_truth(NULL, ARRAY['S', 'M'], false) FROM rpc_shop_products('zz-store', p_size => ARRAY['S', 'M']) r));
+SELECT t_check('T78h in stock only: sold-out silk scarf leaves, ground truth holds',
+  (SELECT t78_slugs(r) = t78_truth(NULL, NULL, true) AND t78_slugs(r) NOT LIKE '%ipek-fular%' FROM rpc_shop_products('zz-store', p_in_stock => true) r));
+SELECT t_check('T78i category + colour: triko + Siyah → none; elbise + Siyah → the dress',
+  (SELECT (r ->> 'total')::int = 0 AND r -> 'category' ->> 'slug' = 'triko' FROM rpc_shop_products('zz-store', 'triko', p_color => ARRAY['Siyah']) r)
+  AND (SELECT t78_slugs(r) = 'keten-elbise' FROM rpc_shop_products('zz-store', 'elbise', p_color => ARRAY['Siyah']) r));
+SELECT t_check('T78j category facets are scoped: triko has no colour and no size',
+  (SELECT r -> 'facets' = '{"colors": [], "sizes": []}'::jsonb FROM rpc_shop_products('zz-store', 'triko') r));
+SELECT t_check('T78k search + filter: "elbise" + M → the dress; "pantolon" + Siyah → none',
+  (SELECT t78_slugs(r) = t78_truth(NULL, ARRAY['M'], false, NULL, 'elbise') FROM rpc_shop_products('zz-store', NULL, 'elbise', p_size => ARRAY['M']) r)
+  AND (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', NULL, 'pantolon', p_color => ARRAY['Siyah']) r));
+SELECT t_check('T78l sort + filter: size S by price ascending, cheapest web price first',
+  (SELECT (r -> 'rows' -> 0 ->> 'price_from')::numeric <= (r -> 'rows' -> 1 ->> 'price_from')::numeric AND jsonb_array_length(r -> 'rows') = 2
+   FROM rpc_shop_products('zz-store', NULL, NULL, 'price_asc', p_size => ARRAY['S']) r)
+  AND (SELECT (r -> 'rows' -> 0 ->> 'price_from')::numeric >= (r -> 'rows' -> 1 ->> 'price_from')::numeric
+       FROM rpc_shop_products('zz-store', NULL, NULL, 'price_desc', p_size => ARRAY['S']) r));
+SELECT t_check('T78m pagination with a filter: limit 1 offset 1 → one row, total unchanged; limit is capped at 96',
+  (SELECT jsonb_array_length(r -> 'rows') = 1 AND (r ->> 'total')::int = 2 FROM rpc_shop_products('zz-store', NULL, NULL, 'newest', 1, 1, p_size => ARRAY['S']) r)
+  AND (SELECT (r ->> 'limit')::int = 96 FROM rpc_shop_products('zz-store', NULL, NULL, 'newest', 5000, 0) r)
+  AND (SELECT jsonb_array_length(r -> 'rows') = 0 AND (r ->> 'total')::int = 5 FROM rpc_shop_products('zz-store', NULL, NULL, 'newest', 24, 500) r));
+SELECT t_check('T78n an unpublished product never matches nor feeds the facets ("Gizli Mavi")',
+  (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', p_color => ARRAY['Gizli Mavi']) r)
+  AND (SELECT NOT (r -> 'facets')::text LIKE '%Gizli%' FROM rpc_shop_products('zz-store') r));
+SELECT t_check('T78o another tenant''s colour never matches nor appears ("Kırmızı")',
+  (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', p_color => ARRAY['Kırmızı']) r)
+  AND (SELECT NOT (r -> 'facets')::text LIKE '%Kırmızı%' FROM rpc_shop_products('zz-store') r));
+SELECT t_check('T78p inputs are normalised: blanks ignored (= no filter), unknown value → none, 25 values accepted (capped)',
+  (SELECT (r ->> 'total')::int = 5 FROM rpc_shop_products('zz-store', p_color => ARRAY['', '  ']) r)
+  AND (SELECT (r ->> 'total')::int = 0 FROM rpc_shop_products('zz-store', p_size => ARRAY['XXXL']) r)
+  AND (SELECT (r ->> 'total')::int >= 0 FROM rpc_shop_products('zz-store', p_size => (SELECT array_agg('v' || g) FROM generate_series(1, 25) g)) r));
+SELECT t_check('T78q cards: colours in option order, a second public image as image_hover, none when there is no second image',
+  (SELECT (SELECT c -> 'colors' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'keten-elbise') = '[{"hex": "#111111", "value": "Siyah"}, {"hex": "#d9c9a8", "value": "Bej"}]'::jsonb
+          AND (SELECT c -> 'image_hover' ->> 'path' LIKE 'store/%' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'keten-elbise')
+          AND (SELECT jsonb_typeof(c -> 'image_hover') = 'null' FROM jsonb_array_elements(r -> 'rows') c WHERE c ->> 'slug' = 'triko-kazak')
+   FROM rpc_shop_products('zz-store') r));
+SELECT t_check('T78r filtered output carries nothing internal: no SKU, barcode, cost, supplier, note, private path or role',
+  (SELECT NOT (r::text ~* '"(sku|barcode|cost|unit_cost|supplier|supplier_id|note|notes|storage_path|business_id|sku_prefix)"\s*:')
+          AND r::text NOT LIKE '%ELB-A%' AND r::text NOT LIKE '%business/%' AND r::text NOT ILIKE '%label_tag%' AND r::text NOT ILIKE '%receiving_proof%'
+   FROM rpc_shop_products('zz-store', p_color => ARRAY['Siyah', 'Bej'], p_size => ARRAY['S', 'M'], p_in_stock => true) r));
+SELECT t_check('T78s a disabled store and an unknown store still return nothing with filters',
+  rpc_shop_products('nope', p_color => ARRAY['Siyah']) IS NULL);
+SELECT t_err('T78t sort is still validated with filters', $q$ SELECT rpc_shop_products('zz-store', NULL, NULL, 'cost', p_size => ARRAY['S']) $q$, 'INVALID_SORT');
+SELECT t_check('T78u home cards share the new card shape (image_hover key present)',
+  (SELECT r -> 'new_arrivals' -> 0 ? 'image_hover' FROM rpc_shop_home('zz-store') r));
+RESET ROLE;
+SELECT t_check('T78v the listing wrote nothing: no movement, no reservation, no new public image',
+  (SELECT count(*) FROM inventory_movements WHERE business_id = t_get('bizS')) = 7 AND (SELECT count(*) FROM reservations WHERE business_id = t_get('bizS')) = 1);
+-- restore the fixture for T76
+UPDATE product_variants SET web_enabled = (SELECT web_enabled FROM _t78_bejm) WHERE id = t75_vid('ELB-A-BEJ-M');
+DELETE FROM variant_option_values WHERE option_value_id IN (t_get('vS_hidden'), t_get('vB_red'));
 
 -- ============================================================
 -- T76  Guest order + checkout foundation  (Phase 14B)

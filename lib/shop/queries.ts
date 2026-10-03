@@ -3,7 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { createClient } from "@supabase/supabase-js";
 import { publicSupabaseEnv } from "@/lib/env";
-import type { AvailabilityMap, ProductList, PublicOrder, ShopHome, ShopProduct, SortKey, Store } from "@/lib/shop/model";
+import type { AvailabilityMap, ListingFilters, ProductList, PublicOrder, ShopHome, ShopProduct, Store } from "@/lib/shop/model";
 
 /**
  * Public storefront reads. No cookies, no session, no tenant bootstrap: one anon client
@@ -43,15 +43,34 @@ export const getHome = (slug: string): Promise<ShopHome | null> =>
     { revalidate: 60, tags: [shopTag(slug)] },
   )();
 
-/** Listing page. Cached briefly per (category, query, sort, page). */
-export const listProducts = (slug: string, category: string | null, q: string | null, sort: SortKey, offset: number, limit: number): Promise<ProductList | null> =>
+/**
+ * Listing page. Cached briefly per (category, query, filters, sort, window). Filtering is
+ * server authoritative (rpc_shop_products); the browser only names public option values.
+ */
+export const listProducts = (
+  slug: string,
+  category: string | null,
+  filters: ListingFilters,
+  offset: number,
+  limit: number,
+): Promise<ProductList | null> =>
   unstable_cache(
     async () => {
-      const { data, error } = await anon().rpc("rpc_shop_products", { p_slug: slug, p_category: category, p_q: q, p_sort: sort, p_limit: limit, p_offset: offset });
+      const { data, error } = await anon().rpc("rpc_shop_products", {
+        p_slug: slug,
+        p_category: category,
+        p_q: filters.q,
+        p_sort: filters.sort,
+        p_limit: limit,
+        p_offset: offset,
+        p_color: filters.colors.length ? filters.colors : null,
+        p_size: filters.sizes.length ? filters.sizes : null,
+        p_in_stock: filters.inStock,
+      });
       if (error) throw new Error(`Ürünler okunamadı: ${error.message}`);
       return (data ?? null) as ProductList | null;
     },
-    ["shop-products", slug, category ?? "", q ?? "", sort, String(offset), String(limit)],
+    ["shop-products", slug, category ?? "", filters.q ?? "", filters.sort, JSON.stringify(filters.colors), JSON.stringify(filters.sizes), filters.inStock ? "1" : "0", String(offset), String(limit)],
     { revalidate: 60, tags: [shopTag(slug)] },
   )();
 

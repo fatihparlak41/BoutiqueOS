@@ -2,74 +2,108 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStore, listProducts } from "@/lib/shop/queries";
-import { PAGE_SIZE, SORT_OPTIONS, type SortKey } from "@/lib/shop/model";
+import { PAGE_SIZE, WINDOW_SIZE } from "@/lib/shop/model";
+import { hasFilters, isParameterised, listingHref, parseListing } from "@/lib/shop/listing-url";
 import { ProductGrid } from "@/components/shop/product-card";
+import { ListingControls } from "@/components/shop/listing-controls";
 
-type Search = { sirala?: string; sayfa?: string; q?: string };
+type Search = Record<string, string | string[] | undefined>;
 
-function readSort(v: string | undefined): SortKey {
-  return SORT_OPTIONS.some((o) => o.value === v) ? (v as SortKey) : "newest";
-}
-
-export async function listingMetadata({ slug }: { slug: string }, category: string | null): Promise<Metadata> {
+/**
+ * Canonical is always the clean route. Any query (search, filter, sort, load-more) marks the
+ * page noindex,follow — no crawlable filter combinations.
+ */
+export async function listingMetadata({ slug }: { slug: string }, category: string | null, searchParams: Search = {}): Promise<Metadata> {
   const store = await getStore(slug);
   if (!store) return {};
   const cat = category ? store.categories.find((c) => c.slug === category) : null;
-  const title = cat ? cat.name : "Tüm ürünler";
-  return { title, alternates: { canonical: cat ? `/shop/${slug}/kategori/${cat.slug}` : `/shop/${slug}/urunler` } };
+  const title = cat ? cat.name : "Tüm Ürünler";
+  return {
+    title,
+    alternates: { canonical: cat ? `/shop/${slug}/kategori/${cat.slug}` : `/shop/${slug}/urunler` },
+    ...(isParameterised(searchParams) ? { robots: { index: false, follow: true } } : {}),
+  };
 }
 
-/** Shared listing for "all products" and a category: filter strip, sort, grid, pager. */
+/** Shared catalogue for "all products", a category and search results. */
 export async function Listing({ slug, category, searchParams }: { slug: string; category: string | null; searchParams: Search }) {
   const store = await getStore(slug);
   if (!store) notFound();
-  const sort = readSort(searchParams.sirala);
-  const q = (searchParams.q ?? "").trim().slice(0, 60) || null;
-  const page = Math.max(1, Number.parseInt(searchParams.sayfa ?? "1", 10) || 1);
-  const list = await listProducts(slug, category, q, sort, (page - 1) * PAGE_SIZE, PAGE_SIZE);
+  const state = parseListing(searchParams);
+  const { steps, start, ...filters } = state;
+  const limit = steps * PAGE_SIZE;
+  const list = await listProducts(slug, category, filters, start, limit);
   if (!list) notFound();
   if (category && !list.category) notFound();
+
   const base = `/shop/${slug}`;
-  const here = category ? `${base}/kategori/${category}` : `${base}/urunler`;
-  const href = (p: number) => `${here}?${new URLSearchParams({ ...(sort !== "newest" ? { sirala: sort } : {}), ...(q ? { q } : {}), ...(p > 1 ? { sayfa: String(p) } : {}) }).toString()}`;
-  const pages = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
+  const filtered = hasFilters(filters);
+  const shownTo = start + list.rows.length;
+  const remainingInWindow = shownTo < list.total && steps * PAGE_SIZE < WINDOW_SIZE;
+  const nextWindow = shownTo < list.total && !remainingInWindow;
+  const title = list.category?.name ?? (filters.q ? `“${filters.q}” için sonuçlar` : "Tüm Ürünler");
 
   return (
-    <div className="shop-section" style={{ paddingTop: 24 }}>
-      <p className="shop-eyebrow">{store.store_name}</p>
-      <h1 className="shop-h2" style={{ marginTop: 8 }}>{list.category?.name ?? (q ? `"${q}" için sonuçlar` : "Tüm ürünler")}</h1>
-      <p className="shop-muted" style={{ marginTop: 6, fontSize: 13 }} data-numeric>{list.total} ürün</p>
+    <div className="shop-listing">
+      <header className="shop-listing-head">
+        <h1 className="shop-listing-title" data-search={!list.category && filters.q ? "true" : undefined}>{title}</h1>
+        <p className="shop-listing-count" data-numeric>{list.total} ürün</p>
+      </header>
 
-      <nav className="shop-cats" aria-label="Kategoriler" style={{ marginTop: 20 }}>
-        <Link href={`${base}/urunler`} className="shop-chip" aria-current={!category ? "page" : undefined}>Tümü</Link>
-        {store.categories.map((c) => (
-          <Link key={c.slug} href={`${base}/kategori/${c.slug}`} className="shop-chip" aria-current={category === c.slug ? "page" : undefined}>{c.name}</Link>
-        ))}
-      </nav>
+      <ListingControls base={base} category={category} categories={store.categories} facets={list.facets} filters={filters} />
 
-      <form method="get" action={here} style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
-        <input className="shop-input" type="search" name="q" defaultValue={q ?? ""} placeholder="Ara" aria-label="Ürün ara" style={{ maxWidth: 260 }} />
-        <select className="shop-select" name="sirala" defaultValue={sort} aria-label="Sırala">
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
+      {filtered ? (
+        <div className="shop-active" aria-label="Seçili filtreler">
+          {filters.sizes.map((s) => (
+            <Link key={`b-${s}`} href={listingHref(base, category, { ...filters, sizes: filters.sizes.filter((x) => x !== s) })} aria-label={`Beden ${s} filtresini kaldır`}>Beden {s} <span aria-hidden>×</span></Link>
           ))}
-        </select>
-        <button type="submit" className="shop-btn shop-btn-ghost" style={{ width: "auto", height: 40, padding: "0 14px" }}>Uygula</button>
-      </form>
+          {filters.colors.map((c) => (
+            <Link key={`r-${c}`} href={listingHref(base, category, { ...filters, colors: filters.colors.filter((x) => x !== c) })} aria-label={`${c} filtresini kaldır`}>{c} <span aria-hidden>×</span></Link>
+          ))}
+          {filters.inStock ? <Link href={listingHref(base, category, { ...filters, inStock: false })} aria-label="Yalnız stokta olanlar filtresini kaldır">Stokta <span aria-hidden>×</span></Link> : null}
+          <Link href={listingHref(base, category, { q: filters.q, sort: filters.sort })} className="shop-active-clear">Temizle</Link>
+        </div>
+      ) : null}
 
-      <div style={{ marginTop: 28 }}>
-        {list.rows.length === 0 ? (
-          <p className="shop-muted">Bu seçimde ürün yok.</p>
-        ) : (
-          <ProductGrid slug={slug} cards={list.rows} currency={store.currency} eager={page === 1 ? 4 : 0} />
-        )}
-      </div>
+      {list.rows.length === 0 ? (
+        <section className="shop-empty" data-testid="shop-empty">
+          {filtered ? (
+            <>
+              <h2 className="shop-empty-title">Bu seçime uygun ürün yok.</h2>
+              <p className="shop-empty-text">Birkaç filtreyi kaldırmayı deneyin.</p>
+              <Link href={listingHref(base, category, { q: filters.q, sort: filters.sort })} className="shop-link">Filtreleri temizle</Link>
+            </>
+          ) : filters.q ? (
+            <>
+              <h2 className="shop-empty-title">Aradığın ürünü bulamadık.</h2>
+              <p className="shop-empty-text">Farklı bir kelimeyle aramayı deneyin.</p>
+              <Link href={`${base}/urunler`} className="shop-link">Tüm ürünleri keşfet</Link>
+            </>
+          ) : (
+            <>
+              <h2 className="shop-empty-title">Burada şu an ürün yok.</h2>
+              <Link href={`${base}/urunler`} className="shop-link">Tüm ürünleri keşfet</Link>
+            </>
+          )}
+        </section>
+      ) : (
+        <ProductGrid slug={slug} cards={list.rows} currency={store.currency} eager={start === 0 ? 4 : 0} variant="catalog" startIndex={start} />
+      )}
 
-      {pages > 1 ? (
-        <nav className="shop-pager" aria-label="Sayfalar">
-          {page > 1 ? <Link href={href(page - 1)}>← Önceki</Link> : <span>← Önceki</span>}
-          <span data-numeric>{page} / {pages}</span>
-          {page < pages ? <Link href={href(page + 1)}>Sonraki →</Link> : <span>Sonraki →</span>}
+      {list.rows.length > 0 ? (
+        <nav className="shop-more" aria-label="Daha fazla ürün">
+          <p className="shop-more-count" data-numeric>{list.total} üründen {start + 1}–{shownTo} gösteriliyor</p>
+          {remainingInWindow ? (
+            <Link href={listingHref(base, category, { ...filters, start, steps: steps + 1 }, `urun-${shownTo + 1}`)} className="shop-btn shop-btn-ghost shop-more-btn" data-testid="shop-load-more">
+              Daha fazla göster
+            </Link>
+          ) : null}
+          {start > 0 || nextWindow ? (
+            <div className="shop-more-window">
+              {start > 0 ? <Link href={listingHref(base, category, { ...filters, start: Math.max(0, start - WINDOW_SIZE), steps: 4 })} className="shop-link">← Önceki ürünler</Link> : <span />}
+              {nextWindow ? <Link href={listingHref(base, category, { ...filters, start: start + WINDOW_SIZE })} className="shop-link">Sonraki ürünler →</Link> : null}
+            </div>
+          ) : null}
         </nav>
       ) : null}
     </div>

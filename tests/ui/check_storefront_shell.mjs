@@ -75,7 +75,8 @@ check("every /shop route carries the storefront stylesheet", /import "@\/app\/sh
 check("a link styled as a button keeps its ink (cart CTA was black on black)", /\.shop a\.shop-btn \{ color: #fff; \}/.test(read("app/shop/shop.css")));
 
 // 6. scope
-check("Pass 1 adds no migration (latest is the product status patch)", readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort().at(-1) === "20261003100000_product_status_audit.sql");
+// Pass 1 itself added no SQL: before the Pass 2 filter migration the latest is the product status patch.
+check("Pass 1 adds no migration (latest before 14C-2 is the product status patch)", readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql") && f < "20261003140000").sort().at(-1) === "20261003100000_product_status_audit.sql");
 const queries = read("lib/shop/queries.ts");
 check("14A/14B read path unchanged: same rpc_shop_* set in queries", ["rpc_shop_resolve", "rpc_shop_home", "rpc_shop_products", "rpc_shop_product", "rpc_shop_availability", "rpc_shop_order"].every((r) => queries.includes(`"${r}"`)));
 check("14B write path unchanged: checkout still calls rpc_shop_create_order with store_pickup", /rpc_shop_create_order[\s\S]*p_fulfillment: "store_pickup"/.test(read("components/shop/checkout-view.tsx")));
