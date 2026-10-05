@@ -635,7 +635,13 @@ export async function uploadImageAction(
 
   revalidatePath(`/app/urunler/${productId}`);
   revalidatePath("/app/urunler");
-  return { error: null, ok: true, message: "Görsel yüklendi." };
+  // guidance only — a smaller photo is accepted as it is (no upscaling, no refusal)
+  const longEdge = Math.max(info.width, info.height);
+  return {
+    error: null,
+    ok: true,
+    message: longEdge < 1200 ? `Görsel yüklendi (${info.width} × ${info.height} px). Büyük ekranlar için uzun kenarı en az 1200 px önerilir.` : "Görsel yüklendi.",
+  };
 }
 
 export async function setMainImageAction(

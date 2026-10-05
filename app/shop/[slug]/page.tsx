@@ -2,10 +2,16 @@ import Link from "next/link";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { getHome, getStore } from "@/lib/shop/queries";
-import { publicImageUrl, type ProductCard, type ShopHome, type Store } from "@/lib/shop/model";
+import { formatPriceRange, publicImageUrl, type ProductCard, type ShopHome, type Store } from "@/lib/shop/model";
 import { ProductGrid } from "@/components/shop/product-card";
 
 const SECTION_CARDS = 4;
+/**
+ * The hero's rendered width, mirrored from shop.css: phone full width; tablet a centred
+ * portrait ≤ 600 px; desktop a 3:4 box whose height is min(76vh, 780px) → ≤ 585 px wide,
+ * narrower than the 5fr column below ~1330 px. The browser multiplies by DPR itself.
+ */
+const HERO_SIZES = "(min-width: 1330px) 585px, (min-width: 900px) 44vw, (min-width: 600px) 600px, 100vw";
 
 /**
  * Storefront home, editorial order: hero → Yeni Gelenler → category blocks → Öne Çıkanlar →
@@ -42,7 +48,7 @@ export default async function ShopHome({ params }: { params: Promise<{ slug: str
           <div className="shop-section-head">
             <h2 id="h-kat" className="shop-h2">Kategoriler</h2>
           </div>
-          <ul className="shop-catblocks" data-count={Math.min(blocks.length, 3)}>
+          <ul className="shop-catblocks" data-count={blocks.length}>
             {blocks.map((c) => {
               const url = publicImageUrl(c.image.path);
               return (
@@ -62,12 +68,16 @@ export default async function ShopHome({ params }: { params: Promise<{ slug: str
       ) : null}
 
       {featured.length > 0 ? (
-        <section className="shop-section" aria-labelledby="h-one" data-testid="shop-home-featured">
+        <section className="shop-section" aria-labelledby="h-one" data-testid="shop-home-featured" data-mode={featured.length === 1 ? "single" : "grid"}>
           <div className="shop-section-head">
             <h2 id="h-one" className="shop-h2">Öne Çıkanlar</h2>
             <Link href={`${base}/urunler`}>Tümünü gör</Link>
           </div>
-          <ProductGrid slug={store.slug} cards={featured} currency={store.currency} />
+          {featured.length === 1 ? (
+            <FeaturedSingle base={base} card={featured[0]} currency={store.currency} />
+          ) : (
+            <ProductGrid slug={store.slug} cards={featured} currency={store.currency} />
+          )}
         </section>
       ) : null}
 
@@ -87,6 +97,29 @@ export default async function ShopHome({ params }: { params: Promise<{ slug: str
           <p className="shop-insta-handle">@{store.instagram}</p>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Exactly one featured product: an editorial pairing (large photograph + name, price and a
+ * quiet link) instead of one card stranded in an empty four-column row. 2–4 use the grid.
+ */
+function FeaturedSingle({ base, card, currency }: { base: string; card: ProductCard; currency: string }) {
+  const url = publicImageUrl(card.image?.path);
+  const href = `${base}/urun/${card.slug}`;
+  return (
+    <div className="shop-feature-one" data-testid="shop-featured-single">
+      <Link href={href} className="shop-feature-one-media" aria-label={card.name}>
+        {url ? <Image src={url} alt={card.image?.alt ?? card.name} fill sizes="(min-width: 900px) 40vw, 100vw" className="shop-feature-one-img" /> : null}
+      </Link>
+      <div className="shop-feature-one-copy">
+        {card.category ? <p className="shop-eyebrow">{card.category.name}</p> : null}
+        <h3 className="shop-feature-one-name">{card.name}</h3>
+        <p className="shop-price">{formatPriceRange(card.price_from, card.price_to, currency)}</p>
+        {card.availability === "sold_out" ? <p className="shop-card-state">Tükendi</p> : null}
+        <Link href={href} className="shop-link">Ürünü incele</Link>
+      </div>
     </div>
   );
 }
@@ -111,7 +144,7 @@ function Hero({ store, home, base }: { store: Store; home: ShopHome; base: strin
     return (
       <section className="shop-hero-ed" data-testid="shop-hero" data-variant="image">
         <div className="shop-hero-ed-media">
-          <Image src={hero} alt={store.hero_heading ?? store.store_name} fill priority sizes="(min-width: 900px) 44vw, 100vw" className="shop-hero-ed-img" />
+          <Image src={hero} alt={store.hero_heading ?? store.store_name} fill priority sizes={HERO_SIZES} className="shop-hero-ed-img" />
         </div>
         <div className="shop-hero-ed-copy">
           {store.tagline ? <p className="shop-eyebrow">{store.tagline}</p> : null}

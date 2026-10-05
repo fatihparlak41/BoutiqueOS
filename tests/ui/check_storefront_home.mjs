@@ -59,8 +59,13 @@ const order = ["<Hero ", "Yeni Gelenler", "Kategoriler", "Öne Çıkanlar", "Hak
 check("homepage order: hero → Yeni Gelenler → categories → Öne Çıkanlar → about → Instagram", order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), order.join());
 check("sections render only from data (new arrivals / blocks ≥ 2 / featured / about / instagram)",
   /arrivals\.length > 0 \?/.test(page) && /blocks\.length >= 2 \?/.test(page) && /featured\.length > 0 \?/.test(page) && /store\.about \?/.test(page) && /store\.instagram \?/.test(page));
-check("product sections reuse the Pass-2 card grid; no second card implementation", (page.match(/<ProductGrid /g) ?? []).length === 2 && !/shop-card"/.test(page));
-check("only the hero (or the first fallback photo) is a priority image", (page.match(/\bpriority\b/g) ?? []).length === 2 && /fill priority sizes=/.test(page) && /priority=\{i === 0\}/.test(page) && !/eager=/.test(page));
+check("product sections reuse the Pass-2 card grid; one featured product gets the editorial single layout, 2–4 the grid",
+  (page.match(/<ProductGrid /g) ?? []).length === 2 && !/shop-card"/.test(page) && /featured\.length === 1 \? \(\s*<FeaturedSingle /.test(page) && /data-mode=\{featured\.length === 1 \? "single" : "grid"\}/.test(page));
+check("hero sizes describe the rendered width (phone 100vw, tablet ≤ 600 px, desktop ≤ 585 px), and device sizes have 828 / 1200 buckets",
+  /HERO_SIZES = "\(min-width: 1330px\) 585px, \(min-width: 900px\) 44vw, \(min-width: 600px\) 600px, 100vw"/.test(page) && /sizes=\{HERO_SIZES\}/.test(page) && /deviceSizes: \[390, 640, 768, 828, 1080, 1200, 1440, 1920\]/.test(read("next.config.mjs")));
+check("product upload guidance: portrait, ≥ 1200 px long edge recommended — never blocked or upscaled",
+  /uzun kenarı en az 1200 px önerilir/.test(read("components/catalog/image-manager.tsx")) && /longEdge < 1200 \?/.test(read("app/app/urunler/actions.ts")));
+check("only the hero (or the first fallback photo) is a priority image", (page.match(/\bpriority\b/g) ?? []).length === 2 && /fill priority sizes=\{HERO_SIZES\}/.test(page) && /priority=\{i === 0\}/.test(page) && !/eager=/.test(page));
 check("hero: one CTA 'Yeni Gelenleri Keşfet'; heading from settings; no hard-coded campaign or TLC copy",
   (page.match(/Yeni Gelenleri Keşfet/g) ?? []).length === 1 && /store\.hero_heading \?\? store\.store_name/.test(page) && !/Things Like Crop|TLC|Yaz 2\d|İndirim|Kampanya|%\s?\d/.test(page));
 check("hero fallback: store name + tagline + up to 3 product photos when ≥ 2 exist; never a placeholder", /photos\.length >= 2 \?/.test(page) && /slice\(0, 3\)/.test(page) && !/placeholder|picsum|unsplash/i.test(page));
@@ -69,7 +74,7 @@ check("Instagram: a plain profile link (no feed, no fetch, no embed)", /href=\{`
 check("announcement bar only when text exists", /\{store\.announcement \? <div className="shop-announce">/.test(read("components/shop/header.tsx")));
 check("logo: optional, contained box; text fallback otherwise", /logo \? <span className="shop-logo"><Image/.test(read("components/shop/header.tsx")) && /: store\.store_name\}/.test(read("components/shop/header.tsx")));
 const css = read("app/shop/shop.css");
-check("hero CSS: explicit box sizes (phone full width at 4:5 capped 78svh; desktop definite height at 3:4, flush end), no layout shift", /\.shop-hero-ed-media \{[^}]*width: 100%; height: min\(125vw, 78svh\)/.test(css) && /\.shop-hero-ed-media \{ height: min\(76vh, 780px\); width: auto; max-width: 100%; aspect-ratio: 3 \/ 4; justify-self: end; \}/.test(css));
+check("hero CSS: explicit box sizes (phone full width at 4:5 capped 78svh; desktop definite height at 3:4, flush end), no layout shift", /\.shop-hero-ed-media \{[^}]*width: 100%; height: min\(133\.333vw, 78svh\)/.test(css) && /\.shop-hero-ed-media \{ justify-self: center; width: min\(100%, calc\(78svh \* 0\.75\)\); height: auto; aspect-ratio: 3 \/ 4; \}/.test(css) && /\.shop-hero-ed-media \{ height: min\(76vh, 780px\); width: auto; max-width: 100%; aspect-ratio: 3 \/ 4; justify-self: end; \}/.test(css));
 check("visual language: no gradients / heavy shadows / glass in the home CSS", !/\.shop-(hero|catblock|about|insta)[^{]*\{[^}]*(gradient|box-shadow|backdrop-filter)/.test(css));
 check("home reads stay at 2 RPCs (resolve shared with the layout + one bounded home call)", /Promise\.all\(\[getStore\(slug\), getHome\(slug\)\]\)/.test(page) && /rpc_shop_home", \{ p_slug: slug, p_limit: 4 \}/.test(read("lib/shop/queries.ts")));
 

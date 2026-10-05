@@ -19,7 +19,8 @@ const nextConfig = {
     formats: ["image/avif", "image/webp"],
     // published paths are content-addressed by uuid: a new upload is a new URL
     minimumCacheTTL: 2678400,
-    deviceSizes: [390, 640, 768, 1080, 1440, 1920],
+    // 828 = 390–414 @2x, 1200 = 390 @3x and the 585 px desktop hero @2x (no jump to 1440 / 1920)
+    deviceSizes: [390, 640, 768, 828, 1080, 1200, 1440, 1920],
     imageSizes: [64, 96, 128, 256, 384],
   },
 };

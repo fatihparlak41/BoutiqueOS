@@ -142,7 +142,7 @@ export function ImageManager({
                 required
                 className="block w-full text-xs text-text-secondary file:mr-3 file:min-h-9 file:rounded file:border file:border-border-strong file:bg-surface file:px-3 file:text-xs file:font-medium file:text-text-primary hover:file:bg-surface-muted"
               />
-              <p className="text-2xs text-text-muted">JPEG, PNG veya WebP; en fazla 4 MB.</p>
+              <p className="text-2xs text-text-muted">JPEG, PNG veya WebP; en fazla 4 MB. Dikey (portre) çekim, uzun kenarı en az 1200 px önerilir.</p>
             </div>
           </div>
           <FormMessage state={state} />
