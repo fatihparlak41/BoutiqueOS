@@ -8,6 +8,7 @@ import { reportDbError } from "@/lib/catalog/errors";
 import type { ActionState } from "@/lib/catalog/action-state";
 import type { ImageRole, OptionKind } from "@/lib/catalog/model";
 import { IMAGE_BUCKET, productImagePath, validateImageFile } from "@/lib/catalog/images";
+import { readImageInfo } from "@/lib/media/image-info";
 
 /**
  * Write side of the product catalogue.
@@ -583,8 +584,11 @@ export async function uploadImageAction(
   const check = validateImageFile(file);
   if (!check.ok) return fail(check.error);
 
-  const path = productImagePath(businessId, productId, check.ext);
   const bytes = new Uint8Array(await file!.arrayBuffer());
+  // the real pixel size, read from the file itself; bytes that are not the declared type are refused
+  const info = readImageInfo(bytes);
+  if (!info || info.mime !== check.mime) return fail("Görsel okunamadı. JPEG, PNG veya WebP bir dosya seçin.");
+  const path = productImagePath(businessId, productId, check.ext);
 
   const upload = await supabase.storage.from(IMAGE_BUCKET).upload(path, bytes, { contentType: check.mime, upsert: false });
   if (upload.error) {
@@ -611,6 +615,8 @@ export async function uploadImageAction(
       storage_path: path,
       mime_type: check.mime,
       byte_size: file!.size,
+      width: info.width,
+      height: info.height,
       alt_text: optionalText(formData, "alt_text"),
       sort_order: 100,
     })

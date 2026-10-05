@@ -85,7 +85,7 @@ export function CartView({ store }: { store: Store }) {
             return (
               <li key={l.variant_id} className="shop-bag-line" data-problem={problem ? "true" : undefined}>
                 <Link href={`${base}/urun/${l.product_slug}`} className="shop-bag-media" aria-label={l.name}>
-                  {img ? <Image src={img} alt="" fill sizes="(min-width: 900px) 120px, 96px" unoptimized /> : null}
+                  {img ? <Image src={img} alt="" fill sizes="(min-width: 900px) 120px, 96px" /> : null}
                 </Link>
                 <div className="shop-bag-info">
                   <div className="shop-bag-row">

@@ -23,11 +23,11 @@ export function ProductCard({ slug, card, currency, priority = false, sizes }: {
     <Link href={`/shop/${slug}/urun/${card.slug}`} className="shop-card" data-sold={sold ? "true" : undefined} data-testid="shop-card">
       <div className="shop-card-media">
         {img ? (
-          <Image src={img} alt={card.image?.alt ?? card.name} fill sizes={imgSizes} priority={priority} unoptimized className="shop-card-img" />
+          <Image src={img} alt={card.image?.alt ?? card.name} fill sizes={imgSizes} priority={priority} className="shop-card-img" />
         ) : (
           <span className="shop-card-empty" aria-hidden>{card.name.slice(0, 1)}</span>
         )}
-        {img && hover ? <Image src={hover} alt="" aria-hidden fill sizes={imgSizes} unoptimized className="shop-card-img shop-card-img-hover" /> : null}
+        {img && hover ? <Image src={hover} alt="" aria-hidden fill sizes={imgSizes} className="shop-card-img shop-card-img-hover" /> : null}
       </div>
       <div className="shop-card-body">
         <p className="shop-card-name">{card.name}</p>

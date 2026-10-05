@@ -39,7 +39,6 @@ export default async function OnlineStorePage({ searchParams }: { searchParams: 
   const admin = await getStorefrontAdmin(query, (page - 1) * PAGE, PAGE);
   const origin = siteOrigin();
   const sf = admin.storefront;
-  const live = Boolean(sf?.enabled);
   const pages = Math.max(1, Math.ceil(admin.total / PAGE));
 
   return (
@@ -47,22 +46,12 @@ export default async function OnlineStorePage({ searchParams }: { searchParams: 
       <PageHeader
         title="Online Mağaza"
         description="Kataloğunuz tek: burada yalnız neyin herkese açık görüneceğine ve mağazanın nasıl tanıtılacağına karar verirsiniz. Fiyat ve stok ürünlerden gelir."
-        actions={
-          sf ? (
-            <a href={`${origin}/shop/${sf.slug}`} target="_blank" rel="noopener noreferrer" className="text-sm underline-offset-4 hover:underline">
-              {live ? "Mağazayı aç ↗" : "Önizleme kapalı"}
-            </a>
-          ) : null
-        }
       />
 
-      <section className="space-y-3">
-        <SectionHeader title="Mağaza ayarları" meta={sf ? (live ? "yayında" : "kapalı") : "henüz kurulmadı"} />
-        <StorefrontSettingsForm settings={sf} branches={admin.branches} siteOrigin={origin} />
-        <p className="text-xs leading-relaxed text-text-muted">
-          Online ödeme ve sipariş bu sürümde yoktur; müşteri sepetini WhatsApp / Instagram ile iletir. Sepet stok ayırmaz. Özel alan adı platform tarafından ileride bağlanır.
-        </p>
-      </section>
+      <StorefrontSettingsForm settings={sf} branches={admin.branches} siteOrigin={origin} storeUrl={sf ? `${origin}/shop/${sf.slug}` : null} />
+      <p className="text-xs leading-relaxed text-text-muted">
+        Müşteri sepetinden sipariş talebi bırakır; ürünler ayırma süresi boyunca ayrılır ve ödeme mağazada teslim sırasında alınır. Online ödeme, kargo ve özel alan adı bu sürümde yoktur.
+      </p>
 
       <section className="space-y-3">
         <SectionHeader title="Ürünler" meta={`${admin.published_count} yayında · ${admin.total} aktif`} />

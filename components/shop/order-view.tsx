@@ -103,7 +103,7 @@ export function OrderView({ slug, order, token, justCreated }: { slug: string; o
               const img = publicImageUrl(it.image_path);
               return (
                 <li key={i} className="shop-co-line">
-                  <Link href={`${base}/urun/${it.product_slug}`} className="shop-co-thumb" aria-label={it.name}>{img ? <Image src={img} alt="" fill sizes="64px" unoptimized /> : null}</Link>
+                  <Link href={`${base}/urun/${it.product_slug}`} className="shop-co-thumb" aria-label={it.name}>{img ? <Image src={img} alt="" fill sizes="64px" /> : null}</Link>
                   <div className="shop-co-line-info">
                     <div className="shop-bag-row"><span>{it.name}</span><span className="shop-price" data-numeric>{formatShopPrice(it.line_total, order.currency)}</span></div>
                     <p className="shop-bag-meta">{it.labels ? `${lineLabels(it.labels)} · ` : ""}<span data-numeric>{it.quantity} adet</span></p>

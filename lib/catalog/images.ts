@@ -14,7 +14,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * subject to the SELECT policy — a member of one business cannot sign another's file.
  */
 export const IMAGE_BUCKET = "product-images";
-export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+// 4 MB: the server action body (multipart) must stay under the hosting request limit
+// (Vercel 4.5 MB; next.config serverActions.bodySizeLimit). The buckets themselves allow 5 MB.
+export const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+export const IMAGE_MAX_LABEL = "4 MB";
 export const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
@@ -25,7 +28,7 @@ export type ImageValidation =
 
 export function validateImageFile(file: File | null): ImageValidation {
   if (!file || file.size === 0) return { ok: false, error: "Bir görsel seçin." };
-  if (file.size > IMAGE_MAX_BYTES) return { ok: false, error: "Görsel en fazla 5 MB olabilir." };
+  if (file.size > IMAGE_MAX_BYTES) return { ok: false, error: `Görsel en fazla ${IMAGE_MAX_LABEL} olabilir.` };
   const mime = file.type;
   if (mime !== "image/jpeg" && mime !== "image/png" && mime !== "image/webp") {
     return { ok: false, error: "Yalnız JPEG, PNG veya WebP yüklenebilir." };

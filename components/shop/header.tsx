@@ -51,7 +51,7 @@ export function ShopHeader({ store }: { store: Store }) {
               <Menu aria-hidden strokeWidth={1.4} />
             </button>
             <Link href={base} className="shop-wordmark shop-brand-desktop" aria-label={`${store.store_name} ana sayfa`}>
-              {logo ? <Image src={logo} alt={store.store_name} width={140} height={32} unoptimized /> : store.store_name}
+              {logo ? <span className="shop-logo"><Image src={logo} alt={store.store_name} fill sizes="160px" /></span> : store.store_name}
             </Link>
             <nav className="shop-nav" aria-label="Alışveriş">
               <Link href={`${base}/urunler?sirala=newest`}>Yeni Gelenler</Link>
@@ -77,7 +77,7 @@ export function ShopHeader({ store }: { store: Store }) {
           </div>
 
           <Link href={base} className="shop-wordmark shop-brand-mobile" aria-label={`${store.store_name} ana sayfa`}>
-            {logo ? <Image src={logo} alt={store.store_name} width={120} height={28} unoptimized /> : store.store_name}
+            {logo ? <span className="shop-logo"><Image src={logo} alt={store.store_name} fill sizes="140px" /></span> : store.store_name}
           </Link>
 
           <div className="shop-header-end">

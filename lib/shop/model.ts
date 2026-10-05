@@ -22,6 +22,9 @@ export type Store = {
   contact_email: string | null;
   contact_phone: string | null;
   logo_path: string | null;
+  /** Public path of the homepage editorial image (store/<biz>/hero/<uuid>.<ext>), if any. */
+  hero_image_path: string | null;
+  hero_heading: string | null;
   theme: Record<string, unknown>;
   stock_display: StockDisplay;
   low_stock_threshold: number;
@@ -49,7 +52,9 @@ export type ProductCard = {
   published_at: string | null;
 };
 
-export type ShopHome = { featured: ProductCard[]; new_arrivals: ProductCard[] };
+/** Editorial category block: a published category and an image from its newest published product. */
+export type ShopHomeCategory = { slug: string; name: string; count: number; image: { path: string; alt: string | null; width: number | null; height: number | null } };
+export type ShopHome = { featured: ProductCard[]; new_arrivals: ProductCard[]; categories: ShopHomeCategory[] };
 /** Filter vocabulary of the current category + search scope: public option-value names only. */
 export type ShopFacets = { colors: Array<{ value: string; hex: string | null }>; sizes: Array<{ value: string }> };
 export type ProductList = { rows: ProductCard[]; total: number; limit: number; offset: number; category: { slug: string; name: string } | null; facets: ShopFacets };

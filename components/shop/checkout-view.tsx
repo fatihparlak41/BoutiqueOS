@@ -208,7 +208,7 @@ export function CheckoutView({ store }: { store: Store }) {
             const problem = lineProblem(l, f, exact);
             return (
               <li key={l.variant_id} className="shop-co-line">
-                <div className="shop-co-thumb">{img ? <Image src={img} alt="" fill sizes="64px" unoptimized /> : null}</div>
+                <div className="shop-co-thumb">{img ? <Image src={img} alt="" fill sizes="64px" /> : null}</div>
                 <div className="shop-co-line-info">
                   <div className="shop-bag-row"><span>{l.name}</span><span className="shop-price" data-numeric>{formatShopPrice((f?.price ?? l.unit_price) * l.quantity, l.currency)}</span></div>
                   <p className="shop-bag-meta">{l.labels ? `${lineLabels(l.labels)} · ` : ""}<span data-numeric>{l.quantity} adet</span></p>

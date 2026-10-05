@@ -273,7 +273,7 @@ export function ProductView({ store, product, fresh }: { store: Store; product: 
             <button type="button" className="shop-icon" aria-label="Kapat" onClick={closeAdded}><X aria-hidden strokeWidth={1.4} /></button>
           </div>
           <div className="shop-added-item">
-            <div className="shop-added-thumb">{added.image ? <Image src={added.image} alt="" fill sizes="64px" unoptimized /> : null}</div>
+            <div className="shop-added-thumb">{added.image ? <Image src={added.image} alt="" fill sizes="64px" /> : null}</div>
             <div>
               <p className="shop-added-name">{added.name}</p>
               {added.labels ? <p className="shop-added-meta">{added.labels}</p> : null}

@@ -4,7 +4,9 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireTenant } from "@/lib/tenant";
 import { reportDbError } from "@/lib/db-errors";
-import { IMAGE_BUCKET } from "@/lib/catalog/images";
+import { randomUUID } from "node:crypto";
+import { IMAGE_BUCKET, validateImageFile } from "@/lib/catalog/images";
+import { readImageInfo } from "@/lib/media/image-info";
 import { shopTag } from "@/lib/shop/queries";
 import { PUBLIC_IMAGE_ROLES, storefrontCaps, type StorefrontActionState } from "@/lib/storefront/model";
 
@@ -56,11 +58,13 @@ export async function saveStorefrontAction(_prev: StorefrontActionState, formDat
     orders_enabled: formData.get("orders_enabled") === "on",
     order_hold_minutes: Number.parseInt(String(formData.get("order_hold_minutes") ?? "1440"), 10),
     pickup_note: String(formData.get("pickup_note") ?? "").trim(),
+    hero_heading: String(formData.get("hero_heading") ?? "").trim(),
   };
   if (!/^[a-z0-9](?:[a-z0-9-]{1,48}[a-z0-9])$/.test(settings.slug)) return { error: "Mağaza adresi 3–50 karakter olmalı; yalnız küçük harf, rakam ve tire.", ok: false };
   if (settings.store_name.length < 2) return { error: "Mağaza adı gerekli.", ok: false };
   if (settings.fulfillment_branch_id && !UUID.test(settings.fulfillment_branch_id)) return { error: "Şube tanınmadı.", ok: false };
   if (!["state", "exact"].includes(settings.stock_display)) return { error: "Stok gösterimi tanınmadı.", ok: false };
+  if (settings.hero_heading.length > 80) return { error: "Ana başlık en fazla 80 karakter olabilir.", ok: false };
   if (!Number.isFinite(settings.order_hold_minutes) || settings.order_hold_minutes < 30 || settings.order_hold_minutes > 10080) return { error: "Ayırma süresi 30 dakika ile 7 gün arasında olmalı.", ok: false };
   const supabase = await createClient();
   const { error } = await supabase.rpc("rpc_storefront_upsert", { p_business_id: active.business_id, p_settings: settings });
@@ -174,4 +178,77 @@ export async function publishImageAction(_prev: StorefrontActionState, formData:
   if (error) return { error: reportDbError("publish image", error), ok: false };
   refresh(await currentSlug(active.business_id));
   return { error: null, ok: true };
+}
+
+// ------------------------------------------------------------------ store media (logo / hero)
+
+const MEDIA_KINDS = ["logo", "hero"] as const;
+type MediaKind = (typeof MEDIA_KINDS)[number];
+const isMediaKind = (v: string): v is MediaKind => (MEDIA_KINDS as readonly string[]).includes(v);
+/** Below this width a hero is accepted but the merchant is told it may look soft on large screens. */
+const HERO_RECOMMENDED_WIDTH = 1600;
+
+/**
+ * Uploads a logo or hero image. The file is checked (type, size, and its bytes must really
+ * be that type), stored in the public bucket under store/<this business>/<kind>/<uuid>.<ext>
+ * with the merchant's own session — the storage policy re-checks owner/manager of the
+ * business named by the path — and only then recorded by rpc_storefront_set_media, which
+ * re-validates the path and that the object exists. The replaced object is removed.
+ */
+export async function uploadStoreMediaAction(_prev: StorefrontActionState, formData: FormData): Promise<StorefrontActionState> {
+  const active = await manager();
+  if (!active) return { error: "Mağaza görsellerini yalnız sahip ve yöneticiler değiştirir.", ok: false };
+  const kind = String(formData.get("kind") ?? "");
+  if (!isMediaKind(kind)) return { error: "Görsel türü tanınmadı.", ok: false };
+  const entry = formData.get("file");
+  const file = entry instanceof File ? entry : null;
+  const check = validateImageFile(file);
+  if (!check.ok) return { error: check.error, ok: false };
+  const bytes = new Uint8Array(await file!.arrayBuffer());
+  const info = readImageInfo(bytes);
+  if (!info || info.mime !== check.mime) return { error: "Görsel okunamadı. JPEG, PNG veya WebP bir dosya seçin.", ok: false };
+
+  const path = `store/${active.business_id}/${kind}/${randomUUID()}.${check.ext}`;
+  const supabase = await createClient();
+  const up = await supabase.storage.from(PUBLIC_BUCKET).upload(path, bytes, { contentType: check.mime, upsert: false, cacheControl: "31536000" });
+  if (up.error) {
+    console.error("[storefront] media upload refused:", up.error.message);
+    return { error: "Görsel yüklenemedi. Yetkinizi ve dosyayı kontrol edin.", ok: false };
+  }
+  const { data, error } = await supabase.rpc("rpc_storefront_set_media", { p_business_id: active.business_id, p_kind: kind, p_path: path });
+  if (error) {
+    await supabase.storage.from(PUBLIC_BUCKET).remove([path]);
+    return { error: reportDbError("set store media", error), ok: false };
+  }
+  const r = data as { previous_path: string | null; slug: string };
+  if (r.previous_path) {
+    const removed = await supabase.storage.from(PUBLIC_BUCKET).remove([r.previous_path]);
+    if (removed.error) console.error("[storefront] old media not removed:", removed.error.message);
+  }
+  refresh(r.slug);
+  const soft = kind === "hero" && info.width < HERO_RECOMMENDED_WIDTH;
+  return {
+    error: null,
+    ok: true,
+    message: soft
+      ? `Kaydedildi. Görsel ${info.width} × ${info.height} px; büyük ekranlarda yumuşak görünebilir — en az ${HERO_RECOMMENDED_WIDTH} px genişlik önerilir.`
+      : `Kaydedildi (${info.width} × ${info.height} px).`,
+  };
+}
+
+export async function removeStoreMediaAction(_prev: StorefrontActionState, formData: FormData): Promise<StorefrontActionState> {
+  const active = await manager();
+  if (!active) return { error: "Mağaza görsellerini yalnız sahip ve yöneticiler değiştirir.", ok: false };
+  const kind = String(formData.get("kind") ?? "");
+  if (!isMediaKind(kind)) return { error: "Görsel türü tanınmadı.", ok: false };
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("rpc_storefront_set_media", { p_business_id: active.business_id, p_kind: kind, p_path: null });
+  if (error) return { error: reportDbError("remove store media", error), ok: false };
+  const r = data as { previous_path: string | null; slug: string };
+  if (r.previous_path) {
+    const removed = await supabase.storage.from(PUBLIC_BUCKET).remove([r.previous_path]);
+    if (removed.error) console.error("[storefront] media object not removed:", removed.error.message);
+  }
+  refresh(r.slug);
+  return { error: null, ok: true, message: "Kaldırıldı." };
 }

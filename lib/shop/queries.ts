@@ -35,11 +35,11 @@ export const getStore = (slug: string): Promise<Store | null> =>
 export const getHome = (slug: string): Promise<ShopHome | null> =>
   unstable_cache(
     async () => {
-      const { data, error } = await anon().rpc("rpc_shop_home", { p_slug: slug, p_limit: 8 });
+      const { data, error } = await anon().rpc("rpc_shop_home", { p_slug: slug, p_limit: 4 });
       if (error) throw new Error(`Mağaza ana sayfası okunamadı: ${error.message}`);
       return (data ?? null) as ShopHome | null;
     },
-    ["shop-home", slug],
+    ["shop-home-v2", slug],
     { revalidate: 60, tags: [shopTag(slug)] },
   )();
 

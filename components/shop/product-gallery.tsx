@@ -66,7 +66,6 @@ export function ProductGallery({ images, name, resetKey }: { images: ShopImage[]
                   fill
                   sizes="(min-width: 900px) 58vw, 100vw"
                   priority={i === 0}
-                  unoptimized
                   className="shop-gal-img"
                 />
               ) : null}

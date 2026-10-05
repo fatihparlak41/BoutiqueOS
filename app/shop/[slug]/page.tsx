@@ -2,71 +2,147 @@ import Link from "next/link";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { getHome, getStore } from "@/lib/shop/queries";
-import { publicImageUrl } from "@/lib/shop/model";
+import { publicImageUrl, type ProductCard, type ShopHome, type Store } from "@/lib/shop/model";
 import { ProductGrid } from "@/components/shop/product-card";
 
+const SECTION_CARDS = 4;
+
 /**
- * Storefront home. Editorial opening (store name, tagline, the first featured image as
- * the hero), then featured products, new arrivals and the category strip. A store with
- * little data degrades to the opening and whatever exists — no placeholder banners.
+ * Storefront home, editorial order: hero → Yeni Gelenler → category blocks → Öne Çıkanlar →
+ * about → Instagram. Every section renders only from real, published data — no placeholder
+ * banners, no invented campaign copy. Two reads: the store (shared with the layout, cached)
+ * and one bounded home response. Only the hero (or the first fallback image) is a priority
+ * image; everything below the fold loads lazily through the image optimiser.
  */
 export default async function ShopHome({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [store, home] = await Promise.all([getStore(slug), getHome(slug)]);
   if (!store || !home) notFound();
-  const hero = home.featured.find((c) => c.image)?.image ?? home.new_arrivals.find((c) => c.image)?.image ?? null;
-  const heroUrl = publicImageUrl(hero?.path);
   const base = `/shop/${store.slug}`;
+  const arrivals = home.new_arrivals.slice(0, SECTION_CARDS);
+  const featured = home.featured.slice(0, SECTION_CARDS);
+  const blocks = home.categories ?? [];
 
   return (
-    <>
-      <section className="shop-hero">
-        <p className="shop-eyebrow">{store.tagline ?? "Yeni sezon"}</p>
-        <h1 className="shop-h1" style={{ marginTop: 12 }}>{store.store_name}</h1>
-        {store.about ? <p className="shop-lead" style={{ marginTop: 16 }}>{store.about}</p> : null}
-        {store.published_count > 0 ? (
-          <p style={{ marginTop: 24 }}>
-            <Link href={`${base}/urunler`} className="shop-btn shop-btn-ghost" style={{ width: "auto" }}>Koleksiyonu keşfet</Link>
-          </p>
-        ) : (
-          <p className="shop-muted" style={{ marginTop: 24 }}>Koleksiyon yakında burada.</p>
-        )}
-        {heroUrl ? (
-          <div className="shop-hero-media">
-            <Image src={heroUrl} alt={hero?.alt ?? store.store_name} width={hero?.width ?? 1600} height={hero?.height ?? 900} priority unoptimized />
+    <div className="shop-home">
+      <Hero store={store} home={home} base={base} />
+
+      {arrivals.length > 0 ? (
+        <section className="shop-section" aria-labelledby="h-yeni" data-testid="shop-home-new">
+          <div className="shop-section-head">
+            <h2 id="h-yeni" className="shop-h2">Yeni Gelenler</h2>
+            <Link href={`${base}/urunler?sirala=newest`}>Tümünü gör</Link>
           </div>
-        ) : null}
+          <ProductGrid slug={store.slug} cards={arrivals} currency={store.currency} />
+        </section>
+      ) : null}
+
+      {blocks.length >= 2 ? (
+        <section className="shop-section" aria-labelledby="h-kat" data-testid="shop-home-categories">
+          <div className="shop-section-head">
+            <h2 id="h-kat" className="shop-h2">Kategoriler</h2>
+          </div>
+          <ul className="shop-catblocks" data-count={Math.min(blocks.length, 3)}>
+            {blocks.map((c) => {
+              const url = publicImageUrl(c.image.path);
+              return (
+                <li key={c.slug}>
+                  <Link href={`${base}/kategori/${c.slug}`} className="shop-catblock">
+                    <span className="shop-catblock-media">
+                      {url ? <Image src={url} alt="" fill sizes="(min-width: 900px) 33vw, 72vw" className="shop-catblock-img" /> : null}
+                    </span>
+                    <span className="shop-catblock-name">{c.name}</span>
+                    <span className="shop-catblock-cta">Keşfet</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {featured.length > 0 ? (
+        <section className="shop-section" aria-labelledby="h-one" data-testid="shop-home-featured">
+          <div className="shop-section-head">
+            <h2 id="h-one" className="shop-h2">Öne Çıkanlar</h2>
+            <Link href={`${base}/urunler`}>Tümünü gör</Link>
+          </div>
+          <ProductGrid slug={store.slug} cards={featured} currency={store.currency} />
+        </section>
+      ) : null}
+
+      {store.about ? (
+        <section className="shop-about" aria-labelledby="h-about" data-testid="shop-home-about">
+          <p id="h-about" className="shop-eyebrow">Hakkımızda</p>
+          <p className="shop-about-text">{store.about}</p>
+        </section>
+      ) : null}
+
+      {store.instagram ? (
+        <section className="shop-insta" data-testid="shop-home-instagram">
+          <p className="shop-eyebrow">Instagram</p>
+          <a className="shop-insta-link" href={`https://www.instagram.com/${store.instagram}/`} target="_blank" rel="noopener noreferrer">
+            Instagram&apos;da bizi takip edin
+          </a>
+          <p className="shop-insta-handle">@{store.instagram}</p>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function HeroCta({ store, base }: { store: Store; base: string }) {
+  return store.published_count > 0 ? (
+    <Link href={`${base}/urunler?sirala=newest`} className="shop-btn shop-hero-cta" data-testid="shop-hero-cta">Yeni Gelenleri Keşfet</Link>
+  ) : (
+    <p className="shop-muted">Koleksiyon yakında burada.</p>
+  );
+}
+
+/**
+ * The merchant's own hero image when one is set: image first on phones (portrait 4:5, the
+ * copy and the CTA right below — never a full-screen poster), image beside the copy on
+ * desktop at a height that keeps the next section in view. Without a hero image: the store
+ * name and tagline, plus up to three current product photographs when there are at least two.
+ */
+function Hero({ store, home, base }: { store: Store; home: ShopHome; base: string }) {
+  const hero = publicImageUrl(store.hero_image_path);
+  if (hero) {
+    return (
+      <section className="shop-hero-ed" data-testid="shop-hero" data-variant="image">
+        <div className="shop-hero-ed-media">
+          <Image src={hero} alt={store.hero_heading ?? store.store_name} fill priority sizes="(min-width: 900px) 44vw, 100vw" className="shop-hero-ed-img" />
+        </div>
+        <div className="shop-hero-ed-copy">
+          {store.tagline ? <p className="shop-eyebrow">{store.tagline}</p> : null}
+          <h1 className="shop-hero-ed-title">{store.hero_heading ?? store.store_name}</h1>
+          <HeroCta store={store} base={base} />
+        </div>
       </section>
-
-      {store.categories.length > 1 ? (
-        <section className="shop-section" style={{ paddingTop: 0 }}>
-          <nav className="shop-cats" aria-label="Kategoriler">
-            {store.categories.map((c) => (
-              <Link key={c.slug} href={`${base}/kategori/${c.slug}`} className="shop-chip">{c.name}</Link>
-            ))}
-          </nav>
-        </section>
+    );
+  }
+  const photos: ProductCard[] = home.new_arrivals.filter((c) => c.image).slice(0, 3);
+  return (
+    <section className="shop-hero-fb" data-testid="shop-hero" data-variant="fallback">
+      <div className="shop-hero-fb-copy">
+        <h1 className="shop-display">{store.store_name}</h1>
+        {store.tagline ? <p className="shop-lead">{store.tagline}</p> : null}
+        <HeroCta store={store} base={base} />
+      </div>
+      {photos.length >= 2 ? (
+        <ul className="shop-hero-fb-media" data-count={photos.length}>
+          {photos.map((c, i) => {
+            const url = publicImageUrl(c.image?.path);
+            return (
+              <li key={c.slug}>
+                <Link href={`${base}/urun/${c.slug}`} aria-label={c.name}>
+                  {url ? <Image src={url} alt="" fill priority={i === 0} sizes="(min-width: 900px) 30vw, 50vw" className="shop-hero-fb-img" /> : null}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
-
-      {home.featured.length > 0 ? (
-        <section className="shop-section" style={{ paddingTop: 0 }}>
-          <div className="shop-section-head">
-            <h2 className="shop-h2">Öne çıkanlar</h2>
-            <Link href={`${base}/urunler`}>Tümü</Link>
-          </div>
-          <ProductGrid slug={store.slug} cards={home.featured} currency={store.currency} eager={2} />
-        </section>
-      ) : null}
-
-      {home.new_arrivals.length > 0 ? (
-        <section className="shop-section" style={{ paddingTop: home.featured.length > 0 ? undefined : 0 }}>
-          <div className="shop-section-head">
-            <h2 className="shop-h2">Yeni gelenler</h2>
-            <Link href={`${base}/urunler`}>Tümü</Link>
-          </div>
-          <ProductGrid slug={store.slug} cards={home.new_arrivals} currency={store.currency} eager={home.featured.length > 0 ? 0 : 2} />
-        </section>
-      ) : null}
-    </>
+    </section>
   );
 }

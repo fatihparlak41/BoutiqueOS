@@ -6150,6 +6150,139 @@ DROP SEQUENCE public.t79_future_seq;
 DROP TABLE public.t79_future_table;
 
 -- ============================================================
+-- T80  Editorial homepage: hero / logo media + category blocks  (Phase 14C Pass 5)
+-- ============================================================
+-- zz-store fixture (state at the end of T76/T78). Store media lives in the public bucket at
+-- store/<business>/{logo|hero}/<uuid>.<ext>; only owner/manager of that business may upload
+-- (storage policy) and record (rpc_storefront_set_media) it; CHECKs bind the columns to the
+-- row's own tenant. Category blocks are compared with an independent ground-truth query.
+SELECT t_logout();
+CREATE FUNCTION t80_q(p_sql TEXT) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE b BOOLEAN; BEGIN EXECUTE 'SELECT (' || p_sql || ')' INTO b; RETURN COALESCE(b, false); END $$;
+CREATE FUNCTION t80_cat_truth() RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(string_agg(c.slug, ',' ORDER BY c.sort_order, c.name), '') FROM categories c
+  WHERE c.business_id = t_get('bizS') AND c.is_active
+    AND EXISTS (SELECT 1 FROM products p JOIN product_images i ON i.product_id = p.id
+                WHERE p.category_id = c.id AND p.web_published AND p.status = 'active' AND i.public_path IS NOT NULL
+                  AND i.role = ANY (ARRAY['product_main','product_gallery','variant']::image_role[]));
+$$;
+CREATE FUNCTION t80_cats(r JSONB) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE(string_agg(c ->> 'slug', ',' ORDER BY n), '') FROM jsonb_array_elements(r -> 'categories') WITH ORDINALITY AS t(c, n);
+$$;
+CREATE FUNCTION t80_cat_count(p_slug TEXT) RETURNS BIGINT LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT count(*) FROM products p JOIN categories x ON x.id = p.category_id
+  WHERE x.business_id = t_get('bizS') AND x.slug = p_slug AND p.web_published AND p.status = 'active';
+$$;
+GRANT EXECUTE ON FUNCTION t80_cat_truth(), t80_cats(JSONB), t80_cat_count(TEXT) TO anon;
+SELECT t_set('t80_hero', 'cccccccc-0000-4000-8000-0000000000e1');
+SELECT t_set('t80_logo', 'cccccccc-0000-4000-8000-0000000000e2');
+SELECT t_set('t80_hero2', 'cccccccc-0000-4000-8000-0000000000e3');
+
+SELECT t_check('T80a schema: hero columns + tenant-bound CHECKs on hero and logo; media RPC is authenticated-only',
+  (SELECT count(*) FROM information_schema.columns WHERE table_name = 'storefronts' AND column_name IN ('hero_image_path', 'hero_heading')) = 2
+  AND (SELECT count(*) FROM pg_constraint WHERE conname IN ('chk_storefronts_hero_path', 'chk_storefronts_logo_tenant')) = 2
+  AND has_function_privilege('authenticated', 'rpc_storefront_set_media(uuid, text, text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'rpc_storefront_set_media(uuid, text, text)', 'EXECUTE'));
+SELECT t_check('T80a2 the hardened anon surface is unchanged (no table / view / sequence privilege)',
+  t79_anon_rel(ARRAY['r','p','v','m','S']::"char"[]) = '', t79_anon_rel(ARRAY['r','p','v','m','S']::"char"[]));
+
+-- ---------------- uploads (storage policy) ----------------
+SELECT t_login('a12');
+SELECT t_ok('T80b the owner uploads a hero and a logo into the own store namespace',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES
+       ('storefront-images', 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero') || '.jpg', auth.uid()),
+       ('storefront-images', 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero2') || '.webp', auth.uid()),
+       ('storefront-images', 'store/' || t_get('bizS') || '/logo/' || t_get('t80_logo') || '.png', auth.uid()) $q$);
+SELECT t_err('T80b2 the owner cannot upload into another tenant''s store namespace',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('storefront-images', 'store/' || t_get('bizB') || '/hero/' || t_get('t80_hero') || '.jpg', auth.uid()) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T80b3 the owner of another business cannot upload into this store namespace',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('storefront-images', 'store/' || t_get('bizS') || '/hero/' || gen_random_uuid() || '.jpg', auth.uid()) $q$, '42501');
+SELECT t_logout();
+SELECT t_login('a9');
+SELECT t_err('T80b4 stock staff of this business cannot upload store media',
+  $q$ INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('storefront-images', 'store/' || t_get('bizS') || '/hero/' || gen_random_uuid() || '.jpg', auth.uid()) $q$, '42501');
+SELECT t_err('T80b5 nor record it', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', NULL) $q$, 'FORBIDDEN');
+SELECT t_logout();
+-- objects that exist but must never become store media: another tenant's hero, a product copy
+INSERT INTO storage.objects (bucket_id, name) VALUES ('storefront-images', 'store/' || t_get('bizB') || '/hero/' || t_get('t80_hero') || '.jpg');
+INSERT INTO storage.objects (bucket_id, name) VALUES ('storefront-images', 'store/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/' || t_get('t80_hero') || '.jpg');
+
+-- ---------------- recording media (rpc_storefront_set_media) ----------------
+SELECT t_login('a12');
+SELECT t_ok('T80c the owner records the hero', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero') || '.jpg') $q$);
+SELECT t_check('T80c2 the store row carries it', t80_q($q$ SELECT hero_image_path = 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero') || '.jpg' FROM storefronts WHERE business_id = t_get('bizS') $q$));
+SELECT t_check('T80c3 replacing returns the previous path (so the app can remove the old object)',
+  (SELECT r ->> 'previous_path' = 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero') || '.jpg'
+   FROM rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero2') || '.webp') r));
+SELECT t_err('T80d another tenant''s hero path is refused', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizB') || '/hero/' || t_get('t80_hero') || '.jpg') $q$, 'INVALID_PATH');
+SELECT t_err('T80d2 a product copy cannot become the hero', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/products/' || t75_pid('ELB-A') || '/' || t_get('t80_hero') || '.jpg') $q$, 'INVALID_PATH');
+SELECT t_err('T80d3 a logo path cannot become the hero', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/logo/' || t_get('t80_logo') || '.png') $q$, 'INVALID_PATH');
+SELECT t_err('T80d4 a private bucket path is refused', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'business/' || t_get('bizS') || '/products/x/' || t_get('t80_hero') || '.jpg') $q$, 'INVALID_PATH');
+SELECT t_err('T80d5 traversal / free text is refused', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/hero/../../' || t_get('bizB') || '/hero/' || t_get('t80_hero') || '.jpg') $q$, 'INVALID_PATH');
+SELECT t_err('T80d6 a path whose object was never uploaded is refused', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', 'store/' || t_get('bizS') || '/hero/' || gen_random_uuid() || '.jpg') $q$, 'MEDIA_NOT_FOUND');
+SELECT t_err('T80d7 an unknown media kind is refused', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'banner', NULL) $q$, 'INVALID_KIND');
+SELECT t_ok('T80e the owner records and then removes a logo', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'logo', 'store/' || t_get('bizS') || '/logo/' || t_get('t80_logo') || '.png') $q$);
+SELECT t_check('T80e2 removing the logo clears it and hands back the old path',
+  (SELECT r ->> 'path' IS NULL AND r ->> 'previous_path' = 'store/' || t_get('bizS') || '/logo/' || t_get('t80_logo') || '.png' FROM rpc_storefront_set_media(t_get('bizS'), 'logo', NULL) r)
+  AND t80_q($q$ SELECT logo_path IS NULL FROM storefronts WHERE business_id = t_get('bizS') $q$));
+SELECT t_err('T80e3 the merchant cannot write the column directly', $q$ UPDATE storefronts SET hero_image_path = NULL WHERE business_id = t_get('bizS') $q$, '42501');
+SELECT t_logout();
+SELECT t_login('u5');
+SELECT t_err('T80f the owner of another business cannot set this store''s media', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', NULL) $q$, 'FORBIDDEN');
+SELECT t_logout();
+SELECT t_login('u1');
+SELECT t_err('T80f2 the TLC owner cannot point a store at another tenant''s media either', $q$ SELECT rpc_storefront_set_media(t_get('biz'), 'hero', 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero2') || '.webp') $q$, 'INVALID_PATH');
+SELECT t_logout();
+SET ROLE anon;
+SELECT t_err('T80f3 anon cannot set media', $q$ SELECT rpc_storefront_set_media(t_get('bizS'), 'hero', NULL) $q$, '42501');
+RESET ROLE;
+SELECT t_err('T80g the CHECK binds the hero to the row''s own tenant even for a maintenance write',
+  $q$ UPDATE storefronts SET hero_image_path = 'store/' || t_get('bizB') || '/hero/' || t_get('t80_hero') || '.jpg' WHERE business_id = t_get('bizS') $q$, '23514');
+SELECT t_err('T80g2 the CHECK binds the logo to the row''s own tenant', $q$ UPDATE storefronts SET logo_path = 'store/' || t_get('bizB') || '/logo/' || t_get('t80_logo') || '.png' WHERE business_id = t_get('bizS') $q$, '23514');
+
+-- ---------------- hero heading (settings) ----------------
+SELECT t_login('a12');
+SELECT t_ok('T80h the hero heading is saved with the settings', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), jsonb_build_object('slug', 'zz-store', 'store_name', 'ZZ Store', 'enabled', true, 'fulfillment_branch_id', t_get('brS')::text, 'stock_display', 'exact', 'low_stock_threshold', 2, 'tagline', 'sessiz lüks', 'about', 'Küçük bir atölye.', 'hero_heading', '  Yeni sezon  ')) $q$);
+SELECT t_check('T80h2 trimmed and stored', t80_q($q$ SELECT hero_heading = 'Yeni sezon' FROM storefronts WHERE business_id = t_get('bizS') $q$));
+SELECT t_err('T80h3 a heading longer than 80 is refused', $q$ SELECT rpc_storefront_upsert(t_get('bizS'), jsonb_build_object('slug', 'zz-store', 'store_name', 'ZZ Store', 'hero_heading', repeat('a', 81))) $q$, 'INVALID_HERO_HEADING');
+SELECT t_logout();
+
+-- ---------------- public reads ----------------
+-- an UNPUBLISHED product (E) gets a public image copy: it must never feed the home page
+UPDATE product_images SET public_path = NULL WHERE public_path LIKE '%/aaaaaaaa-0000-4000-8000-0000000000e9.jpg';
+INSERT INTO product_images (product_id, role, storage_path, public_path, mime_type, byte_size, width, height)
+VALUES (t75_pid('CKT-E'), 'product_main', 'business/' || t_get('bizS') || '/products/' || t75_pid('CKT-E') || '/aaaaaaaa-0000-4000-8000-0000000000e9.jpg',
+        'store/' || t_get('bizS') || '/products/' || t75_pid('CKT-E') || '/aaaaaaaa-0000-4000-8000-0000000000e9.jpg', 'image/jpeg', 1000, 596, 830);
+SET ROLE anon;
+SELECT t_check('T80i resolve exposes the hero path + heading (public store/ paths only)',
+  (SELECT r ->> 'hero_image_path' = 'store/' || t_get('bizS') || '/hero/' || t_get('t80_hero2') || '.webp' AND r ->> 'hero_heading' = 'Yeni sezon' AND r ->> 'logo_path' IS NULL
+   FROM rpc_shop_resolve('zz-store') r),
+  (SELECT concat_ws(' | ', r ->> 'hero_image_path', r ->> 'hero_heading', r ->> 'logo_path') FROM rpc_shop_resolve('zz-store') r));
+SELECT t_check('T80j home category blocks = published categories with a public product image (ground truth), in category order',
+  (SELECT t80_cats(r) = t80_cat_truth() AND jsonb_array_length(r -> 'categories') >= 1 FROM rpc_shop_home('zz-store') r),
+  (SELECT t80_cats(r) || ' vs ' || t80_cat_truth() FROM rpc_shop_home('zz-store') r));
+SELECT t_check('T80j2 every block image is a public store/ copy with exactly path/alt/width/height, never a private path',
+  (SELECT bool_and(c -> 'image' ->> 'path' LIKE 'store/%' AND (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(c -> 'image') k) = ARRAY['alt','height','path','width'])
+   FROM rpc_shop_home('zz-store') r, jsonb_array_elements(r -> 'categories') c)
+  AND (SELECT r::text NOT LIKE '%business/%' FROM rpc_shop_home('zz-store') r));
+SELECT t_check('T80k the unpublished product never feeds the home page (blocks, new arrivals, featured)',
+  (SELECT r::text NOT LIKE '%0000000000e9%' AND r::text NOT LIKE '%Gizli Ceket%' FROM rpc_shop_home('zz-store') r));
+SELECT t_check('T80k2 block counts are published products only',
+  (SELECT bool_and((c ->> 'count')::int = t80_cat_count(c ->> 'slug'))
+   FROM rpc_shop_home('zz-store') r, jsonb_array_elements(r -> 'categories') c));
+SELECT t_check('T80l home stays bounded: ≤ 6 blocks; another tenant''s store is not reachable by this slug',
+  (SELECT jsonb_array_length(r -> 'categories') <= 6 FROM rpc_shop_home('zz-store') r) AND rpc_shop_home('no-such-store') IS NULL);
+RESET ROLE;
+-- an archived product leaves its category block (ground truth follows)
+UPDATE products SET web_published = false WHERE id = t75_pid('PNT-C');
+SET ROLE anon;
+SELECT t_check('T80m unpublishing the only trousers removes the Pantolon block',
+  (SELECT t80_cats(r) = t80_cat_truth() AND t80_cats(r) NOT LIKE '%pantolon%' FROM rpc_shop_home('zz-store') r));
+RESET ROLE;
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$
