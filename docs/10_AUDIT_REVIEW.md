@@ -1362,3 +1362,27 @@ Telefon orijinal JPEG'i indirmez. Kaydırmadan önceki ek istekler Chrome'un laz
 **Gate:** fresh-DB **1852/0** (T80 35), `lint_sql` 0/0, `test:ui` 39+28+50+15+24+30+24+28+6+**30** (`check_storefront_home.mjs`), `test:auth` temiz, lint/typecheck/build temiz, sır/token taraması temiz.
 
 **Kalan görsel konular:** kaynak çözünürlüğü 596 px (büyük ekranlarda yumuşak); Siyah Body beyaz fonlu düz çekim, diğerleri gri stüdyo → kartlarda fon farkı; "Triko" bloğu en yeni ürünün görselini (Siyah Body) gösterir — kategori görseli seçimi otomatik; Öne Çıkanlar'da tek ürün olduğundan satır boş kalır; telefonda hero 4:5 kırpımında botlar kısmen kesilir.
+
+## 40. Faz 14C Pass 5.1 — ana sayfa görsel cilası (2026-10-05)
+
+**SQL yok.** Kök neden (hero `srcset` seçimi): `sizes="(min-width: 900px) 44vw, 100vw"` gerçek çizim genişliğini anlatmıyordu (masaüstü kutusu en çok 585 px, `44vw` 634 px diyordu; tablette `100vw` 768 px diyordu, kutu 599 px) ve `deviceSizes` 1080 → 1440 → 1920 arasında ara kova içermiyordu; tarayıcı DPR ile çarpıp bir üst adayı seçiyordu. Düzeltme: `HERO_SIZES = "(min-width: 1330px) 585px, (min-width: 900px) 44vw, (min-width: 600px) 600px, 100vw"` + `deviceSizes` `[390, 640, 768, 828, 1080, 1200, 1440, 1920]`. Kaynak 596 px olduğundan bugün tüm varyantlar ~9 KB (optimizer büyütmez); düzeltme 1600 px+ gerçek hero'lar için anlamlıdır.
+
+| Görünüm | Kutu (önce → sonra) | Seçilen aday (önce → sonra) | Aktarım (sonra) | LCP (sonra) | CLS |
+|---|---|---|---|---|---|
+| 390 @3x | 390×488 → **390×520** | 1440 → **1200** | 9.012 B AVIF | hero, 2,19 s | 0 |
+| 430 @3x | 430×538 → 430×573 | 1440 → 1440 (1290 px gerekir) | 8.872 B | hero, 1,54 s | 0 |
+| 768 @2x | 768×799 → **599×799** | 1920 → **1200** | 8.850 B | hero, 0,82 s | 0 |
+| 1440 @1x | 513×684 | 640 → 640 | 8.882 B | hero, 0,77 s | 0 |
+| 1440 @2x | 513×684 | 1440 → **1200** | 8.858 B | hero, 0,60 s | 0,0001 |
+
+(canlı, başsız Chrome, önbellek kapalı, ağ kısıtlaması yok; LCP soğuk/sıcak optimizer önbelleğine göre oynar.)
+
+**Hero kadrajı:** telefonda kutu 4:5 → **3:4** (`min(133.333vw, 78svh)`; moda portrelerinin çoğuyla aynı biçim — baş ve ayak kadrajda kalır), `object-position: 50% 40%` (görsele özgü ayar yok). Tablet (600–899): ortalanmış 3:4 portre + ortalanmış metin ve CTA (geniş kırpım yerine). Masaüstü değişmedi. Kaynak dosyaya dokunulmadı, mobil hero alanı eklenmedi.
+
+**Kategori görseli bulgusu:** kod başka kategoriden görsel almıyordu — Triko bloğundaki Siyah Body, 14A fixture'ında Triko'ya konmuş "Deri Çanta" ürünüydü (en yeni yayınlanmış ürün kuralı doğru çalışıyordu). **Yalnız ZZ fixture'ı normal arayüzle düzeltildi:** "Katalog ekle" sihirbazının kategori alanından **Üst Giyim** kategorisi oluşturuldu (ürün oluşturulmadı; ürün sayısı 6), Siyah Body (Deri Çanta) ve Ekoseli Yün Bluz (İpek Fular) ürün düzenleme formundan Üst Giyim'e taşındı (fiyat, durum, yayın aynı; durum olayı yok). Bloklar: Elbise → tafta elbise, Pantolon → geometrik pantolon, **Triko → kaşmir hırka**, Üst Giyim → Siyah Body. Önerilen "önce öne çıkan ürün" sırası `rpc_shop_home` gövde değişikliği (migration) gerektirir — bu cila geçişinde SQL yasak olduğundan **yapılmadı**; mevcut kural = kategorinin en yeni yayınlanmış ürününün public görseli (ana görsel önce), görsel yoksa blok yok. Izgara blok sayısını izler (4 → masaüstünde 4 sütun).
+
+**Tek öne çıkan ürün:** 0 → bölüm yok; **1 → editoryal eşleşme** (büyük 3:4 fotoğraf + kategori, serif ad, fiyat, "Ürünü incele"; telefonda alt alta); 2–4 → normal ızgara. `web_featured` seçimlerine dokunulmadı.
+
+**Görsel rehberi (engellemez, büyütmez):** hero için mevcut "en az 1600 px önerilir" uyarısı korundu; ürün yüklemesi "Dikey (portre) çekim, uzun kenarı en az 1200 px önerilir." der, daha küçük dosya kabul edilir ve başarı iletisi boyutu söyler.
+
+**QA (canlı `a128863`):** `p51.mjs` önce/sonra (390/430/768/1440 + 1440@2x: hero, kategoriler, öne çıkanlar, hakkında-footer), `p5.mjs` 51/51, katalog 46/46, ürün detayı **54/54** (Triko'da tek ürün → "Benzer Ürünler" gizli; benzer ürünler Üst Giyim'de doğrulanır), sepet/takip 38/38; taşma yok. **Güvenlik:** anon tablo/görünüm/sekans 0/0/0, anon RPC 10, migration 46/46. **TLC:** önce ↔ sonra 68/68 birebir. **Gate:** `test:ui` (ana sayfa guard'ı 32), `test:auth`, lint, typecheck, build, sır taraması temiz.
