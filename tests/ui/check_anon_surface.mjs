@@ -28,7 +28,10 @@ check("hardening migration closes postgres default privileges for anon (tables, 
   && /ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon;/.test(hard));
 check("hardening migration does not touch authenticated table grants", !/ON TABLE[\s\S]{0,4000}FROM anon, authenticated/.test(hard.split("REVOKE ALL ON SEQUENCE")[0]));
 
-const PUBLIC_RPC = /^(rpc_shop_[a-z_]+|rpc_saas_plans)$/;
+// the explicit anon application RPC allowlist: 10 after the hardening + rpc_shop_sitemap (Phase 14C Pass 6)
+const PUBLIC_RPC_NAMES = ["rpc_shop_resolve", "rpc_shop_home", "rpc_shop_products", "rpc_shop_product", "rpc_shop_availability", "rpc_shop_resolve_host",
+  "rpc_shop_create_order", "rpc_shop_order", "rpc_shop_cancel_order", "rpc_saas_plans", "rpc_shop_sitemap"];
+const PUBLIC_RPC = { test: (n) => PUBLIC_RPC_NAMES.includes(n) };
 const later = files.filter((f) => f >= HARDENING);
 const offenders = [];
 for (const f of later) {
@@ -42,7 +45,7 @@ for (const f of later) {
   }
   if (/ALTER DEFAULT PRIVILEGES[^;]*GRANT[^;]*\banon\b/i.test(s)) offenders.push(`${f}: default privileges re-grant anon`);
 }
-check("from the hardening migration on, anon only ever receives EXECUTE on public storefront / plan RPCs", offenders.length === 0, offenders.join(" | "));
+check(`from the hardening migration on, anon only ever receives EXECUTE on the ${PUBLIC_RPC_NAMES.length} allowlisted public RPCs`, offenders.length === 0, offenders.join(" | "));
 
 console.log(`\nPASS ${pass} FAIL ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

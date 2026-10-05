@@ -45,7 +45,8 @@ check("URL carries public value names, never ids", !/\.id\b|uuid/i.test(url));
 check("category is the path, so the clean category route stays canonical", /kategori\/\$\{category\}/.test(url));
 check("load more is bounded: at most 4 steps of 24 in a 96-card window", /Math\.min\(4,/.test(url) && /start % 96/.test(url) && /MAX_LOAD_STEPS = 4/.test(read("lib/shop/model.ts")));
 const listing = strip(read("components/shop/listing.tsx"));
-check("parameterised listing pages are noindex,follow; canonical always clean", /isParameterised\(searchParams\) \? \{ robots: \{ index: false, follow: true \} \}/.test(listing) && /canonical: cat \? `\/shop\/\$\{slug\}\/kategori\/\$\{cat\.slug\}` : `\/shop\/\$\{slug\}\/urunler`/.test(listing));
+// Phase 14C Pass 6 centralised URLs in lib/shop/seo (storefrontUrl); same rule, same clean canonical
+check("parameterised listing pages are noindex,follow; canonical always clean", /const parameterised = isParameterised\(searchParams\);/.test(listing) && /\.\.\.\(parameterised \? \{ robots: \{ index: false, follow: true \} \} : \{\}\)/.test(listing) && /const url = cat \? storefrontUrl\(slug, "category", cat\.slug\) : storefrontUrl\(slug, "all"\);/.test(listing) && /alternates: \{ canonical: url \}/.test(listing));
 
 // 3. cards
 const card = strip(read("components/shop/product-card.tsx"));

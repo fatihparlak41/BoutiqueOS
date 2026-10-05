@@ -89,6 +89,33 @@ export const getProduct = (slug: string, productSlug: string): Promise<ShopProdu
     { revalidate: 300, tags: [shopTag(slug)] },
   )();
 
+export type SitemapRow = { s: string; k: "home" | "all" | "category" | "product"; p: string | null; m: string | null };
+/** One sitemap file holds ≤ 50 000 URLs; beyond that, split with generateSitemaps (same RPC, offset ranges). */
+export const SITEMAP_MAX_URLS = 50000;
+const SITEMAP_PAGE = 5000;
+
+/**
+ * Every indexable public storefront URL across tenants, from the one public sitemap RPC
+ * (published-only by construction). Paged in 5000-row steps, capped at one sitemap file;
+ * cached for an hour under its own tag.
+ */
+export const getSitemapEntries = (): Promise<SitemapRow[]> =>
+  unstable_cache(
+    async () => {
+      const rows: SitemapRow[] = [];
+      for (let offset = 0; offset < SITEMAP_MAX_URLS; offset += SITEMAP_PAGE) {
+        const { data, error } = await anon().rpc("rpc_shop_sitemap", { p_offset: offset, p_limit: SITEMAP_PAGE });
+        if (error) throw new Error(`Site haritası okunamadı: ${error.message}`);
+        const page = ((data as { rows?: SitemapRow[] } | null)?.rows ?? []);
+        rows.push(...page);
+        if (page.length < SITEMAP_PAGE) break;
+      }
+      return rows.slice(0, SITEMAP_MAX_URLS);
+    },
+    ["shop-sitemap"],
+    { revalidate: 3600, tags: ["shop-sitemap"] },
+  )();
+
 /** Fresh availability for up to 50 variants. Never cached. */
 export async function getAvailability(slug: string, variantIds: string[]): Promise<AvailabilityMap> {
   if (variantIds.length === 0) return {};

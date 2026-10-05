@@ -12,6 +12,10 @@ const nextConfig = {
   poweredByHeader: false,
   // image uploads go through server actions (≤ 4 MB file + multipart overhead; Vercel caps bodies at 4.5 MB)
   experimental: { serverActions: { bodySizeLimit: "4.5mb" } },
+  // metadata (title, canonical, robots, OG) always in <head>, for every user agent — not streamed into
+  // <body>: crawlers that do not run JavaScript (social previews, AI search) must see it too.
+  // Storefront metadata reads are cached, so blocking on them costs little.
+  htmlLimitedBots: /.*/,
   images: {
     remotePatterns: supabaseUrl
       ? [{ protocol: supabaseUrl.protocol.replace(":", ""), hostname: supabaseUrl.hostname, port: supabaseUrl.port, pathname: "/storage/v1/object/public/storefront-images/**" }]

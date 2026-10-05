@@ -6098,12 +6098,14 @@ SELECT t_check('T79g every intended public RPC is executable by anon',
   AND has_function_privilege('anon', 'rpc_shop_product(text, text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_availability(text, uuid[])', 'EXECUTE')
   AND has_function_privilege('anon', 'rpc_shop_resolve_host(text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_create_order(text, text, jsonb, jsonb, text)', 'EXECUTE')
   AND has_function_privilege('anon', 'rpc_shop_order(text, text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_cancel_order(text, text, text)', 'EXECUTE')
-  AND has_function_privilege('anon', 'rpc_saas_plans()', 'EXECUTE'));
+  AND has_function_privilege('anon', 'rpc_saas_plans()', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_sitemap(integer, integer)', 'EXECUTE'));   -- the 11th, Phase 14C Pass 6
 SELECT t_check('T79h no other application SECURITY DEFINER function in public is executable by anon',
   NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege('anon', p.oid, 'EXECUTE')
                 AND p.proname NOT IN ('rpc_shop_resolve','rpc_shop_home','rpc_shop_products','rpc_shop_product','rpc_shop_availability',
-                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans')
+                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans',
+                                      'rpc_shop_sitemap')
                 AND p.proname !~ '^t[0-9]*_'),   -- this file's own test helpers (rolled back with it)
   (SELECT string_agg(p.proname, ',') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege('anon', p.oid, 'EXECUTE') AND p.proname !~ '^(rpc_shop_|rpc_saas_plans)'));
@@ -6111,7 +6113,8 @@ SELECT t_check('T79i whatever else anon can execute in public is a trigger funct
   NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND has_function_privilege('anon', p.oid, 'EXECUTE')
                 AND p.proname NOT IN ('rpc_shop_resolve','rpc_shop_home','rpc_shop_products','rpc_shop_product','rpc_shop_availability',
-                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans')
+                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans',
+                                      'rpc_shop_sitemap')
                 AND p.prorettype <> 'trigger'::regtype
                 AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
                 AND p.proname !~ '^t[0-9]*_'));
@@ -6280,6 +6283,63 @@ UPDATE products SET web_published = false WHERE id = t75_pid('PNT-C');
 SET ROLE anon;
 SELECT t_check('T80m unpublishing the only trousers removes the Pantolon block',
   (SELECT t80_cats(r) = t80_cat_truth() AND t80_cats(r) NOT LIKE '%pantolon%' FROM rpc_shop_home('zz-store') r));
+RESET ROLE;
+
+-- ============================================================
+-- T81  Public sitemap RPC  (Phase 14C Pass 6)
+-- ============================================================
+-- Ground truth is computed independently (as maintenance). Fixture additions: a DISABLED
+-- storefront (bizB) and an ENABLED storefront on a CANCELLED business — neither may appear.
+SELECT t_logout();
+CREATE FUNCTION t81_truth() RETURNS TEXT LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  WITH st AS (SELECT s.business_id, s.slug FROM storefronts s JOIN businesses b ON b.id = s.business_id WHERE s.enabled AND b.status = 'active')
+  SELECT string_agg(x, ',' ORDER BY x) FROM (
+    SELECT st.slug || '|home|' AS x FROM st
+    UNION ALL SELECT st.slug || '|all|' FROM st
+    UNION ALL SELECT st.slug || '|category|' || c.slug FROM st JOIN categories c ON c.business_id = st.business_id
+      WHERE c.is_active AND EXISTS (SELECT 1 FROM products p WHERE p.category_id = c.id AND p.web_published AND p.status = 'active')
+    UNION ALL SELECT st.slug || '|product|' || p.web_slug FROM st JOIN products p ON p.business_id = st.business_id
+      WHERE p.web_published AND p.status = 'active' AND p.web_slug IS NOT NULL) u;
+$$;
+CREATE FUNCTION t81_keys(r JSONB) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT string_agg((e ->> 's') || '|' || (e ->> 'k') || '|' || COALESCE(e ->> 'p', ''), ',' ORDER BY (e ->> 's') || '|' || (e ->> 'k') || '|' || COALESCE(e ->> 'p', ''))
+  FROM jsonb_array_elements(r -> 'rows') e;
+$$;
+GRANT EXECUTE ON FUNCTION t81_truth(), t81_keys(JSONB) TO anon;
+
+-- fixture: a disabled store and a store of a cancelled business (both with a published-looking product)
+INSERT INTO storefronts (business_id, enabled, slug, store_name) VALUES (t_get('bizB'), false, 'zz-closed', 'Closed Store');
+INSERT INTO businesses (id, name, code, status, settings) VALUES ('b0000000-0000-4000-8000-0000000000c9', 'Cancelled Boutique', 'CNC', 'cancelled', '{}'::jsonb);
+INSERT INTO storefronts (business_id, enabled, slug, store_name) VALUES ('b0000000-0000-4000-8000-0000000000c9', true, 'zz-cancelled', 'Cancelled Store');
+
+SELECT t_check('T81a anon may execute the sitemap RPC; it is SECURITY DEFINER, STABLE, search_path pinned',
+  has_function_privilege('anon', 'rpc_shop_sitemap(integer, integer)', 'EXECUTE')
+  AND (SELECT prosecdef AND provolatile = 's' AND proconfig::text LIKE '%search_path=pg_catalog, public%' FROM pg_proc WHERE proname = 'rpc_shop_sitemap'));
+SET ROLE anon;
+SELECT t_check('T81b output = ground truth: enabled stores on active businesses, all-products, categories with published products, published products',
+  (SELECT t81_keys(r) = t81_truth() FROM rpc_shop_sitemap(0, 10000) r),
+  (SELECT t81_keys(r) FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_check('T81c disabled store and cancelled business never appear',
+  (SELECT r::text NOT LIKE '%zz-closed%' AND r::text NOT LIKE '%zz-cancelled%' FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_check('T81d unpublished product (Gizli Ceket) and the unpublished trousers never appear; the dress does',
+  (SELECT r::text NOT LIKE '%gizli%' AND r::text NOT LIKE '%"yun-pantolon"%' AND r::text LIKE '%"keten-elbise"%' FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_check('T81e rows carry exactly s/k/p/m — no ids, names, prices; no UUID anywhere in the payload',
+  (SELECT bool_and((SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(e) k) = ARRAY['k','m','p','s']) FROM rpc_shop_sitemap(0, 10000) r, jsonb_array_elements(r -> 'rows') e)
+  AND (SELECT r::text !~ '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_check('T81f lastmod only on product rows (factual products.updated_at); home / all / category have none',
+  (SELECT bool_and(CASE WHEN e ->> 'k' = 'product' THEN e ->> 'm' IS NOT NULL ELSE e -> 'm' = 'null'::jsonb END) FROM rpc_shop_sitemap(0, 10000) r, jsonb_array_elements(r -> 'rows') e));
+SELECT t_check('T81g bounded: the limit is clamped to 10000 and to ≥ 1; paging with offset reproduces the full list in order',
+  (SELECT jsonb_array_length(r -> 'rows') <= 10000 FROM rpc_shop_sitemap(0, 1000000) r)
+  AND (SELECT jsonb_array_length(r -> 'rows') = 1 FROM rpc_shop_sitemap(0, 0) r)
+  AND (SELECT (SELECT jsonb_agg(e) FROM (SELECT e FROM rpc_shop_sitemap(0, 2) a, jsonb_array_elements(a -> 'rows') e
+                                         UNION ALL SELECT e FROM rpc_shop_sitemap(2, 10000) b, jsonb_array_elements(b -> 'rows') e) x)
+              = (SELECT r -> 'rows' FROM rpc_shop_sitemap(0, 10000) r))
+  AND (SELECT (r ->> 'total')::int = jsonb_array_length(r -> 'rows') FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_check('T81h a negative offset is treated as 0; an offset past the end returns no rows',
+  (SELECT a = b FROM (SELECT (SELECT r FROM rpc_shop_sitemap(-5, 10000) r) a, (SELECT r FROM rpc_shop_sitemap(0, 10000) r) b) x)
+  AND (SELECT jsonb_array_length(r -> 'rows') = 0 FROM rpc_shop_sitemap(100000, 10) r));
+SELECT t_check('T81i TLC (no storefront) contributes nothing', (SELECT r::text NOT LIKE '%things%' AND r::text NOT LIKE '%tlc%' FROM rpc_shop_sitemap(0, 10000) r));
+SELECT t_err('T81j anon still cannot read the tables behind it', $q$ SELECT count(*) FROM storefronts $q$, '42501');
 RESET ROLE;
 
 -- ============================================================

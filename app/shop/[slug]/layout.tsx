@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStore } from "@/lib/shop/queries";
-import { siteOrigin } from "@/lib/url";
+import { storeDescription, storefrontOrigin } from "@/lib/shop/seo";
 import { ShopHeader } from "@/components/shop/header";
 import { ShopFooter } from "@/components/shop/footer";
 
@@ -15,13 +15,16 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   const store = await getStore(slug);
   if (!store) return { title: "Sayfa bulunamadı", robots: { index: false, follow: false } };
+  // store-wide defaults only; every indexable page sets its own canonical + og:url (lib/shop/seo),
+  // private pages (cart / checkout / tracking) set none and are noindex,nofollow
   return {
-    title: { default: store.store_name, template: `%s · ${store.store_name}` },
-    description: store.tagline ?? `${store.store_name} online mağaza`,
-    metadataBase: new URL(siteOrigin()),
-    alternates: { canonical: `/shop/${store.slug}` },
+    title: { default: `${store.store_name} | Online Mağaza`, template: `%s | ${store.store_name}` },
+    description: storeDescription(store),
+    metadataBase: new URL(storefrontOrigin(store.slug)),
     openGraph: { siteName: store.store_name, type: "website", locale: "tr_TR" },
-    robots: { index: true, follow: true },
+    twitter: { card: "summary_large_image" },
+    // no robots default here: absence means indexable, and a 404 inside the store must carry only
+    // Next's own noindex (an inherited "index, follow" would contradict it)
   };
 }
 

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getAvailability, getProduct, getStore, listProducts } from "@/lib/shop/queries";
-import { publicImageUrl } from "@/lib/shop/model";
-import { siteOrigin } from "@/lib/url";
+import { JsonLd } from "@/components/shop/json-ld";
+import { breadcrumbJsonLd, metaText, productJsonLd, seoImage, storefrontUrl } from "@/lib/shop/seo";
 import { ProductView } from "@/components/shop/product-view";
 import { ProductGrid } from "@/components/shop/product-card";
 
@@ -16,14 +16,17 @@ import { ProductGrid } from "@/components/shop/product-card";
 export async function generateMetadata({ params }: { params: Promise<{ slug: string; pslug: string }> }): Promise<Metadata> {
   const { slug, pslug } = await params;
   const [store, product] = await Promise.all([getStore(slug), getProduct(slug, pslug)]);
-  if (!store || !product) return { title: "Ürün bulunamadı" };
-  const img = publicImageUrl(product.images[0]?.path);
-  const description = (product.description ?? `${product.name} — ${store.store_name}`).slice(0, 160);
+  // unknown / unpublished / disabled: nothing about the record leaks before notFound()
+  if (!store || !product) return { title: "Ürün bulunamadı", robots: { index: false, follow: false } };
+  const description = metaText(product.description) ?? `${product.name}${product.category ? ` — ${product.category.name}` : ""} · ${store.store_name}`;
+  const url = storefrontUrl(store.slug, "product", product.slug);
+  const img = seoImage(product.images[0], product.name);
   return {
     title: product.name,
     description,
-    alternates: { canonical: `/shop/${slug}/urun/${product.slug}` },
-    openGraph: { title: product.name, description, type: "website", images: img ? [{ url: img }] : undefined, siteName: store.store_name },
+    alternates: { canonical: url },
+    openGraph: { title: `${product.name} | ${store.store_name}`, description, url, type: "website", siteName: store.store_name, images: img ? [img] : undefined },
+    twitter: { card: img ? "summary_large_image" : "summary", title: `${product.name} | ${store.store_name}`, description, images: img ? [img.url] : undefined },
   };
 }
 
@@ -39,31 +42,15 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
   ]);
   const relatedCards = (related?.rows ?? []).filter((c) => c.slug !== product.slug).slice(0, RELATED);
 
-  const prices = product.variants.map((v) => fresh[v.id]?.price ?? v.price);
-  const anyLive = product.variants.some((v) => (fresh[v.id]?.state ?? v.state) !== "sold_out");
-  const origin = siteOrigin();
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: product.name,
-    description: product.description ?? undefined,
-    image: product.images.map((i) => publicImageUrl(i.path)).filter(Boolean),
-    brand: { "@type": "Brand", name: store.store_name },
-    offers: prices.length
-      ? {
-          "@type": "AggregateOffer",
-          priceCurrency: product.currency,
-          lowPrice: Math.min(...prices),
-          highPrice: Math.max(...prices),
-          offerCount: product.variants.length,
-          availability: anyLive ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
-          url: `${origin}/shop/${slug}/urun/${product.slug}`,
-        }
-      : undefined,
-  };
+  const crumbs = [
+    { name: store.store_name, url: storefrontUrl(store.slug) },
+    ...(product.category ? [{ name: product.category.name, url: storefrontUrl(store.slug, "category", product.category.slug) }] : []),
+    { name: product.name, url: storefrontUrl(store.slug, "product", product.slug) },
+  ];
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <JsonLd data={productJsonLd(store, product, fresh)} />
+      <JsonLd data={breadcrumbJsonLd(crumbs)} />
       <ProductView store={store} product={product} fresh={fresh} />
       {relatedCards.length > 0 ? (
         <section className="shop-related" aria-labelledby="shop-related-title" data-testid="shop-related">

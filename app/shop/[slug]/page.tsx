@@ -1,9 +1,12 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { getHome, getStore } from "@/lib/shop/queries";
 import { formatPriceRange, publicImageUrl, type ProductCard, type ShopHome, type Store } from "@/lib/shop/model";
 import { ProductGrid } from "@/components/shop/product-card";
+import { JsonLd } from "@/components/shop/json-ld";
+import { seoImage, storeDescription, storeJsonLd, storefrontUrl } from "@/lib/shop/seo";
 
 const SECTION_CARDS = 4;
 /**
@@ -20,6 +23,29 @@ const HERO_SIZES = "(min-width: 1330px) 585px, (min-width: 900px) 44vw, (min-wid
  * and one bounded home response. Only the hero (or the first fallback image) is a priority
  * image; everything below the fold loads lazily through the image optimiser.
  */
+/** The share image: the configured hero, else the newest published product photograph. */
+function shareImage(store: Store, home: ShopHome) {
+  if (store.hero_image_path) return seoImage({ path: store.hero_image_path, alt: store.hero_heading ?? store.store_name, width: null, height: null }, store.store_name);
+  return seoImage(home.new_arrivals.find((c) => c.image)?.image, store.store_name);
+}
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const [store, home] = await Promise.all([getStore(slug), getHome(slug)]);
+  if (!store || !home) return { title: "Sayfa bulunamadı", robots: { index: false, follow: false } };
+  const title = `${store.store_name} | Online Mağaza`;
+  const description = storeDescription(store);
+  const url = storefrontUrl(store.slug);
+  const img = shareImage(store, home);
+  return {
+    title: { absolute: title },
+    description,
+    alternates: { canonical: url },
+    openGraph: { title, description, url, type: "website", siteName: store.store_name, images: img ? [img] : undefined },
+    twitter: { card: img ? "summary_large_image" : "summary", title, description, images: img ? [img.url] : undefined },
+  };
+}
+
 export default async function ShopHome({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [store, home] = await Promise.all([getStore(slug), getHome(slug)]);
@@ -31,6 +57,7 @@ export default async function ShopHome({ params }: { params: Promise<{ slug: str
 
   return (
     <div className="shop-home">
+      <JsonLd data={storeJsonLd(store, shareImage(store, home)?.url ?? null)} />
       <Hero store={store} home={home} base={base} />
 
       {arrivals.length > 0 ? (

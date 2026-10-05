@@ -6,6 +6,8 @@ import { PAGE_SIZE, WINDOW_SIZE } from "@/lib/shop/model";
 import { hasFilters, isParameterised, listingHref, parseListing } from "@/lib/shop/listing-url";
 import { ProductGrid } from "@/components/shop/product-card";
 import { ListingControls } from "@/components/shop/listing-controls";
+import { JsonLd } from "@/components/shop/json-ld";
+import { breadcrumbJsonLd, seoImage, storefrontUrl } from "@/lib/shop/seo";
 
 type Search = Record<string, string | string[] | undefined>;
 
@@ -13,15 +15,37 @@ type Search = Record<string, string | string[] | undefined>;
  * Canonical is always the clean route. Any query (search, filter, sort, load-more) marks the
  * page noindex,follow — no crawlable filter combinations.
  */
+/**
+ * Listing metadata. Canonical is always the clean category / all-products URL; any customer
+ * state in the query (search, filters, sort, paging) makes the page noindex,follow so no
+ * crawlable combination exists. The share image comes from the SAME cached read the clean
+ * page renders (identical arguments), so metadata adds no request there; parameterised
+ * pages skip it. An unknown category is a 404 and its metadata reveals nothing.
+ */
 export async function listingMetadata({ slug }: { slug: string }, category: string | null, searchParams: Search = {}): Promise<Metadata> {
   const store = await getStore(slug);
-  if (!store) return {};
+  if (!store) return { title: "Sayfa bulunamadı", robots: { index: false, follow: false } };
   const cat = category ? store.categories.find((c) => c.slug === category) : null;
+  if (category && !cat) return { title: "Sayfa bulunamadı", robots: { index: false, follow: false } };
+  const parameterised = isParameterised(searchParams);
   const title = cat ? cat.name : "Tüm Ürünler";
+  const url = cat ? storefrontUrl(slug, "category", cat.slug) : storefrontUrl(slug, "all");
+  const description = cat
+    ? `${store.store_name} mağazasında yayındaki ${cat.name} ürünlerini keşfedin.`
+    : `${store.store_name} online mağazasındaki tüm ürünler.`;
+  let img = null;
+  if (!parameterised) {
+    const { steps, start, ...clean } = parseListing({});
+    const list = await listProducts(slug, category, clean, start, steps * PAGE_SIZE);
+    img = seoImage(list?.rows.find((r) => r.image)?.image, title);
+  }
   return {
     title,
-    alternates: { canonical: cat ? `/shop/${slug}/kategori/${cat.slug}` : `/shop/${slug}/urunler` },
-    ...(isParameterised(searchParams) ? { robots: { index: false, follow: true } } : {}),
+    description,
+    alternates: { canonical: url },
+    openGraph: { title: `${title} | ${store.store_name}`, description, url, type: "website", images: img ? [img] : undefined },
+    twitter: { card: img ? "summary_large_image" : "summary", title: `${title} | ${store.store_name}`, description, images: img ? [img.url] : undefined },
+    ...(parameterised ? { robots: { index: false, follow: true } } : {}),
   };
 }
 
@@ -45,6 +69,9 @@ export async function Listing({ slug, category, searchParams }: { slug: string; 
 
   return (
     <div className="shop-listing">
+      {list.category ? (
+        <JsonLd data={breadcrumbJsonLd([{ name: store.store_name, url: storefrontUrl(slug) }, { name: list.category.name, url: storefrontUrl(slug, "category", list.category.slug) }])} />
+      ) : null}
       <header className="shop-listing-head">
         <h1 className="shop-listing-title" data-search={!list.category && filters.q ? "true" : undefined}>{title}</h1>
         <p className="shop-listing-count" data-numeric>{list.total} ürün</p>

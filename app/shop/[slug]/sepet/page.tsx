@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getStore } from "@/lib/shop/queries";
 import { CartView } from "@/components/shop/cart-view";
 
-export const metadata: Metadata = { title: "Sepet", robots: { index: false } };
+export const metadata: Metadata = { title: "Sepet", robots: { index: false, follow: false } };
 
 export default async function CartPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
