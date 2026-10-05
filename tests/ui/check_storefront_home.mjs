@@ -69,7 +69,7 @@ check("Instagram: a plain profile link (no feed, no fetch, no embed)", /href=\{`
 check("announcement bar only when text exists", /\{store\.announcement \? <div className="shop-announce">/.test(read("components/shop/header.tsx")));
 check("logo: optional, contained box; text fallback otherwise", /logo \? <span className="shop-logo"><Image/.test(read("components/shop/header.tsx")) && /: store\.store_name\}/.test(read("components/shop/header.tsx")));
 const css = read("app/shop/shop.css");
-check("hero CSS: explicit aspect ratios (4:5 phone, 3:4 desktop), height-capped, no layout shift", /\.shop-hero-ed-media \{[^}]*aspect-ratio: 4 \/ 5; max-height: 78svh/.test(css) && /\.shop-hero-ed-media \{ aspect-ratio: 3 \/ 4; max-height: min\(76vh, 780px\)/.test(css));
+check("hero CSS: explicit box sizes (phone full width at 4:5 capped 78svh; desktop definite height at 3:4, flush end), no layout shift", /\.shop-hero-ed-media \{[^}]*width: 100%; height: min\(125vw, 78svh\)/.test(css) && /\.shop-hero-ed-media \{ height: min\(76vh, 780px\); width: auto; max-width: 100%; aspect-ratio: 3 \/ 4; justify-self: end; \}/.test(css));
 check("visual language: no gradients / heavy shadows / glass in the home CSS", !/\.shop-(hero|catblock|about|insta)[^{]*\{[^}]*(gradient|box-shadow|backdrop-filter)/.test(css));
 check("home reads stay at 2 RPCs (resolve shared with the layout + one bounded home call)", /Promise\.all\(\[getStore\(slug\), getHome\(slug\)\]\)/.test(page) && /rpc_shop_home", \{ p_slug: slug, p_limit: 4 \}/.test(read("lib/shop/queries.ts")));
 

@@ -567,3 +567,31 @@ would have exposed its table. TRUNCATE bypasses RLS entirely.
 
 **Why:** two independent controls (privilege and RLS) instead of one; a policy mistake can
 no longer become a public data leak, and TRUNCATE / auto-updatable views are out of reach.
+
+## ADR-26 · Store Media Lives in the Public Bucket Under the Store's Own Namespace; Images Go Through the Optimiser
+
+**Status:** accepted (2026-10-05) · migration `20261005100000_phase14c_home_editorial`
+
+**Context:** the editorial homepage needs a hero image and an optional logo, and the
+storefront shipped every public image unoptimised (full originals to phones).
+
+**Decision:**
+1. Store media is two columns, not a model: `storefronts.hero_image_path`, `logo_path`
+   (+ `hero_heading` text). No page builder, no sections JSON, no theme editor, no
+   category-image schema — category blocks borrow the newest published product image.
+2. The object lives in the public `storefront-images` bucket at
+   `store/<business>/{logo|hero}/<uuid>.<ext>`, uploaded with the merchant's own session
+   (existing manager+ storage policy). It is recorded only by `rpc_storefront_set_media`
+   (owner/manager; exact own-tenant path; the object must exist). CHECK constraints bind
+   both columns to the row's own business, so no write can point a store at another
+   tenant's media. Label and receiving-proof images never enter this namespace.
+3. Public images are served through Next image optimisation, allowed for exactly one
+   remote path (`/storage/v1/object/public/storefront-images/**` on the project host).
+   Only the hero (or the first fallback photo) is a priority image.
+4. Uploads record the file's real width/height from its header bytes and refuse bytes that
+   do not match the declared type; no invented fallback dimensions. Existing rows keep
+   their metadata (no backfill).
+
+**Why:** the smallest schema that gives the merchant an editorial opening, the same
+tenant-bound public-media model as product copies (ADR-21), and phones that download a
+~9 KB AVIF instead of the original.
