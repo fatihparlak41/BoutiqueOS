@@ -595,3 +595,31 @@ storefront shipped every public image unoptimised (full originals to phones).
 **Why:** the smallest schema that gives the merchant an editorial opening, the same
 tenant-bound public-media model as product copies (ADR-21), and phones that download a
 ~9 KB AVIF instead of the original.
+
+## ADR-27 · Storefront SEO: One URL Helper, One Sitemap RPC, Factual Structured Data
+
+**Status:** accepted (2026-10-06) · migration `20261006100000_phase14c_shop_sitemap`
+
+**Context:** the storefront had no robots/sitemap, private pages inherited the home
+canonical, product JSON-LD was not script-safe, and the hardened anon model (ADR-25)
+leaves no way to list all public stores.
+
+**Decision:**
+1. Every public storefront URL (canonical, og:url, JSON-LD, sitemap) comes from
+   `lib/shop/seo.ts` (`storefrontOrigin` / `storefrontPath`). Today the platform origin;
+   a verified primary domain later changes only these two functions.
+2. Customer-state URLs (search, filters, sort, paging) are noindex,follow with a clean
+   canonical; cart, checkout and tracking are noindex,nofollow without canonical; unknown
+   or unpublished records are 404 + noindex and their metadata reveals nothing.
+3. The sitemap is fed by ONE public SECURITY DEFINER RPC, `rpc_shop_sitemap`, returning
+   only already-public URL keys (store, kind, slug, product lastmod) — the anon public RPC
+   allowlist is now 11 by explicit decision. No service-role read from a public route.
+4. Structured data is factual: ClothingStore (configured contact, Instagram; no address,
+   hours or ratings), Product + Offer/AggregateOffer (web prices, InStock/OutOfStock from
+   the existing availability rule; no SKU, ids, brand, quantity), BreadcrumbList.
+   ProductGroup only once variants have real public URLs/identifiers.
+5. JSON-LD is serialised through one escaping function; metadata is rendered in <head> for
+   every user agent (`htmlLimitedBots`).
+
+**Why:** indexable, machine-readable stores without SEO spam, without reopening table
+privileges, and with a single seam for the custom-domain pass.
