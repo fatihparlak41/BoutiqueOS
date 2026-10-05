@@ -540,3 +540,30 @@ trace but `updated_at`. Two real TLC products were archived that way (docs/14 §
 
 **Why:** the pilot needs to answer "who took this off sale, when, why" from the database,
 and an audit row that a direct UPDATE can skip is decorative.
+
+## ADR-25 · Anon Holds No Direct Privilege in the Public Schema
+
+**Status:** accepted (2026-10-05) · migration `20261003150000_public_anon_privilege_hardening`
+
+**Context:** Supabase default privileges gave `anon` ALL on every public table and view,
+SELECT/UPDATE/USAGE on sequences and EXECUTE on functions. Tenant data was safe only because
+every RLS policy called a helper anon cannot execute — a single future policy without one
+would have exposed its table. TRUNCATE bypasses RLS entirely.
+
+**Decision:**
+1. `anon` holds no privilege on any public table, view or sequence. The public surface is
+   an explicit allowlist of SECURITY DEFINER RPCs — the nine `rpc_shop_*` functions and
+   `rpc_saas_plans`, granted to anon by exact signature — plus the public
+   `storefront-images` bucket under its bucket-only storage policy.
+2. Default privileges for objects created by role `postgres` in `public` no longer reach
+   anon (tables, sequences, functions). Only `postgres`-created objects are covered; the
+   `supabase_admin` defaults are platform-owned and unchanged.
+3. Function exposure still follows the per-function rule (`REVOKE … FROM PUBLIC, anon,
+   authenticated` + deliberate `GRANT`): PostgreSQL's global PUBLIC EXECUTE default is not
+   revoked here.
+4. A new anon-facing capability is a new SECURITY DEFINER function with an explicit grant —
+   never a table grant plus an RLS policy.
+5. `authenticated` grants are a separate, later decision.
+
+**Why:** two independent controls (privilege and RLS) instead of one; a policy mistake can
+no longer become a public data leak, and TRUNCATE / auto-updatable views are out of reach.

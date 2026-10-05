@@ -1273,3 +1273,51 @@ Pass 2 sonrası snapshot (`tlc_ux2_after_{1,2}`) ↔ Pass 3 sonrası (`tlc_ux3_a
 **Gate:** fresh-DB 1795/0 → `online_order_race_run` PASS → 1795/0 → `reservation_last_unit_run` PASS → 1795/0; lint_sql 0/0; `test:ui` 39+28+50+15+24+30+24+**28** (`check_storefront_checkout.mjs`; UX Pass 3'ün "müşteri etiketleri değişmedi" kontrolü 14C-4'ün onaylı etiketlerine güncellendi); `test:auth` temiz; lint, typecheck, build temiz; sır/token taraması temiz. Not: ekran görüntüsü betiklerinin geçici Chrome profilleri C: diskini doldurdu (ENOSPC, ~2,5 GB) → yalnız bu profiller silindi, betikler artık kendi profillerini siliyor.
 
 **TLC:** Pass 3 sonrası ↔ Pass 4 sonrası 68/68 anahtar birebir; vitrin/sipariş/rezervasyon 0, hareket 3, ürün 3 aynen.
+
+## 38. Public şema anon yetki sertleştirmesi (`20261003150000_public_anon_privilege_hardening`) (2026-10-05)
+
+**Neden yalnız RLS yetmez:** Supabase'in varsayılan yetkileri (`ALTER DEFAULT PRIVILEGES` — `postgres` ve `supabase_admin` için, `public` şemasında) her yeni tablo/görünüme `anon`, `authenticated`, `service_role` için ALL, her sekansa SELECT/UPDATE/USAGE, her fonksiyona EXECUTE verir. Denetimde (2026-10-03) `anon` 53 tablo + 7 görünüm + 1 sekans üzerinde doğrudan yetki taşıyordu; tenant verisini koruyan tek şey her politikanın anon'un çalıştıramadığı bir RLS yardımcısını (`fn_is_member`, `fn_is_manager_plus`, …) çağırmasıydı (→ `42501`). Yardımcısız tek bir gelecek politika (`USING (true)`, `USING (status = 'active')`) tabloyu herkese açardı, çünkü tablo yetkisi zaten oradaydı. Ayrıca TRUNCATE RLS'e tabi değildir, `v_fx_rates_current` otomatik güncellenebilir bir görünümdür ve `saas_plans` anon'a doğrudan okunuyordu. Bu migration savunmayı iki katmana çıkarır: yetki yoksa politika hatası da veri açmaz.
+
+**Yapılan (yalnız anon):**
+- 53 tablo + 7 görünüm: `REVOKE ALL … FROM anon` (açık adlarla; `ALL TABLES IN SCHEMA` kullanılmadı). `saas_plans` dahil — `/kayit` planları `rpc_saas_plans()` ile okur.
+- `product_status_events_seq_seq`: `anon` **ve** `authenticated`'tan geri alındı (kimlik değeri yalnız `rpc_product_set_status` içinde üretilir).
+- `fn_storage_business_id(TEXT)`, `fn_store_business_id(TEXT)`: anon EXECUTE geri alındı; anon'un eriştiği tek storage politikası `pol_storefront_images_select` yalnız `bucket_id` test eder. authenticated storage politikaları değişmedi.
+- **Açık anon RPC modeli:** anon'un çağırabildiği uygulama fonksiyonları tam olarak 10 adettir ve migration'da imzalarıyla yeniden `GRANT EXECUTE … TO anon` edilir: `rpc_shop_resolve`, `rpc_shop_home`, `rpc_shop_products` (9 arg), `rpc_shop_product`, `rpc_shop_availability`, `rpc_shop_resolve_host`, `rpc_shop_create_order`, `rpc_shop_order`, `rpc_shop_cancel_order`, `rpc_saas_plans`. Hepsi `postgres` sahipli SECURITY DEFINER (BYPASSRLS, FORCE RLS yok) — anon tablo yetkisine hiç ihtiyaç duymadılar.
+- **Gelecek nesneler:** `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE … FROM anon` (tablolar, sekanslar, fonksiyonlar). Bu yalnız **`postgres` rolünün oluşturduğu** nesneleri kapsar — projenin bütün migration'ları `postgres` olarak koşar (82 public ilişkinin tamamı `postgres` sahipli). **`supabase_admin` varsayılanları değişmedi; o rolün oluşturduğu nesnelerin korunduğu iddia edilmez**, Supabase genelindeki varsayılanların düzeldiği de iddia edilmez. Fonksiyonlar PostgreSQL'in global `PUBLIC EXECUTE` varsayılanını almaya devam eder — her fonksiyon migration'ı `REVOKE … FROM PUBLIC, anon, authenticated` + bilinçli `GRANT` kuralını korur.
+
+**Bilerek dokunulmayanlar:** `authenticated` tablo yetkileri (68 ilişki; TRUNCATE/MAINTAIN dahil — ayrı denetim), `service_role`, sahiplik, global PUBLIC EXECUTE, 36 trigger fonksiyonu ve `pg_trgm` fonksiyonları (anon çağırabilir ama trigger fonksiyonu doğrudan çağrılamaz: "trigger functions can only be called as triggers"), `storage` şeması varsayılanları, RLS politikaları, SECURITY DEFINER gövdeleri.
+
+**DEV öncesi → sonrası (`acl_counts`):** anon tablo 53 → **0**, görünüm 7 → **0**, sekans 1 → **0**, anon çalıştırılabilir fonksiyon 80 → 78 (iki storage yardımcısı), anon SECURITY DEFINER = aynı 10 RPC, `saas_plans` anon SELECT true → **false**, storage yardımcıları true → **false**, authenticated sekans kullanımı true → **false**, authenticated ilişki 68 → 68, `postgres` varsayılanlarında anon → **yok**, `supabase_admin` varsayılanlarında anon → değişmedi (beklenen). Migration listesi 45/45 hizalı.
+
+**Kanıt:**
+- Yerel T79 (22 assertion, fresh-DB **1817/0**): katalog sayımları, 16 yüksek riskli nesne, allowlist, başka anon-çalıştırılabilir SECURITY DEFINER yok, kalanlar trigger/eklenti, anon olarak `products`/`saas_plans` okuma, `v_fx_rates_current` INSERT, `nextval`, `fn_store_business_id` → `permission denied`; `rpc_saas_plans()` ≥ 1 plan; `postgres` olarak yeni tablo/sekans/fonksiyon → anon yetkisi yok, authenticated varsayılanı sürüyor.
+- DEV gelecek-nesne kanıtı (tek DO bloğu, son `RAISE` ile geri alındı, artık nesne 0): `created_as=postgres table_anon=f sequence_anon=f function_direct_anon=f function_public_global_default=t table_authenticated=t` — global PUBLIC varsayılanı beklendiği gibi kaldı.
+- DEV anon RPC regresyonu (geri alınan DO bloğu, rol `anon`): resolve, home, liste/arama/renk/beden/stok filtreleri, ürün, host, planlar, müsaitlik, **sipariş oluştur → takip → iptal** çalıştı; doğrudan `products`/`saas_plans` → `denied`; ZZ sipariş sayısı 4 ve aktif hold 0 olarak kaldı (hiçbir şey kalıcı olmadı).
+- DEV authenticated/platform regresyonu (geri alınan DO bloğu): ZZ sahibi RLS ile ürün/varyant/stok görünümü/rezervasyon/satış okur, `rpc_report_stock`, `rpc_storefront_admin`, `rpc_online_orders`, onay → hazır → iptal, `fn_store_business_id` authenticated için çalışır; platform yöneticisi `rpc_platform_businesses`; bakım (`postgres`) tüm ürünleri okur.
+- Canlı vitrin probe'ları: katalog **46/46** (iki koşu), ürün detayı **52/52**, sepet/checkout/takip **38/38** (mevcut sentetik siparişin token'ıyla; gönderim istekleri yakalandı), önbelleksiz yeni anahtarlı liste 200, `/kayit` planı (`Starter`, `$50`) sunucudan geliyor, `storefront-images` görselleri public URL'den yükleniyor.
+- Yarışlar: `online_order_race_run`, `reservation_last_unit_run`, `product_status_race_run` PASS (her birinden sonra 1817/0).
+
+**Ek sentetik sipariş oluşturulmadı:** T75/T76/T78/T79 + yarışlar + DEV'de geri alınan anon oluştur/takip/iptal bloğu yetki değişikliğini uçtan uca kanıtladı; onaylı ek ZZ siparişine gerek görülmedi.
+
+**Probe notu:** katalog probe'u canlıda ilk koşularda çöktü — SSR HTML'i gelir gelmez filtre düğmesine tıklıyordu, canlıdaki soğuk yükte React henüz hydrate olmadığı için tıklama boşa düşüyordu (konsol/ağ hatası 0; yerelde 5/5 sayfa hydrate). Yetkiyle ilgisi yok; probe artık hydration'ı bekliyor, iki koşu 46/46.
+
+**Statik guard:** `tests/ui/check_anon_surface.mjs` (6) — açık adlı revoke'lar, sekans, storage yardımcıları, üç varsayılan-yetki satırı, authenticated tablo yetkisine dokunulmaması ve **bu migration'dan sonraki hiçbir migration'ın anon'a tablo/görünüm/sekans yetkisi ya da `rpc_shop_*`/`rpc_saas_plans` dışı EXECUTE vermemesi**. Vitrin guard'larının "pass migration eklemez" kontrolleri 14C-4'e kadar olan migration'larla sınırlandı (güvenlik migration'ları onların kapsamı dışında).
+
+**Geri alma matrisi (öncesi, DEV denetim dökümünden):**
+
+| anon yetkisi | nesneler |
+|---|---|
+| SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN | 41 tablo: barcodes, branches, brands, business_invites, business_members, businesses, cash_movements, cash_registers, categories, customer_sources, document_sequences, fx_rates, goods_receipt_charges, inventory_adjustments, inventory_movement_costs, inventory_movements, option_values, product_images, product_options, product_price_history, profiles, register_session_currency_counts, register_sessions, return_reasons, sale_costs, sale_item_costs, sale_items, sale_payments, sales, stock_transfer_lines, stock_transfers, supplier_account_entries, supplier_payment_allocations, supplier_payments, supplier_return_items, supplier_returns, suppliers, team_audit_log, transfer_held_inventory, variant_cost_pools, variant_option_values · 7 görünüm: v_fx_rates_current, v_reserved_qty, v_sale_item_returned, v_stock_available, v_stock_by_bucket, v_supplier_balance, v_supplier_balance_by_currency |
+| SELECT, REFERENCES, TRIGGER, MAINTAIN | reservation_items, reservations, return_item_costs, return_items, returns, stock_count_lines, stock_count_scans, stock_counts |
+| SELECT, INSERT, UPDATE, REFERENCES, TRIGGER, MAINTAIN | products, product_variants |
+| SELECT, INSERT, REFERENCES, TRIGGER, MAINTAIN | customers |
+| SELECT | saas_plans |
+| SELECT, UPDATE, USAGE (anon **ve** authenticated) | product_status_events_seq_seq |
+| EXECUTE | fn_storage_business_id(TEXT), fn_store_business_id(TEXT) |
+| varsayılan (`FOR ROLE postgres IN SCHEMA public`) | tablolar ALL, sekanslar ALL, fonksiyonlar EXECUTE |
+
+Geri alma = bu satırları yeni bir migration'da `GRANT` etmek (+ üç `ALTER DEFAULT PRIVILEGES … GRANT … TO anon`); veri değişmez. Önerilmez.
+
+**Açık kalanlar (bu yamada bilerek yapılmadı):** authenticated geniş tablo yetkileri (TRUNCATE/MAINTAIN dahil), global PUBLIC EXECUTE varsayılanı, trigger/`pg_trgm` yetkileri, `supabase_admin` ve `storage` şeması varsayılanları.
+
+**TLC:** önce ↔ sonra 68/68 anahtar birebir.

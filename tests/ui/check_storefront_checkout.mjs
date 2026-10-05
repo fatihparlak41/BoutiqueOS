@@ -18,7 +18,9 @@ function check(name, cond, detail = "") {
   else { fail++; console.log(`[FAIL] ${name}${detail ? " - " + detail : ""}`); }
 }
 
-const migs = readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort();
+// the storefront passes are judged on the migrations that existed up to 14C-4; later security
+// migrations (20261003150000 anon privilege hardening, …) are outside their scope
+const migs = readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql") && f < "20261003150000").sort();
 check("Pass 4 adds no migration", migs.at(-1) === "20261003140000_phase14c_shop_filters.sql", migs.at(-1));
 
 // cart

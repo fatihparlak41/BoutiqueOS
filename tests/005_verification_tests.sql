@@ -6060,6 +6060,96 @@ SELECT t_check('T77t this section wrote exactly three audited changes (archive, 
   (SELECT count(*) FROM product_status_events) - (SELECT n FROM _t77_pre) = 3);
 
 -- ============================================================
+-- T79  Public anon privilege hardening (defense in depth)
+-- ============================================================
+-- anon holds no direct privilege on any public table / view / sequence; the public surface
+-- is the explicit SECURITY DEFINER RPC allowlist. Checked from the ACLs themselves
+-- (aclexplode), so every privilege kind — including MAINTAIN — is covered.
+CREATE FUNCTION t79_anon_rel(p_kinds "char"[]) RETURNS TEXT LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(string_agg(DISTINCT c.relname, ',' ORDER BY c.relname), '')
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, LATERAL aclexplode(c.relacl) a
+  WHERE n.nspname = 'public' AND c.relkind = ANY (p_kinds) AND (a.grantee = 'anon'::regrole OR a.grantee = 0);
+$$;
+CREATE FUNCTION t79_anon_on(p_rel TEXT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, LATERAL aclexplode(c.relacl) a
+                 WHERE n.nspname = 'public' AND c.relname = p_rel AND (a.grantee = 'anon'::regrole OR a.grantee = 0));
+$$;
+
+SELECT t_check('T79a anon has no direct privilege on any public TABLE', t79_anon_rel(ARRAY['r','p']::"char"[]) = '', t79_anon_rel(ARRAY['r','p']::"char"[]));
+SELECT t_check('T79b anon has no direct privilege on any public VIEW', t79_anon_rel(ARRAY['v','m']::"char"[]) = '', t79_anon_rel(ARRAY['v','m']::"char"[]));
+SELECT t_check('T79c anon has no direct privilege on any public SEQUENCE', t79_anon_rel(ARRAY['S']::"char"[]) = '', t79_anon_rel(ARRAY['S']::"char"[]));
+SELECT t_check('T79d high-risk tables: no anon privilege at all',
+  NOT t79_anon_on('business_members') AND NOT t79_anon_on('products') AND NOT t79_anon_on('product_variants')
+  AND NOT t79_anon_on('inventory_movements') AND NOT t79_anon_on('inventory_movement_costs') AND NOT t79_anon_on('variant_cost_pools')
+  AND NOT t79_anon_on('customers') AND NOT t79_anon_on('reservations') AND NOT t79_anon_on('suppliers') AND NOT t79_anon_on('sales')
+  AND NOT t79_anon_on('sale_payments') AND NOT t79_anon_on('stock_counts') AND NOT t79_anon_on('team_audit_log')
+  AND NOT t79_anon_on('profiles') AND NOT t79_anon_on('saas_plans') AND NOT t79_anon_on('v_fx_rates_current'));
+SELECT t_check('T79e product_status_events sequence: no anon and no authenticated privilege',
+  NOT has_sequence_privilege('anon', 'product_status_events_seq_seq', 'USAGE,SELECT,UPDATE')
+  AND NOT has_sequence_privilege('authenticated', 'product_status_events_seq_seq', 'USAGE,SELECT,UPDATE'));
+SELECT t_check('T79f authenticated table grants are untouched by this patch (still RLS-governed)',
+  has_table_privilege('authenticated', 'products', 'SELECT,INSERT,UPDATE') AND has_table_privilege('authenticated', 'saas_plans', 'SELECT')
+  AND has_table_privilege('authenticated', 'business_members', 'SELECT'));
+
+-- the public RPC allowlist
+SELECT t_check('T79g every intended public RPC is executable by anon',
+  has_function_privilege('anon', 'rpc_shop_resolve(text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_home(text, integer)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_products(text, text, text, text, integer, integer, text[], text[], boolean)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_product(text, text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_availability(text, uuid[])', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_resolve_host(text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_create_order(text, text, jsonb, jsonb, text)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_shop_order(text, text)', 'EXECUTE') AND has_function_privilege('anon', 'rpc_shop_cancel_order(text, text, text)', 'EXECUTE')
+  AND has_function_privilege('anon', 'rpc_saas_plans()', 'EXECUTE'));
+SELECT t_check('T79h no other application SECURITY DEFINER function in public is executable by anon',
+  NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege('anon', p.oid, 'EXECUTE')
+                AND p.proname NOT IN ('rpc_shop_resolve','rpc_shop_home','rpc_shop_products','rpc_shop_product','rpc_shop_availability',
+                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans')
+                AND p.proname !~ '^t[0-9]*_'),   -- this file's own test helpers (rolled back with it)
+  (SELECT string_agg(p.proname, ',') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege('anon', p.oid, 'EXECUTE') AND p.proname !~ '^(rpc_shop_|rpc_saas_plans)'));
+SELECT t_check('T79i whatever else anon can execute in public is a trigger function, an extension function or a test helper — never an application RPC',
+  NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND has_function_privilege('anon', p.oid, 'EXECUTE')
+                AND p.proname NOT IN ('rpc_shop_resolve','rpc_shop_home','rpc_shop_products','rpc_shop_product','rpc_shop_availability',
+                                      'rpc_shop_resolve_host','rpc_shop_create_order','rpc_shop_order','rpc_shop_cancel_order','rpc_saas_plans')
+                AND p.prorettype <> 'trigger'::regtype
+                AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+                AND p.proname !~ '^t[0-9]*_'));
+SELECT t_check('T79j storage path helpers: anon cannot execute, authenticated still can (its storage policies use them)',
+  NOT has_function_privilege('anon', 'fn_storage_business_id(text)', 'EXECUTE') AND NOT has_function_privilege('anon', 'fn_store_business_id(text)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'fn_storage_business_id(text)', 'EXECUTE') AND has_function_privilege('authenticated', 'fn_store_business_id(text)', 'EXECUTE'));
+
+-- behaviour as anon
+SET ROLE anon;
+SELECT t_err('T79k anon direct read of products is refused by privilege (before any policy runs)', $q$ SELECT count(*) FROM products $q$, 'permission denied for table');
+SELECT t_err('T79k anon direct read of saas_plans is refused', $q$ SELECT count(*) FROM saas_plans $q$, 'permission denied for table');
+SELECT t_err('T79k anon cannot write through the updatable fx view', $q$ INSERT INTO v_fx_rates_current DEFAULT VALUES $q$, 'permission denied');
+SELECT t_err('T79k anon cannot touch the identity sequence', $q$ SELECT nextval('product_status_events_seq_seq') $q$, 'permission denied');
+SELECT t_err('T79k anon cannot execute the storage path helper', $q$ SELECT fn_store_business_id('store/x/products/y/z.jpg') $q$, 'permission denied');
+SELECT t_err('T79l a trigger function is not an RPC: calling it directly fails', $q$ SELECT fn_set_updated_at() $q$, 'trigger functions can only be called as triggers');
+SELECT t_check('T79m /kayit plans still come through rpc_saas_plans() for anon', jsonb_array_length(rpc_saas_plans()) >= 1);
+RESET ROLE;
+
+-- default privileges: future objects created by postgres in public no longer reach anon
+SELECT t_check('T79n default ACL for postgres in public carries no anon grant (tables, sequences, functions)',
+  NOT EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, LATERAL aclexplode(d.defaclacl) a
+              WHERE n.nspname = 'public' AND d.defaclrole = 'postgres'::regrole AND a.grantee = 'anon'::regrole));
+CREATE TABLE public.t79_future_table (id INT);
+CREATE SEQUENCE public.t79_future_seq;
+CREATE FUNCTION public.t79_future_fn() RETURNS INT LANGUAGE sql AS $$ SELECT 1 $$;
+SELECT t_check('T79o a NEW postgres-owned public table gets no anon privilege', NOT t79_anon_on('t79_future_table')
+  AND pg_get_userbyid((SELECT relowner FROM pg_class WHERE relname = 't79_future_table')) = current_user);
+SELECT t_check('T79p a NEW public sequence gets no anon privilege', NOT t79_anon_on('t79_future_seq'));
+SELECT t_check('T79q a NEW public function gets no direct anon grant from the default ACL (PUBLIC EXECUTE remains PostgreSQL''s global default)',
+  NOT EXISTS (SELECT 1 FROM pg_proc p, LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+              WHERE p.proname = 't79_future_fn' AND a.grantee = 'anon'::regrole));
+SELECT t_check('T79r authenticated still receives its default grants on new objects (unchanged in this patch)',
+  has_table_privilege('authenticated', 't79_future_table', 'SELECT'));
+DROP FUNCTION public.t79_future_fn();
+DROP SEQUENCE public.t79_future_seq;
+DROP TABLE public.t79_future_table;
+
+-- ============================================================
 -- SUMMARY
 -- ============================================================
 DO $$

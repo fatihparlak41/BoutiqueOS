@@ -19,7 +19,9 @@ function check(name, cond, detail = "") {
 }
 
 // 1. migration / RPC
-const migs = readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort();
+// the storefront passes are judged on the migrations that existed up to 14C-4; later security
+// migrations (20261003150000 anon privilege hardening, …) are outside their scope
+const migs = readdirSync(join(root, "supabase/migrations")).filter((f) => f.endsWith(".sql") && f < "20261003150000").sort();
 check("exactly one Pass 2 migration after the product status patch", migs.slice(migs.indexOf("20261003100000_product_status_audit.sql") + 1).join() === "20261003140000_phase14c_shop_filters.sql", migs.slice(-2).join());
 const mig = read("supabase/migrations/20261003140000_phase14c_shop_filters.sql");
 const rpc = mig.slice(mig.indexOf("CREATE OR REPLACE FUNCTION rpc_shop_products"));
